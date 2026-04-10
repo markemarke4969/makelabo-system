@@ -617,7 +617,7 @@ export default function FianaDashboard() {
   }));
 
   return (
-    <div className="min-h-screen pb-20">
+    <div className="min-h-screen pb-28">
       {/* ヘッダー */}
       <div
         className="sticky top-0 z-20 px-4 py-3 border-b"
@@ -661,32 +661,38 @@ export default function FianaDashboard() {
         </div>
       </div>
 
-      {/* タブ切り替え（ヘッダー直下に固定） */}
+      {/* タブ切り替え（画面下部に固定） */}
       <div
-        className="sticky top-[53px] z-10 px-4 py-2 border-b"
+        className="fixed bottom-0 left-0 right-0 z-30 px-4 pb-[env(safe-area-inset-bottom)] border-t"
         style={{
-          background: "rgba(10, 10, 15, 0.95)",
-          backdropFilter: "blur(8px)",
-          borderColor: "var(--fiana-border)",
+          background: "rgba(10, 10, 15, 0.97)",
+          backdropFilter: "blur(12px)",
+          borderColor: "rgba(255,255,255,0.08)",
         }}
       >
-        <div className="max-w-lg mx-auto flex rounded-xl border border-white/10 p-1 bg-white/5">
+        <div className="max-w-lg mx-auto flex pt-2 pb-2">
           {[
-            { key: "portfolio" as const, label: "📈 運用" },
-            { key: "trades" as const, label: "📋 履歴" },
-            { key: "fia" as const, label: "🔥 fia" },
-            { key: "inflation" as const, label: "💡 家計" },
+            { key: "portfolio" as const, icon: "📈", label: "運用" },
+            { key: "trades" as const, icon: "📋", label: "取引ログ" },
+            { key: "fia" as const, icon: "🔥", label: "fia" },
+            { key: "inflation" as const, icon: "💡", label: "家計" },
           ].map((tab) => (
             <button
               key={tab.key}
               onClick={() => setActiveTab(tab.key)}
-              className={`flex-1 py-2.5 text-sm font-medium rounded-lg transition-all ${
+              className={`flex-1 flex flex-col items-center gap-0.5 py-2 rounded-xl transition-all ${
                 activeTab === tab.key
-                  ? "bg-indigo-500 text-white shadow-lg shadow-indigo-500/30"
-                  : "text-gray-500"
+                  ? "text-indigo-400"
+                  : "text-gray-600"
               }`}
             >
-              {tab.label}
+              <span className="text-xl leading-none">{tab.icon}</span>
+              <span className={`text-[10px] font-medium ${
+                activeTab === tab.key ? "text-indigo-300" : "text-gray-600"
+              }`}>{tab.label}</span>
+              {activeTab === tab.key && (
+                <span className="w-4 h-0.5 rounded-full bg-indigo-500 mt-0.5" />
+              )}
             </button>
           ))}
         </div>
