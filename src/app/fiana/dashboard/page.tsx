@@ -504,10 +504,10 @@ export default function FianaDashboard() {
               <p className="text-sm text-green-400 mb-1">
                 あなたの仮想資産はこれだけ育ちました
               </p>
-              <p className="text-3xl font-bold text-green-300">
+              <p className="text-3xl font-bold text-green-300 fiana-amount fiana-text-glow-green">
                 {formatJPY(totalProfit)}
               </p>
-              <p className="text-sm text-green-500/70 mt-1">
+              <p className="text-sm text-green-500/70 mt-1 fiana-amount">
                 元本 {formatJPYPlain(profile.virtual_deposit)} →{" "}
                 {formatJPYPlain(profile.virtual_deposit + totalProfit)}
               </p>
@@ -637,8 +637,8 @@ export default function FianaDashboard() {
               className="flex items-center gap-1 bg-amber-500/20 px-2.5 py-1 rounded-lg border border-amber-500/30 hover:bg-amber-500/30 transition-colors"
             >
               <span className="text-xs">{fiaLevelInfo.current.icon}</span>
-              <span className="text-xs font-bold text-amber-300">{fiaPoints.toLocaleString()}</span>
-              <span className="text-[10px] text-amber-400/70">fia</span>
+              <span className="text-xs font-bold text-amber-300 fiana-amount">{fiaPoints.toLocaleString()}</span>
+              <span className="text-[10px] text-amber-400/70 fiana-label">fia</span>
             </button>
             <div className="flex items-center gap-1.5">
               <span
@@ -772,27 +772,27 @@ export default function FianaDashboard() {
                 </span>
               </div>
 
-              <p className="text-xs opacity-60 mb-1">仮想資産総額</p>
-              <p className="text-3xl font-bold mb-3 fiana-text-glow">
+              <p className="fiana-label mb-1">Total Assets</p>
+              <p className="text-3xl font-bold mb-3 fiana-amount fiana-text-glow">
                 {formatJPYPlain(totalAsset)}
               </p>
 
               <div className="grid grid-cols-2 gap-3">
                 <div className="bg-white/10 rounded-xl p-3">
-                  <p className="text-xs opacity-60">本日の損益</p>
-                  <p className={`text-lg font-bold ${todayPnl >= 0 ? "text-green-300" : "text-red-300"}`}>
+                  <p className="fiana-label">Today P&L</p>
+                  <p className={`text-lg fiana-amount ${todayPnl >= 0 ? "text-green-300 fiana-text-glow-green" : "text-red-300"}`}>
                     {formatJPY(todayPnl)}
                   </p>
-                  <p className="text-xs opacity-50">
+                  <p className="text-xs opacity-50 fiana-amount">
                     {todayPnl >= 0 ? "+" : ""}{todayPnlPercent}%
                   </p>
                 </div>
                 <div className="bg-white/10 rounded-xl p-3">
-                  <p className="text-xs opacity-60">累計損益</p>
-                  <p className={`text-lg font-bold ${cumulativePnl >= 0 ? "text-green-300" : "text-red-300"}`}>
+                  <p className="fiana-label">Total P&L</p>
+                  <p className={`text-lg fiana-amount ${cumulativePnl >= 0 ? "text-green-300 fiana-text-glow-green" : "text-red-300"}`}>
                     {formatJPY(cumulativePnl)}
                   </p>
-                  <p className="text-xs opacity-50">
+                  <p className="text-xs opacity-50 fiana-amount">
                     {cumulativePnl >= 0 ? "+" : ""}{pnlPercent}%
                   </p>
                 </div>
@@ -993,8 +993,8 @@ export default function FianaDashboard() {
                     </div>
                   </div>
                   <div className="text-right">
-                    <p className="text-xs text-amber-300/70 mb-1">保有fia</p>
-                    <p className="text-2xl font-bold text-amber-300">{fiaPoints.toLocaleString()}</p>
+                    <p className="fiana-label text-amber-300/70 mb-1">fia balance</p>
+                    <p className="text-2xl font-bold text-amber-300 fiana-amount fiana-text-glow-amber">{fiaPoints.toLocaleString()}</p>
                   </div>
                 </div>
 
