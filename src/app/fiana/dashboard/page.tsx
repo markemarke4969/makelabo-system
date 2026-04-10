@@ -14,6 +14,20 @@ import {
   type VirtualTrade,
 } from "@/lib/fiana-trade-engine";
 import {
+  POINT_ACTIONS,
+  SYSTEM_UNLOCK_COSTS,
+  FIA_LEVELS,
+  pointsToNextLevel,
+  formatFia,
+  isEarlyBird,
+  getDemoPoints,
+  getDemoTotalEarned,
+  getDemoLedger,
+  getDemoCheckins,
+  addDemoPoints,
+  type LedgerEntry,
+} from "@/lib/fia-points";
+import {
   LineChart,
   Line,
   XAxis,
@@ -64,16 +78,39 @@ export default function FianaDashboard() {
   const router = useRouter();
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<"portfolio" | "trades" | "inflation">("portfolio");
+  const [activeTab, setActiveTab] = useState<"portfolio" | "trades" | "inflation" | "fia">("portfolio");
   const [activeSystem, setActiveSystem] = useState("happiness-plus");
   const [now, setNow] = useState(new Date());
 
-  // インフレ体感用
-  const [monthlyExpense, setMonthlyExpense] = useState("");
+  // インフレ体感用（項目別固定費）
+  const [expenses, setExpenses] = useState({
+    rent: "",
+    utilities: "",
+    telecom: "",
+    insurance: "",
+    food: "",
+    other: "",
+  });
   const [inflationResult, setInflationResult] = useState<{
+    totalMonthly: number;
     yearlyDiff: number;
-    ifInvested: number;
+    yearlyTotal: number;
+    projections: {
+      year: number;
+      noAction: number; // 何もしない場合の累計支出増
+      withInvest: number; // 運用した場合の資産
+      diff: number; // 差額
+    }[];
   } | null>(null);
+
+  // fiaポイント
+  const [fiaPoints, setFiaPoints] = useState(0);
+  const [fiaTotalEarned, setFiaTotalEarned] = useState(0);
+  const [fiaLedger, setFiaLedger] = useState<LedgerEntry[]>([]);
+  const [fiaTodayCheckins, setFiaTodayCheckins] = useState<string[]>([]);
+  const [fiaEarnAnim, setFiaEarnAnim] = useState<{ amount: number; label: string } | null>(null);
+  const [fiaUnlocks, setFiaUnlocks] = useState<{ system_id: string; expires_at: string }[]>([]);
+  const [unlockConfirm, setUnlockConfirm] = useState<string | null>(null); // systemId to confirm
 
   // 時刻更新（1分ごと）
   useEffect(() => {
@@ -122,6 +159,207 @@ export default function FianaDashboard() {
     load();
   }, [router]);
 
+  // fiaポイント読み込み
+  useEffect(() => {
+    if (!profile) return;
+    const loadPoints = async () => {
+      if (isDemoMode()) {
+        const today = new Date().toISOString().split("T")[0];
+        setFiaPoints(getDemoPoints());
+        setFiaTotalEarned(getDemoTotalEarned());
+        setFiaLedger(getDemoLedger().slice(0, 50));
+        setFiaTodayCheckins(getDemoCheckins(today));
+        return;
+      }
+      try {
+        const res = await fetch("/api/fiana/points");
+        if (res.ok) {
+          const data = await res.json();
+          setFiaPoints(data.points);
+          setFiaTotalEarned(data.totalEarned);
+          setFiaLedger(data.ledger);
+          setFiaTodayCheckins(data.todayCheckins);
+          setFiaUnlocks(data.activeUnlocks || []);
+        }
+      } catch {
+        // ポイント取得失敗は無視
+      }
+    };
+    loadPoints();
+  }, [profile]);
+
+  // デイリーログインポイント自動付与
+  useEffect(() => {
+    if (!profile) return;
+    const claimLogin = async () => {
+      const today = new Date().toISOString().split("T")[0];
+      if (isDemoMode()) {
+        const checkins = getDemoCheckins(today);
+        if (!checkins.includes("daily_login")) {
+          const result = addDemoPoints("daily_login", 10, "デイリーログイン");
+          if (result.success) {
+            setFiaPoints(result.newBalance);
+            setFiaTotalEarned(getDemoTotalEarned());
+            setFiaTodayCheckins(getDemoCheckins(today));
+            if (result.entry) setFiaLedger((prev) => [result.entry!, ...prev]);
+            showEarnAnimation(10, "デイリーログイン");
+          }
+        }
+        // 早起きボーナス
+        if (isEarlyBird() && !checkins.includes("early_bird")) {
+          const result = addDemoPoints("early_bird", 10, "早起きチェックイン");
+          if (result.success) {
+            setFiaPoints(result.newBalance);
+            setFiaTotalEarned(getDemoTotalEarned());
+            setFiaTodayCheckins(getDemoCheckins(today));
+            if (result.entry) setFiaLedger((prev) => [result.entry!, ...prev]);
+            setTimeout(() => showEarnAnimation(10, "早起きボーナス"), 2000);
+          }
+        }
+        return;
+      }
+      try {
+        const res = await fetch("/api/fiana/points", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "daily_login" }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setFiaPoints(data.points);
+          setFiaTotalEarned(data.totalEarned);
+          showEarnAnimation(data.earned, "デイリーログイン");
+        }
+        // 早起きボーナス
+        if (isEarlyBird()) {
+          const earlyRes = await fetch("/api/fiana/points", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action: "early_bird" }),
+          });
+          if (earlyRes.ok) {
+            const data = await earlyRes.json();
+            setFiaPoints(data.points);
+            setFiaTotalEarned(data.totalEarned);
+            setTimeout(() => showEarnAnimation(data.earned, "早起きボーナス"), 2000);
+          }
+        }
+      } catch {
+        // ログインポイント付与失敗は無視
+      }
+    };
+    claimLogin();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profile]);
+
+  const showEarnAnimation = useCallback((amount: number, label: string) => {
+    setFiaEarnAnim({ amount, label });
+    setTimeout(() => setFiaEarnAnim(null), 3000);
+  }, []);
+
+  const claimFiaAction = useCallback(
+    async (action: string) => {
+      const actionDef = POINT_ACTIONS.find((a) => a.action === action);
+      if (!actionDef) return;
+
+      if (isDemoMode()) {
+        const result = addDemoPoints(action, actionDef.points, actionDef.label);
+        if (result.success) {
+          const today = new Date().toISOString().split("T")[0];
+          setFiaPoints(result.newBalance);
+          setFiaTotalEarned(getDemoTotalEarned());
+          setFiaTodayCheckins(getDemoCheckins(today));
+          if (result.entry) setFiaLedger((prev) => [result.entry!, ...prev]);
+          showEarnAnimation(actionDef.points, actionDef.label);
+        }
+        return;
+      }
+
+      try {
+        const res = await fetch("/api/fiana/points", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setFiaPoints(data.points);
+          setFiaTotalEarned(data.totalEarned);
+          showEarnAnimation(data.earned, actionDef.label);
+          // チェックイン更新
+          setFiaTodayCheckins((prev) => [...prev, action]);
+        }
+      } catch {
+        // 失敗は無視
+      }
+    },
+    [showEarnAnimation]
+  );
+
+  const unlockSystem = useCallback(
+    async (systemId: string) => {
+      const cost = SYSTEM_UNLOCK_COSTS.find((c) => c.systemId === systemId);
+      if (!cost) return;
+
+      if (isDemoMode()) {
+        const result = addDemoPoints(
+          "system_unlock",
+          -cost.fiaCost,
+          `${systemId} 体験開放`
+        );
+        if (result.success) {
+          const today = new Date().toISOString().split("T")[0];
+          setFiaPoints(result.newBalance);
+          setFiaTotalEarned(getDemoTotalEarned());
+          setFiaTodayCheckins(getDemoCheckins(today));
+          if (result.entry) setFiaLedger((prev) => [result.entry!, ...prev]);
+          const expiresAt = new Date(
+            Date.now() + cost.durationHours * 60 * 60 * 1000
+          ).toISOString();
+          setFiaUnlocks((prev) => [
+            ...prev,
+            { system_id: systemId, expires_at: expiresAt },
+          ]);
+        }
+        setUnlockConfirm(null);
+        return;
+      }
+
+      try {
+        const res = await fetch("/api/fiana/points", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "system_unlock", systemId }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setFiaPoints(data.points);
+          setFiaUnlocks((prev) => [
+            ...prev,
+            { system_id: systemId, expires_at: data.expires_at },
+          ]);
+        }
+      } catch {
+        // 失敗は無視
+      }
+      setUnlockConfirm(null);
+    },
+    [showEarnAnimation]
+  );
+
+  const isSystemUnlocked = useCallback(
+    (systemId: string) => {
+      return fiaUnlocks.some(
+        (u) =>
+          u.system_id === systemId &&
+          new Date(u.expires_at) > new Date()
+      );
+    },
+    [fiaUnlocks]
+  );
+
+  const fiaLevelInfo = useMemo(() => pointsToNextLevel(fiaTotalEarned), [fiaTotalEarned]);
+
   const today = useMemo(() => now.toISOString().split("T")[0], [now]);
 
   const trialInfo = useMemo(() => {
@@ -143,7 +381,11 @@ export default function FianaDashboard() {
         })()
       : today;
 
-    return EA_SYSTEMS.filter((s) => s.fullAccess).map((sys) => {
+    const unlockedIds = fiaUnlocks
+      .filter((u) => new Date(u.expires_at) > new Date())
+      .map((u) => u.system_id);
+
+    return EA_SYSTEMS.filter((s) => s.fullAccess || unlockedIds.includes(s.id)).map((sys) => {
       const { trades, snapshots } = generateAllTrades(
         profile.user_id,
         sys.id,
@@ -155,7 +397,7 @@ export default function FianaDashboard() {
       );
       return { system: sys, trades, snapshots };
     });
-  }, [profile, today, trialInfo]);
+  }, [profile, today, trialInfo, fiaUnlocks]);
 
   const currentSystemData = useMemo(() => {
     if (!systemData) return null;
@@ -177,21 +419,54 @@ export default function FianaDashboard() {
   }, [router]);
 
   const calcInflation = useCallback(() => {
-    const expense = parseInt(monthlyExpense, 10);
-    if (!expense || expense <= 0) return;
+    const vals = Object.values(expenses).map((v) => parseInt(v, 10) || 0);
+    const totalMonthly = vals.reduce((a, b) => a + b, 0);
+    if (totalMonthly <= 0) return;
+
     const inflationRate = 0.03;
-    const yearlyDiff = Math.round(expense * 12 * inflationRate);
-    const monthlyReturn = 0.02;
-    let invested = 0;
-    for (let m = 0; m < 36; m++) {
-      invested += yearlyDiff / 12;
-      invested *= 1 + monthlyReturn;
+    const yearlyTotal = totalMonthly * 12;
+    const yearlyDiff = Math.round(yearlyTotal * inflationRate);
+    const monthlyInvestReturn = 0.015; // 月利1.5%（年利約20%）
+
+    const projections: {
+      year: number;
+      noAction: number;
+      withInvest: number;
+      diff: number;
+    }[] = [];
+
+    for (const targetYear of [1, 3, 5, 10]) {
+      // インフレで増える累計支出（複利）
+      let cumulativeInflation = 0;
+      for (let y = 1; y <= targetYear; y++) {
+        cumulativeInflation += yearlyTotal * (Math.pow(1 + inflationRate, y) - 1);
+      }
+      cumulativeInflation = Math.round(cumulativeInflation);
+
+      // インフレ差額を月々運用に回した場合の資産
+      let invested = 0;
+      const monthlyExtra = yearlyDiff / 12;
+      for (let m = 0; m < targetYear * 12; m++) {
+        invested += monthlyExtra;
+        invested *= 1 + monthlyInvestReturn;
+      }
+      invested = Math.round(invested);
+
+      projections.push({
+        year: targetYear,
+        noAction: cumulativeInflation,
+        withInvest: invested,
+        diff: invested + cumulativeInflation,
+      });
     }
+
     setInflationResult({
+      totalMonthly,
       yearlyDiff,
-      ifInvested: Math.round(invested),
+      yearlyTotal,
+      projections,
     });
-  }, [monthlyExpense]);
+  }, [expenses]);
 
   // ========================================
   // ローディング
@@ -357,6 +632,14 @@ export default function FianaDashboard() {
             <h1 className="fiana-heading font-bold text-white text-lg tracking-wider">FIANA</h1>
           </div>
           <div className="flex items-center gap-3">
+            <button
+              onClick={() => setActiveTab("fia")}
+              className="flex items-center gap-1 bg-amber-500/20 px-2.5 py-1 rounded-lg border border-amber-500/30 hover:bg-amber-500/30 transition-colors"
+            >
+              <span className="text-xs">{fiaLevelInfo.current.icon}</span>
+              <span className="text-xs font-bold text-amber-300">{fiaPoints.toLocaleString()}</span>
+              <span className="text-[10px] text-amber-400/70">fia</span>
+            </button>
             <div className="flex items-center gap-1.5">
               <span
                 className={`w-2 h-2 rounded-full ${marketOpen ? "bg-green-400 animate-pulse" : "bg-gray-600"}`}
@@ -395,17 +678,38 @@ export default function FianaDashboard() {
               <span>{sys.name}</span>
             </button>
           ))}
-          {EA_SYSTEMS.filter((s) => !s.fullAccess).map((sys) => (
-            <button
-              key={sys.id}
-              disabled
-              className="flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap bg-white/5 text-gray-600 border border-white/5 cursor-not-allowed"
-            >
-              <span>{sys.icon}</span>
-              <span>{sys.name}</span>
-              <span className="text-[10px]">🔒</span>
-            </button>
-          ))}
+          {EA_SYSTEMS.filter((s) => !s.fullAccess).map((sys) => {
+            const unlocked = isSystemUnlocked(sys.id);
+            const cost = SYSTEM_UNLOCK_COSTS.find((c) => c.systemId === sys.id);
+            if (unlocked) {
+              return (
+                <button
+                  key={sys.id}
+                  onClick={() => setActiveSystem(sys.id)}
+                  className={`flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap transition-all ${
+                    activeSystem === sys.id
+                      ? "bg-amber-500 text-black shadow-lg shadow-amber-500/30"
+                      : "bg-amber-500/10 text-amber-300 border border-amber-500/30 hover:border-amber-500/50"
+                  }`}
+                >
+                  <span>{sys.icon}</span>
+                  <span>{sys.name}</span>
+                  <span className="text-[10px]">体験中</span>
+                </button>
+              );
+            }
+            return (
+              <button
+                key={sys.id}
+                onClick={() => setUnlockConfirm(sys.id)}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap bg-white/5 text-gray-500 border border-white/10 hover:border-amber-500/30 hover:text-amber-400 transition-all cursor-pointer"
+              >
+                <span>{sys.icon}</span>
+                <span>{sys.name}</span>
+                <span className="text-[10px] text-amber-500/60">{cost?.fiaCost}fia</span>
+              </button>
+            );
+          })}
         </div>
 
         {/* ポートフォリオサマリー */}
@@ -464,7 +768,8 @@ export default function FianaDashboard() {
           {[
             { key: "portfolio" as const, label: "📈 チャート" },
             { key: "trades" as const, label: "📋 取引ログ" },
-            { key: "inflation" as const, label: "💡 インフレ体感" },
+            { key: "fia" as const, label: "🔥 fia" },
+            { key: "inflation" as const, label: "💡 インフレ" },
           ].map((tab) => (
             <button
               key={tab.key}
@@ -611,6 +916,15 @@ export default function FianaDashboard() {
         {/* 取引ログタブ */}
         {activeTab === "trades" && (
           <div className="space-y-2">
+            {/* 取引ログ閲覧でポイント付与ボタン */}
+            {!fiaTodayCheckins.includes("view_trade_log") && (
+              <button
+                onClick={() => claimFiaAction("view_trade_log")}
+                className="w-full py-2 bg-amber-500/20 border border-amber-500/30 rounded-xl text-amber-300 text-sm font-medium hover:bg-amber-500/30 transition-colors"
+              >
+                取引ログを確認して +5 fia 獲得
+              </button>
+            )}
             <div className="fiana-card p-4">
               <h3 className="text-sm font-bold text-gray-300 mb-3">
                 取引履歴（{EA_SYSTEMS.find((s) => s.id === activeSystem)?.name}）
@@ -631,87 +945,384 @@ export default function FianaDashboard() {
           </div>
         )}
 
+        {/* fiaポイントタブ */}
+        {activeTab === "fia" && (
+          <div className="space-y-4">
+            {/* ポイント獲得アニメーション */}
+            {fiaEarnAnim && (
+              <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 animate-bounce">
+                <div className="bg-amber-500 text-black font-bold px-6 py-3 rounded-2xl shadow-lg shadow-amber-500/40 text-center">
+                  <p className="text-lg">+{fiaEarnAnim.amount} fia</p>
+                  <p className="text-xs opacity-80">{fiaEarnAnim.label}</p>
+                </div>
+              </div>
+            )}
+
+            {/* ナメクジ育成カード */}
+            <div
+              className="rounded-2xl p-6 text-white relative overflow-hidden"
+              style={{ background: "linear-gradient(135deg, #1a0a2e, #2d1b69, #1a2a4a)" }}
+            >
+              <div className="absolute top-0 right-0 w-32 h-32 bg-purple-500/10 rounded-full blur-3xl" />
+              <div className="relative">
+                <div className="flex items-center justify-between mb-4">
+                  <div>
+                    <p className="text-xs text-purple-300/70 mb-1">育成キャラクター</p>
+                    <div className="flex items-center gap-2">
+                      <span className="text-4xl">{fiaLevelInfo.current.icon}</span>
+                      <div>
+                        <p className="text-lg font-bold">{fiaLevelInfo.current.name}</p>
+                        <p className="text-xs text-purple-300/60">Lv.{fiaLevelInfo.current.level}</p>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-xs text-amber-300/70 mb-1">保有fia</p>
+                    <p className="text-2xl font-bold text-amber-300">{fiaPoints.toLocaleString()}</p>
+                  </div>
+                </div>
+
+                <p className="text-sm text-purple-200/80 mb-3">{fiaLevelInfo.current.description}</p>
+
+                {/* レベルアップ進捗バー */}
+                {fiaLevelInfo.next ? (
+                  <div>
+                    <div className="flex justify-between text-xs mb-1">
+                      <span className="text-purple-300/60">
+                        次のレベル: {fiaLevelInfo.next.icon} {fiaLevelInfo.next.name}
+                      </span>
+                      <span className="text-purple-300/60">
+                        あと {fiaLevelInfo.remaining.toLocaleString()} fia
+                      </span>
+                    </div>
+                    <div className="w-full h-3 bg-white/10 rounded-full overflow-hidden">
+                      <div
+                        className="h-full rounded-full transition-all duration-1000"
+                        style={{
+                          width: `${fiaLevelInfo.progress}%`,
+                          background: "linear-gradient(90deg, #f59e0b, #ef4444, #8b5cf6)",
+                        }}
+                      />
+                    </div>
+                    <p className="text-[10px] text-purple-400/50 mt-1 text-right">
+                      {fiaLevelInfo.progress}% 完了
+                    </p>
+                  </div>
+                ) : (
+                  <div className="text-center py-2">
+                    <p className="text-sm text-amber-300 font-bold">MAX LEVEL</p>
+                  </div>
+                )}
+
+                {/* 全レベル表示 */}
+                <div className="flex justify-between mt-4 px-2">
+                  {FIA_LEVELS.map((lv) => (
+                    <div
+                      key={lv.level}
+                      className={`text-center ${lv.level <= fiaLevelInfo.current.level ? "opacity-100" : "opacity-30"}`}
+                    >
+                      <span className="text-lg">{lv.icon}</span>
+                      <p className="text-[10px] text-gray-400 mt-0.5">Lv.{lv.level}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* デイリーミッション */}
+            <div className="fiana-card p-4">
+              <h3 className="text-sm font-bold text-gray-300 mb-3">デイリーミッション</h3>
+              <div className="space-y-2">
+                {POINT_ACTIONS.filter((a) => a.daily).map((action) => {
+                  const claimed = fiaTodayCheckins.includes(action.action);
+                  return (
+                    <div
+                      key={action.action}
+                      className={`flex items-center justify-between p-3 rounded-xl border transition-all ${
+                        claimed
+                          ? "border-green-500/20 bg-green-500/5"
+                          : "border-white/10 bg-white/5 hover:border-amber-500/30"
+                      }`}
+                    >
+                      <div className="flex-1">
+                        <p className={`text-sm font-medium ${claimed ? "text-green-400" : "text-white"}`}>
+                          {action.label}
+                        </p>
+                        <p className="text-xs text-gray-500 mt-0.5">{action.description}</p>
+                      </div>
+                      <div className="flex items-center gap-2 ml-3">
+                        <span className="text-xs font-bold text-amber-400">+{action.points}</span>
+                        {claimed ? (
+                          <span className="text-xs text-green-500 font-bold px-2 py-1 bg-green-500/10 rounded-lg">
+                            済
+                          </span>
+                        ) : (
+                          <button
+                            onClick={() => claimFiaAction(action.action)}
+                            className="text-xs font-bold px-3 py-1.5 bg-amber-500 text-black rounded-lg hover:bg-amber-400 transition-colors"
+                          >
+                            獲得
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* 特別ボーナス */}
+            <div className="fiana-card p-4">
+              <h3 className="text-sm font-bold text-gray-300 mb-3">特別ボーナス</h3>
+              <div className="space-y-2">
+                {POINT_ACTIONS.filter((a) => !a.daily).map((action) => (
+                  <div
+                    key={action.action}
+                    className="flex items-center justify-between p-3 rounded-xl border border-amber-500/20 bg-amber-500/5"
+                  >
+                    <div className="flex-1">
+                      <p className="text-sm font-medium text-white">{action.label}</p>
+                      <p className="text-xs text-gray-500 mt-0.5">{action.description}</p>
+                    </div>
+                    <span className="text-sm font-bold text-amber-400 ml-3">
+                      +{action.points.toLocaleString()} fia
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* ポイント履歴 */}
+            <div className="fiana-card p-4">
+              <h3 className="text-sm font-bold text-gray-300 mb-3">ポイント履歴</h3>
+              {fiaLedger.length === 0 ? (
+                <p className="text-gray-500 text-center py-6 text-sm">まだ履歴がありません</p>
+              ) : (
+                <div className="space-y-1.5 max-h-64 overflow-y-auto">
+                  {fiaLedger.slice(0, 30).map((entry) => (
+                    <div
+                      key={entry.id}
+                      className="flex items-center justify-between py-2 px-2 rounded-lg hover:bg-white/5"
+                    >
+                      <div>
+                        <p className="text-sm text-gray-300">{entry.description}</p>
+                        <p className="text-[10px] text-gray-600">
+                          {new Date(entry.created_at).toLocaleString("ja-JP", {
+                            month: "short",
+                            day: "numeric",
+                            hour: "2-digit",
+                            minute: "2-digit",
+                          })}
+                        </p>
+                      </div>
+                      <span
+                        className={`text-sm font-bold ${
+                          entry.amount >= 0 ? "text-green-400" : "text-red-400"
+                        }`}
+                      >
+                        {entry.amount >= 0 ? "+" : ""}{entry.amount} fia
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* インフレ体感タブ */}
         {activeTab === "inflation" && (
           <div className="space-y-4">
+            {/* 固定費入力 */}
             <div className="fiana-card p-4">
-              <h3 className="text-sm font-bold text-gray-300 mb-2">
-                💡 インフレ体感シミュレーター
+              <h3 className="text-sm font-bold text-gray-300 mb-1">
+                家計シミュレーター
               </h3>
               <p className="text-xs text-gray-500 mb-4">
-                月々の固定支出を入力すると、インフレによる影響と運用した場合のシミュレーションが見れます
+                月々の固定費を入力して、インフレの影響と資産運用の効果を体感しましょう
               </p>
 
-              <div className="flex gap-2 mb-4">
-                <div className="flex-1 flex items-center gap-1">
-                  <span className="text-gray-500">¥</span>
-                  <input
-                    type="number"
-                    value={monthlyExpense}
-                    onChange={(e) => setMonthlyExpense(e.target.value)}
-                    placeholder="月額固定費（例: 150000）"
-                    className="fiana-input w-full"
-                  />
-                </div>
-                <button
-                  onClick={calcInflation}
-                  className="px-4 py-2.5 bg-indigo-500 text-white font-medium text-sm rounded-xl hover:bg-indigo-400 transition-colors"
-                >
-                  計算
-                </button>
+              <div className="space-y-3 mb-4">
+                {[
+                  { key: "rent" as const, label: "家賃・住宅ローン", placeholder: "80000" },
+                  { key: "utilities" as const, label: "光熱費", placeholder: "20000" },
+                  { key: "telecom" as const, label: "通信費", placeholder: "10000" },
+                  { key: "insurance" as const, label: "保険料", placeholder: "15000" },
+                  { key: "food" as const, label: "食費", placeholder: "50000" },
+                  { key: "other" as const, label: "その他", placeholder: "30000" },
+                ].map((item) => (
+                  <div key={item.key} className="flex items-center gap-3">
+                    <span className="text-sm text-gray-400 w-28 shrink-0">{item.label}</span>
+                    <div className="flex-1 flex items-center gap-1">
+                      <span className="text-gray-600 text-sm">¥</span>
+                      <input
+                        type="number"
+                        value={expenses[item.key]}
+                        onChange={(e) =>
+                          setExpenses((prev) => ({ ...prev, [item.key]: e.target.value }))
+                        }
+                        placeholder={item.placeholder}
+                        className="fiana-input w-full"
+                      />
+                    </div>
+                  </div>
+                ))}
               </div>
 
-              {inflationResult && (
-                <div className="space-y-3">
-                  <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-4">
+              {/* 合計と計算ボタン */}
+              <div className="flex items-center justify-between bg-white/5 rounded-xl p-3 mb-4">
+                <span className="text-sm text-gray-300 font-medium">月額合計</span>
+                <span className="text-lg font-bold text-white">
+                  ¥{Object.values(expenses)
+                    .reduce((s, v) => s + (parseInt(v, 10) || 0), 0)
+                    .toLocaleString()}
+                </span>
+              </div>
+
+              <button
+                onClick={() => {
+                  calcInflation();
+                  if (!fiaTodayCheckins.includes("inflation_check")) {
+                    claimFiaAction("inflation_check");
+                  }
+                }}
+                className="w-full py-3 bg-indigo-500 text-white font-bold text-sm rounded-xl hover:bg-indigo-400 transition-colors"
+              >
+                インフレ影響を計算する
+              </button>
+            </div>
+
+            {/* 結果表示 */}
+            {inflationResult && (
+              <>
+                {/* インフレ影響サマリー */}
+                <div className="fiana-card p-4">
+                  <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-4 mb-3">
                     <p className="text-sm text-red-400 font-medium mb-1">
-                      📉 インフレによる影響（年率3%想定）
+                      インフレによる年間影響（年率3%想定）
                     </p>
                     <p className="text-2xl font-bold text-red-300">
                       年間 -¥{inflationResult.yearlyDiff.toLocaleString()}
                     </p>
                     <p className="text-xs text-red-500/70 mt-1">
-                      去年より年間{inflationResult.yearlyDiff.toLocaleString()}円多く支払っている計算です
+                      月額{inflationResult.totalMonthly.toLocaleString()}円 ×
+                      12ヶ月 × 3% = 年間{inflationResult.yearlyDiff.toLocaleString()}円の目減り
                     </p>
                   </div>
 
-                  <div className="bg-green-500/10 border border-green-500/20 rounded-xl p-4">
-                    <p className="text-sm text-green-400 font-medium mb-1">
-                      📈 この差額を運用していたら（月利2%・3年間）
-                    </p>
-                    <p className="text-2xl font-bold text-green-300">
-                      +¥{inflationResult.ifInvested.toLocaleString()}
-                    </p>
-                    <p className="text-xs text-green-500/70 mt-1">
-                      差額を毎月コツコツ運用するだけで取り戻せます
-                    </p>
+                  <p className="text-xs text-gray-500 text-center">
+                    何もしなくても、あなたのお金は毎年これだけ価値を失っています
+                  </p>
+                </div>
+
+                {/* 5年後/10年後比較 */}
+                <div className="fiana-card p-4">
+                  <h3 className="text-sm font-bold text-gray-300 mb-3">
+                    何もしない vs 資産運用した場合
+                  </h3>
+                  <div className="space-y-3">
+                    {inflationResult.projections.map((p) => (
+                      <div key={p.year} className="rounded-xl border border-white/10 p-4">
+                        <div className="flex items-center justify-between mb-3">
+                          <span className="text-sm font-bold text-white">{p.year}年後</span>
+                          <span
+                            className={`text-xs font-medium px-2 py-0.5 rounded-full ${
+                              p.year <= 3
+                                ? "bg-yellow-500/20 text-yellow-400"
+                                : "bg-green-500/20 text-green-400"
+                            }`}
+                          >
+                            {p.year <= 3 ? "短期" : "長期"}
+                          </span>
+                        </div>
+                        <div className="grid grid-cols-2 gap-3">
+                          <div className="bg-red-500/5 rounded-lg p-3">
+                            <p className="text-[10px] text-red-400/70 mb-0.5">何もしない場合</p>
+                            <p className="text-sm font-bold text-red-400">
+                              -¥{p.noAction.toLocaleString()}
+                            </p>
+                            <p className="text-[10px] text-red-500/50">
+                              インフレで失う額
+                            </p>
+                          </div>
+                          <div className="bg-green-500/5 rounded-lg p-3">
+                            <p className="text-[10px] text-green-400/70 mb-0.5">差額を運用した場合</p>
+                            <p className="text-sm font-bold text-green-400">
+                              +¥{p.withInvest.toLocaleString()}
+                            </p>
+                            <p className="text-[10px] text-green-500/50">
+                              月利1.5%で運用
+                            </p>
+                          </div>
+                        </div>
+                        <div className="mt-2 bg-indigo-500/10 rounded-lg p-2 text-center">
+                          <span className="text-xs text-indigo-300">
+                            差額: <span className="font-bold">¥{(p.withInvest + p.noAction).toLocaleString()}</span>
+                          </span>
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 </div>
-              )}
-            </div>
 
-            <div className="fiana-card p-4">
-              <h3 className="text-sm font-bold text-gray-300 mb-3">固定費の目安</h3>
-              <div className="space-y-2 text-sm">
-                {[
-                  { label: "家賃・住宅ローン", example: "80,000〜150,000円" },
-                  { label: "光熱費", example: "15,000〜25,000円" },
-                  { label: "通信費", example: "8,000〜15,000円" },
-                  { label: "保険料", example: "10,000〜30,000円" },
-                  { label: "食費", example: "40,000〜80,000円" },
-                ].map((item) => (
-                  <div key={item.label} className="flex justify-between py-2 border-b border-white/5">
-                    <span className="text-gray-300">{item.label}</span>
-                    <span className="text-gray-500">{item.example}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
+                {/* 気づきメッセージ */}
+                <div
+                  className="rounded-2xl p-5 text-center"
+                  style={{
+                    background: "linear-gradient(135deg, #1e1b4b, #312e81)",
+                    boxShadow: "0 8px 32px rgba(99,102,241,0.15)",
+                  }}
+                >
+                  <p className="text-lg font-bold text-white mb-2">
+                    資産を「守る」だけでは足りない時代
+                  </p>
+                  <p className="text-sm text-indigo-200/80 leading-relaxed mb-4">
+                    インフレは見えないコスト。<br />
+                    10年後、あなたの{inflationResult.totalMonthly.toLocaleString()}円は<br />
+                    実質{Math.round(inflationResult.totalMonthly * Math.pow(0.97, 10)).toLocaleString()}円の価値になります。
+                  </p>
+                  <p className="text-sm text-indigo-300/70">
+                    小さな一歩が、大きな差になります。
+                  </p>
+                </div>
+              </>
+            )}
           </div>
         )}
 
+        {/* バックテスト誘導 */}
+        <div className="mt-6">
+          <button
+            onClick={() => {
+              if (!fiaTodayCheckins.includes("run_backtest")) {
+                claimFiaAction("run_backtest");
+              }
+              router.push("/fiana/backtest");
+            }}
+            className="w-full fiana-card p-4 flex items-center justify-between hover:border-indigo-500/30 transition-all group"
+          >
+            <div className="flex items-center gap-3">
+              <span className="text-2xl">🔬</span>
+              <div className="text-left">
+                <p className="text-sm font-bold text-white group-hover:text-indigo-300 transition-colors">
+                  バックテスト検証
+                </p>
+                <p className="text-xs text-gray-500">過去のデータでシステムの成績を検証</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              {!fiaTodayCheckins.includes("run_backtest") && (
+                <span className="text-[10px] text-amber-400 bg-amber-500/20 px-2 py-0.5 rounded-full">
+                  +20 fia
+                </span>
+              )}
+              <span className="text-gray-600 group-hover:text-indigo-400 transition-colors">→</span>
+            </div>
+          </button>
+        </div>
+
         {/* LINE誘導 */}
-        <div className="mt-6 fiana-card p-4 text-center">
+        <div className="mt-4 fiana-card p-4 text-center">
           <p className="text-sm text-gray-400 mb-3">
             気になることがあれば、いつでもご相談ください
           </p>
@@ -730,6 +1341,75 @@ export default function FianaDashboard() {
           ※これはシミュレーションです。実際の取引結果とは異なります。
         </p>
       </div>
+
+      {/* fiaポイント獲得アニメーション（全タブ共通） */}
+      {fiaEarnAnim && activeTab !== "fia" && (
+        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 animate-bounce">
+          <div className="bg-amber-500 text-black font-bold px-6 py-3 rounded-2xl shadow-lg shadow-amber-500/40 text-center">
+            <p className="text-lg">+{fiaEarnAnim.amount} fia</p>
+            <p className="text-xs opacity-80">{fiaEarnAnim.label}</p>
+          </div>
+        </div>
+      )}
+
+      {/* システム体験開放確認モーダル */}
+      {unlockConfirm && (() => {
+        const sys = EA_SYSTEMS.find((s) => s.id === unlockConfirm);
+        const cost = SYSTEM_UNLOCK_COSTS.find((c) => c.systemId === unlockConfirm);
+        if (!sys || !cost) return null;
+        const canAfford = fiaPoints >= cost.fiaCost;
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm px-4">
+            <div className="fiana-card p-6 max-w-sm w-full fiana-slide-up">
+              <div className="text-center mb-4">
+                <span className="text-4xl">{sys.icon}</span>
+                <h3 className="text-lg font-bold text-white mt-2">{sys.name}</h3>
+                <p className="text-sm text-gray-400 mt-1">{sys.description}</p>
+              </div>
+
+              <div className="bg-white/5 rounded-xl p-4 mb-4">
+                <div className="flex justify-between mb-2">
+                  <span className="text-sm text-gray-400">体験コスト</span>
+                  <span className="text-sm font-bold text-amber-400">{cost.fiaCost} fia</span>
+                </div>
+                <div className="flex justify-between mb-2">
+                  <span className="text-sm text-gray-400">体験期間</span>
+                  <span className="text-sm text-white">{cost.durationHours}時間</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-sm text-gray-400">保有fia</span>
+                  <span className={`text-sm font-bold ${canAfford ? "text-green-400" : "text-red-400"}`}>
+                    {fiaPoints.toLocaleString()} fia
+                  </span>
+                </div>
+              </div>
+
+              {canAfford ? (
+                <button
+                  onClick={() => unlockSystem(unlockConfirm)}
+                  className="w-full py-3 bg-amber-500 text-black font-bold rounded-xl hover:bg-amber-400 transition-colors mb-2"
+                >
+                  {cost.fiaCost} fia で体験開放する
+                </button>
+              ) : (
+                <div className="text-center py-3 bg-red-500/10 border border-red-500/20 rounded-xl mb-2">
+                  <p className="text-sm text-red-400">ポイントが足りません</p>
+                  <p className="text-xs text-red-500/60 mt-1">
+                    あと {(cost.fiaCost - fiaPoints).toLocaleString()} fia 必要です
+                  </p>
+                </div>
+              )}
+
+              <button
+                onClick={() => setUnlockConfirm(null)}
+                className="w-full py-2 text-sm text-gray-500 hover:text-gray-300 transition-colors"
+              >
+                キャンセル
+              </button>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }

@@ -1,0 +1,655 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>マケラボ 成約管理システム</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0f1117;--bg2:#1a1d27;--bg3:#242833;--bg4:#2e3343;
+  --text:#e4e6eb;--text2:#a0a5b5;--text3:#6b7185;
+  --accent:#6c8cff;--accent2:#4a6cf7;--green:#22c55e;--red:#ef4444;
+  --yellow:#eab308;--orange:#f97316;--purple:#a855f7;
+  --border:#2e3343;--radius:10px;
+}
+html{font-size:13px}
+body{font-family:'Segoe UI','Hiragino Sans',sans-serif;background:var(--bg);color:var(--text);min-height:100vh}
+button{cursor:pointer;font-family:inherit}
+input,select,textarea{font-family:inherit}
+.screen{display:none;min-height:100vh}.screen.active{display:flex;flex-direction:column}
+
+/* Project Select */
+#projectSelect{align-items:center;justify-content:center;background:linear-gradient(135deg,#0f1117 0%,#1a1d35 100%);padding:20px}
+.ps-wrap{max-width:900px;width:100%;text-align:center}
+.ps-wrap h1{font-size:1.8rem;color:var(--accent);margin-bottom:6px}
+.ps-wrap .sub{color:var(--text2);font-size:.9rem;margin-bottom:32px}
+.project-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:14px}
+.project-card{background:var(--bg2);border:2px solid var(--border);border-radius:14px;padding:22px 14px;cursor:pointer;transition:all .2s;text-align:center}
+.project-card:hover{border-color:var(--accent);transform:translateY(-2px);box-shadow:0 8px 24px rgba(0,0,0,.3)}
+.project-card .p-icon{font-size:2rem;margin-bottom:6px}
+.project-card .p-name{font-size:1.05rem;font-weight:700}
+.project-card .p-count{font-size:.7rem;color:var(--text3);margin-top:4px}
+
+/* Header */
+.app-header{background:var(--bg2);border-bottom:1px solid var(--border);padding:8px 12px;display:flex;align-items:center;gap:10px;position:sticky;top:0;z-index:100;flex-wrap:wrap}
+.back-btn{padding:5px 10px;background:var(--bg3);border:1px solid var(--border);border-radius:6px;color:var(--text2);font-size:.8rem;white-space:nowrap}
+.back-btn:hover{border-color:var(--accent);color:var(--accent)}
+.app-header .logo{font-weight:700;font-size:.95rem;color:var(--accent);white-space:nowrap}
+.app-header .logo span{color:var(--text2);font-weight:400;font-size:.75rem;margin-left:4px}
+.tab-bar{display:flex;gap:1px;margin-left:auto;flex-wrap:wrap}
+.tab-btn{padding:6px 10px;background:none;border:none;color:var(--text3);font-size:.78rem;border-radius:5px 5px 0 0;transition:all .12s;white-space:nowrap}
+.tab-btn:hover{color:var(--text);background:var(--bg3)}
+.tab-btn.active{color:var(--accent);background:var(--bg3);border-bottom:2px solid var(--accent)}
+
+/* Toolbar */
+.toolbar{background:var(--bg2);border-bottom:1px solid var(--border);padding:6px 12px;display:flex;flex-wrap:wrap;gap:6px;align-items:center;position:sticky;top:42px;z-index:99}
+.toolbar input,.toolbar select{padding:5px 8px;background:var(--bg3);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:.82rem}
+.toolbar input:focus,.toolbar select:focus{outline:none;border-color:var(--accent)}
+.toolbar input[type=text]{min-width:160px}
+.add-btn{padding:5px 12px;background:var(--accent2);color:#fff;border:none;border-radius:5px;font-size:.82rem;font-weight:600;white-space:nowrap}
+.add-btn:hover{background:var(--accent)}
+.record-count{font-size:.75rem;color:var(--text3);margin-left:auto;white-space:nowrap}
+
+/* Sheet */
+.sheet-wrap{flex:1;overflow:auto}
+.sheet{border-collapse:collapse;font-size:.78rem;white-space:nowrap}
+.sheet th{position:sticky;top:0;background:var(--bg3);padding:5px 8px;text-align:left;font-weight:600;color:var(--text2);border-bottom:2px solid var(--border);border-right:1px solid var(--border);z-index:2;min-width:70px}
+.sheet th.w{min-width:140px}.sheet th.xw{min-width:220px}.sheet th.n{min-width:44px}
+.sheet th.pin{position:sticky;left:0;z-index:3;background:var(--bg3)}
+.sheet td{padding:4px 8px;border-bottom:1px solid var(--border);border-right:1px solid rgba(46,51,67,.4);max-width:180px;overflow:hidden;text-overflow:ellipsis}
+.sheet td.pin{position:sticky;left:0;z-index:1;background:var(--bg2)}
+.sheet tbody tr{cursor:pointer;transition:background .08s}
+.sheet tbody tr:hover{background:var(--bg3)}
+.sheet tbody tr:hover td.pin{background:var(--bg3)}
+.sheet tbody tr.row-warn{background:rgba(239,68,68,.08)}
+.sheet tbody tr.row-warn:hover{background:rgba(239,68,68,.15)}
+.sheet tbody tr.row-warn td.pin{background:rgba(239,68,68,.08)}
+.num{text-align:right;font-variant-numeric:tabular-nums}
+.st{display:inline-block;padding:1px 7px;border-radius:9px;font-size:.72rem;font-weight:600}
+.st-g{background:rgba(34,197,94,.15);color:var(--green)}
+.st-r{background:rgba(239,68,68,.15);color:var(--red)}
+.st-y{background:rgba(234,179,8,.15);color:var(--yellow)}
+.st-x{background:rgba(107,114,128,.2);color:var(--text3)}
+.st-p{background:rgba(168,85,247,.15);color:var(--purple)}
+.st-o{background:rgba(249,115,22,.15);color:var(--orange)}
+.bool-t{color:var(--green)}.bool-f{color:var(--text3)}
+
+/* Modal */
+.mo{display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:200;justify-content:center;padding:16px;overflow-y:auto}
+.mo.active{display:flex}
+.md{background:var(--bg2);border:1px solid var(--border);border-radius:14px;width:100%;max-width:780px;margin:auto;display:flex;flex-direction:column;max-height:90vh}
+.md-h{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--border)}
+.md-h h3{font-size:1rem}
+.md-h .cb{background:none;border:none;color:var(--text3);font-size:1.3rem;padding:2px 6px}
+.md-h .cb:hover{color:var(--text)}
+.md-b{overflow-y:auto;padding:16px 18px;flex:1}
+.fg{display:grid;grid-template-columns:1fr 1fr;gap:8px 14px}
+.fi{display:flex;flex-direction:column;gap:2px}
+.fi.full{grid-column:1/-1}
+.fi label{font-size:.72rem;color:var(--text3);font-weight:600}
+.fi input,.fi select,.fi textarea{padding:6px 8px;background:var(--bg3);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:.82rem}
+.fi input:focus,.fi select:focus,.fi textarea:focus{outline:none;border-color:var(--accent)}
+.fi textarea{min-height:50px;resize:vertical}
+.fs{grid-column:1/-1;font-size:.78rem;font-weight:700;color:var(--accent);padding:8px 0 3px;border-bottom:1px solid var(--border);margin-top:4px}
+.md-f{padding:10px 18px;border-top:1px solid var(--border);display:flex;gap:6px;justify-content:flex-end}
+.md-f button{padding:7px 18px;border-radius:5px;font-size:.85rem;font-weight:600;border:none}
+.bsv{background:var(--accent2);color:#fff}.bsv:hover{background:var(--accent)}
+.bcn{background:var(--bg3);color:var(--text2);border:1px solid var(--border)!important}.bcn:hover{color:var(--text)}
+.bdl{background:rgba(239,68,68,.12);color:var(--red)}.bdl:hover{background:rgba(239,68,68,.22)}
+
+/* Pager */
+.pgr{display:flex;justify-content:center;gap:3px;padding:8px;background:var(--bg2);border-top:1px solid var(--border)}
+.pgr button{padding:3px 8px;background:var(--bg3);border:1px solid var(--border);border-radius:4px;color:var(--text2);font-size:.78rem}
+.pgr button:hover{border-color:var(--accent);color:var(--accent)}
+.pgr button.active{background:var(--accent2);color:#fff;border-color:var(--accent2)}
+.pgr .inf{padding:3px 6px;font-size:.75rem;color:var(--text3)}
+
+/* Toast */
+.toast{position:fixed;bottom:20px;right:20px;background:var(--green);color:#fff;padding:8px 18px;border-radius:8px;font-size:.82rem;font-weight:600;z-index:300;opacity:0;transition:opacity .3s;pointer-events:none}
+.toast.show{opacity:1}
+
+@media(max-width:768px){
+  .project-grid{grid-template-columns:repeat(2,1fr)}
+  .fg{grid-template-columns:1fr}
+  .toolbar input[type=text]{min-width:100px}
+  .tab-bar{gap:0}
+  .tab-btn{padding:5px 6px;font-size:.72rem}
+}
+</style>
+</head>
+<body>
+
+<div id="projectSelect" class="screen active">
+  <div class="ps-wrap">
+    <h1>マケラボ</h1>
+    <div class="sub">成約管理システム ― 案件を選択してください</div>
+    <div class="project-grid" id="projectGrid"></div>
+  </div>
+</div>
+
+<div id="app" class="screen">
+  <header class="app-header">
+    <button class="back-btn" onclick="goHome()">← 案件選択</button>
+    <div class="logo" id="appTitle"></div>
+    <div class="tab-bar" id="tabBar"></div>
+  </header>
+  <div class="toolbar" id="toolbar">
+    <input type="text" id="sBox" placeholder="検索..." oninput="render()">
+    <div id="dynFilters"></div>
+    <button class="add-btn" onclick="openAdd()">＋ 新規追加</button>
+    <div class="record-count" id="rc"></div>
+  </div>
+  <div class="sheet-wrap"><table class="sheet" id="tbl"><thead id="tHead"></thead><tbody id="tBody"></tbody></table></div>
+  <div class="pgr" id="pgr"></div>
+</div>
+
+<div class="mo" id="eMo" onclick="if(event.target===this)cMo()">
+  <div class="md">
+    <div class="md-h"><h3 id="mTi">編集</h3><button class="cb" onclick="cMo()">&times;</button></div>
+    <div class="md-b"><div class="fg" id="mFo"></div></div>
+    <div class="md-f">
+      <button class="bdl" id="bDl" onclick="delRow()">削除</button>
+      <button class="bcn" onclick="cMo()">キャンセル</button>
+      <button class="bsv" onclick="saveRow()">保存</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ================================================================
+// COLUMN DEFINITIONS per tab
+// ================================================================
+// type: t=text, n=number, d=date, s=select, b=bool, ta=textarea
+// w: 'w'=wide, 'xw'=xwide, 'n'=narrow
+// pin: sticky left
+// sec: section header before this field in modal
+
+const CL=['ｷﾘｻﾒ🦈','ｵｵｸﾗ🐍','ｹｲｼﾞ🔥','ｱﾘｻ🍔','大平🐘','阿部🍖','ｱｯﾄ🐬','Nana🃏','Seio🐱','舞華🍌','向田🦁','Ezawa🎭','ｱﾗｲ⭐️','高橋🐶','小林正🍊'];
+const ST=['成約','成約（デポ）','不成約','保留','集計除外','返金対応☠','予約キャンセル','リスケ','バックレ','成約後バックレ','返答無し/ブロック'];
+const PM=['ヒロミ(代行)','ﾕﾆｳﾞｧ(服部)(ｸﾚｶ)','銀行振込','PayPay'];
+const AG=['10代','20代','30代','40代','50代','60代','70代'];
+const SX=['男','女','その他'];
+
+function C(key,label,type,opts){return{key,label,type,opts}}
+function Cw(key,label,type,opts){return{key,label,type,opts,w:'w'}}
+function Cx(key,label,type,opts){return{key,label,type,opts,w:'xw'}}
+function Cn(key,label,type,opts){return{key,label,type,opts,w:'n'}}
+function Cp(key,label,type,opts){return{key,label,type,opts,pin:true}}
+
+const TABS = {
+first:{label:'1回目',cols:[
+  Cp('連番','連番','n'),Cp('名前','名前','t'),
+  C('LINE名','LINE名','t'),C('無料オプチャ名','無料オプチャ名','t'),
+  C('年代','年代','s',AG),C('性別','性別','s',SX),C('電話番号','電話番号','t'),C('職業','職業','t'),
+  Cw('回答日時','回答日時','t'),C('自己破産_債務整理','自己破産・債務整理','t'),C('クレカ有無','クレカ有無','t'),
+  Cw('メアド','メアド(確認)','t'),
+  {key:'面談予約日',label:'面談予約日',type:'d',sec:'面談予約'},Cn('時間','時間','t'),Cn('新旧','新旧','t'),
+  Cw('流入元','流入元','t'),Cw('YT広告タイトル','YT&広告タイトル','t'),C('流入経路タブ','流入経路タブ','t'),
+  C('担当クローザー','担当ｸﾛｰｻﾞｰ','s',CL),
+  {key:'面談予約日2',label:'面談予約日②',type:'d',sec:'面談実施'},Cn('時間2','時間②','t'),
+  C('面談種類1','面談種類①','t'),C('面談種類2','面談種類②','t'),
+  C('コース名','コース名','t'),C('ポケサロ訴求','ポケサロ訴求','b'),C('ポケサロ誘導','ポケサロ誘導','b'),
+  Cx('面談内容','面談内容','ta'),Cx('音声URL','音声URL','t'),C('ローンチ','ローンチ','b'),
+  {key:'成約商品1',label:'成約商品①',type:'t',sec:'成約情報'},C('金額1','金額①','n'),C('決済方法1','決済方法①','s',PM),
+  C('成約状況1','成約状況①','s',ST),C('承諾書送付','承諾書送付','t'),C('追跡番号','追跡番号','t'),
+  C('不成約者連絡済み','不成約者連絡済み','b'),C('不成約者連絡しない','不成約者連絡しない','b'),
+  C('契約書','契約書','t'),C('FE決済完了','FE決済完了','b'),C('Lproにいない','Lproにいない','b'),
+  {key:'CIC融資',label:'CIC融資',type:'b',sec:'融資'},C('通常融資','通常融資','b'),
+  C('融資不実施理由','融資不実施理由','t'),C('審査結果','審査結果','t'),Cw('アップセル未実行理由','ｱｯﾌﾟｾﾙ未実行理由','t'),
+  {key:'入金額1',label:'入金額①',type:'n',sec:'入金・サポート'},C('未入金額1','①未入金額','n'),
+  C('サポート開始日1','①ｻﾎﾟｰﾄ開始日','d'),C('サポート終了日1','①ｻﾎﾟｰﾄ終了日','d'),
+  C('終了日自動','終了日(自動)','d'),C('終了日手動','終了日手動設定','d'),Cn('成約回数','成約回数','n'),
+  Cx('備考','備考','ta'),
+  {key:'フロントサロン名',label:'ﾌﾛﾝﾄｻﾛﾝ名',type:'t',sec:'サロン・MT4'},C('マンツーサロン名','ﾏﾝﾂｰｻﾛﾝ名','t'),
+  C('プライベートサロン名','ﾌﾟﾗｲﾍﾞｰﾄｻﾛﾝ名','t'),C('ナメクジサロン名','ﾅﾒｸｼﾞｻﾛﾝ名','t'),C('クイーンサロン名','ｸｲｰﾝｻﾛﾝ名','t'),
+  C('ハピプラMT4','ﾊﾋﾟﾌﾟﾗMT4','t'),C('ギドラMT4','ｷﾞﾄﾞﾗMT4','t'),C('ナメクジMT4','ﾅﾒｸｼﾞMT4','t'),C('ハピゴMT4','ﾊﾋﾟｺﾞMT4','t'),
+  {key:'年',label:'年',type:'n',w:'n',sec:'システム'},Cn('月','月','n'),C('ローンチ2','ローンチ','b'),
+  C('当日アップ面談','当日ｱｯﾌﾟ面談','t'),C('当月アップ面談','当月ｱｯﾌﾟ面談','t'),C('分割者判定','分割者判定','b'),
+],filters:[
+  {id:'fCl',key:'担当クローザー',label:'全クローザー'},
+  {id:'fSt',key:'成約状況1',label:'全ステータス'},
+  {id:'fMo',key:'月',label:'全月',isMonth:true},
+  {id:'fLa',key:'ローンチ',label:'全ローンチ',opts:['TRUE','FALSE']},
+]},
+
+upsell:{label:'2回目以降',cols:[
+  Cp('名前','名前','t'),Cp('LINE名','LINE名','t'),
+  C('オプチャ名','オプチャ名','t'),C('年齢','年齢','s',AG),C('性別','性別','s',SX),
+  C('都道府県','都道府県','t'),C('職業','職業','t'),C('世帯年収','世帯年収','t'),
+  Cw('メアド','メアド(確認)','t'),Cw('流入元','流入元','t'),C('YTコメント','YTｺﾒﾝﾄ','t'),C('流入経路タブ','流入経路タブ','t'),
+  {key:'１回目成約状況',label:'１回目成約状況',type:'t',sec:'1回目連携'},C('1回目完済日','1回目完済日','d'),
+  C('担当クローザー','担当ｸﾛｰｻﾞｰ','s',CL),Cn('回数','回数','n'),C('アップセル連絡','ｱｯﾌﾟｾﾙ連絡','b'),Cw('備考A','備考A','ta'),
+  {key:'面談予約日',label:'面談予約日',type:'d',sec:'面談'},Cn('時間','時間','t'),
+  C('面談種類1','面談種類①','t'),C('面談種類2','面談種類②','t'),
+  Cx('面談内容','面談内容','ta'),Cx('音声URL','音声URL','t'),C('フロント扱い','ﾌﾛﾝﾄ扱い','b'),
+  {key:'成約商品2',label:'成約商品②',type:'t',sec:'成約情報'},C('金額2','金額②','n'),C('決済方法2','決済方法②','s',PM),
+  C('成約状況2','成約状況②','s',ST),C('承諾書送付','承諾書送付','t'),C('追跡番号','追跡番号','t'),
+  C('契約書','契約書','t'),C('決済タグ完了','決済ﾀｸﾞ完了','b'),
+  {key:'入金額2',label:'入金額②',type:'n',sec:'入金・サポート'},C('未入金額2','未入金額②','n'),
+  C('サポート開始日2','ｻﾎﾟｰﾄ開始日②','d'),C('サポート終了日2','ｻﾎﾟｰﾄ終了日②','d'),
+  C('終了日自動','終了日(自動)','d'),C('終了日手動','終了日手動設定','d'),
+  C('性別2','性別','t'),Cw('備考B','備考B','ta'),
+  {key:'年',label:'年',type:'n',w:'n',sec:'システム'},Cn('月','月','n'),C('分割者判定','分割者判定','b'),
+],filters:[
+  {id:'fCl',key:'担当クローザー',label:'全クローザー'},
+  {id:'fSt',key:'成約状況2',label:'全ステータス'},
+  {id:'fMo',key:'月',label:'全月',isMonth:true},
+]},
+
+payment:{label:'入金管理',cols:[
+  Cp('連番','連番','n'),Cp('担当クローザー','担当ｸﾛｰｻﾞｰ','s',CL),
+  C('LINE名','LINE名','t'),C('氏名','氏名','t'),Cn('成約回数','成約回数','n'),C('ローンチ','ローンチ','b'),
+  C('決済方法','決済方法','s',PM),C('入金回数','入金回数','t'),C('入金期日','入金期日','d'),
+  C('入金予定額','入金予定額','n'),C('入金日','入金日','d'),Cw('備考','備考','ta'),
+  Cw('流入経路','流入経路','t'),C('クーリングオフ','ｸｰﾘﾝｸﾞｵﾌ','b'),C('柳井チェック','柳井ﾁｪｯｸ','b'),
+  C('月末チェック','月末ﾁｪｯｸ','b'),C('決済方法変更','決済方法変更','b'),
+  C('選択商材','選択商材','t'),C('面談種類1','面談種類①','t'),C('面談種類2','面談種類②','t'),
+  C('広告部署','広告部署','t'),C('動画部署','動画部署','t'),C('インスタ部署','ｲﾝｽﾀ部署','t'),
+  C('CS部署','CS部署','t'),Cn('デポ除入金回数','ﾃﾞﾎﾟ除入金回数','n'),
+],filters:[
+  {id:'fCl',key:'担当クローザー',label:'全クローザー'},
+  {id:'fMo',key:'_month',label:'全月',isMonth:true,derived:true},
+]},
+
+outsource:{label:'外注費入力',cols:[
+  Cp('連番','連番','n'),Cw('外注先','外注先','t'),Cw('内容','内容','t'),
+  C('対象月','対象月','t'),C('金額','金額','n'),Cw('備考','備考','ta'),
+],filters:[
+  {id:'fMo',key:'対象月',label:'全月'},
+  {id:'fCat',key:'_category',label:'全カテゴリ',derived:true},
+]},
+
+adcost:{label:'広告費入力',cols:[
+  C('対象月','対象月','t'),C('広告種別','広告種別','s',['FB広告','YT広告','その他','SNS集客']),
+  C('運用者','運用者','t'),C('金額','金額','n'),Cw('備考','備考','ta'),
+],filters:[
+  {id:'fMo',key:'対象月',label:'全月'},
+  {id:'fTy',key:'広告種別',label:'全広告種別'},
+]},
+
+result:{label:'合算_結果用',cols:[
+  C('検索用','検索用','t'),C('月','月','t'),Cp('クローザー名','ｸﾛｰｻﾞｰ名','t'),
+  C('フロント相談件数','ﾌﾛﾝﾄ相談件数','n'),C('フロント成約件数','ﾌﾛﾝﾄ成約件数','n'),
+  C('フロント成約金額','ﾌﾛﾝﾄ成約金額(回収済)','n'),C('フロント面談ベース金額','ﾌﾛﾝﾄ(面談ﾍﾞｰｽ)成約金額','n'),
+  C('アップ相談件数','ｱｯﾌﾟ相談件数','n'),C('アップ成約件数','ｱｯﾌﾟ成約件数','n'),
+  C('アップ成約金額','ｱｯﾌﾟ成約金額(回収済)','n'),
+  C('ローンチ相談件数','ﾛｰﾝﾁ相談件数','n'),C('ローンチ成約件数','ﾛｰﾝﾁ成約件数','n'),
+  C('ローンチ成約金額','ﾛｰﾝﾁ成約金額(回収済)','n'),
+  C('当日アップ面談率','当日ｱｯﾌﾟ面談率','t'),C('当月アップ面談率','当月ｱｯﾌﾟ面談率','t'),
+],filters:[
+  {id:'fMo',key:'月',label:'全月'},
+  {id:'fCl',key:'クローザー名',label:'全クローザー'},
+]},
+
+report:{label:'月報_週報',cols:[
+  C('種別','種別','s',['週報','月報']),Cn('対象年','対象年','n'),C('対象月','対象月','t'),
+  C('対象週','対象週','t'),
+  C('フロント着金額','ﾌﾛﾝﾄ着金額','n'),C('ダウンセル着金額','ﾀﾞｳﾝｾﾙ着金額','n'),C('アップ着金額','ｱｯﾌﾟ着金額','n'),
+  C('合計着金額','合計着金額','n'),Cn('成約件数','成約件数','n'),C('平均成約単価','平均成約単価','n'),
+  Cn('デポジット件数','ﾃﾞﾎﾟ件数','n'),Cw('備考','備考','ta'),
+],filters:[
+  {id:'fTy',key:'種別',label:'全種別'},
+  {id:'fMo',key:'対象月',label:'全月'},
+]},
+
+graduate:{label:'卒業者リスト',cols:[
+  Cp('連番','連番','n'),C('フロント_アップ','ﾌﾛﾝﾄ/ｱｯﾌﾟ','s',['フロント','アップ']),
+  C('名前','名前','t'),C('LINE名','LINE名','t'),C('年齢','年齢','s',AG),C('電話番号','電話番号','t'),
+  Cw('メアド','メアド','t'),Cw('メアド確認','メアド(確認)','t'),Cw('流入元','流入元','t'),
+  C('担当クローザー','担当ｸﾛｰｻﾞｰ','s',CL),
+  {key:'成約商品1',label:'成約商品1',type:'t',sec:'成約情報'},C('成約商品2','成約商品2','t'),C('成約商品3','成約商品3','t'),C('成約商品4','成約商品4','t'),
+  {key:'最終卒業日',label:'最終卒業日',type:'d',sec:'卒業情報'},
+  C('ハピプラMT4','ﾊﾋﾟﾌﾟﾗMT4','t'),C('ギドラMT4','ｷﾞﾄﾞﾗMT4','t'),C('ナメクジMT4','ﾅﾒｸｼﾞMT4','t'),C('ハピゴMT4','ﾊﾋﾟｺﾞMT4','t'),
+  C('連絡済み','連絡済み','b'),C('寝た子オコサズ','寝た子ｵｺｻｽﾞ','b'),C('卒業者ラベル','卒業者ﾗﾍﾞﾙ','t'),
+  {key:'面談日時',label:'面談日時',type:'t',sec:'再面談'},C('結果','結果','t'),C('決済方法','決済方法','s',PM),
+  C('金額','金額','n'),Cw('メモ1','メモ1','ta'),Cw('メモ2','メモ2','ta'),Cw('メモ3','メモ3','ta'),
+],filters:[
+  {id:'fTy',key:'フロント_アップ',label:'全種別'},
+  {id:'fCl',key:'担当クローザー',label:'全クローザー'},
+  {id:'fNk',key:'寝た子オコサズ',label:'全再営業',opts:['TRUE','FALSE']},
+]},
+};
+
+const TAB_KEYS=Object.keys(TABS);
+
+// ================================================================
+// PROJECTS
+// ================================================================
+const PROJECTS=[
+  {id:'happiness',name:'ハピネス',icon:'💎',color:'#6c8cff'},
+  {id:'fiana',name:'フィアナ',icon:'🌸',color:'#f472b6'},
+  {id:'mari',name:'まり',icon:'🍀',color:'#22c55e'},
+  {id:'tsukushi',name:'つくし',icon:'🌾',color:'#eab308'},
+  {id:'hikari',name:'ひかり',icon:'✨',color:'#f97316'},
+  {id:'kazuki',name:'かずき',icon:'🔷',color:'#06b6d4'},
+  {id:'keiba',name:'競馬',icon:'🏇',color:'#a855f7'},
+];
+
+// ================================================================
+// MOCK DATA
+// ================================================================
+let _uid=0; function uid(){return ++_uid}
+
+function genDB(){
+  const DB={};
+  PROJECTS.forEach(p=>{const o={};TAB_KEYS.forEach(t=>o[t]=[]);DB[p.id]=o});
+
+  // --- HAPPINESS: 1回目 (15件) ---
+  const hd=DB.happiness;
+  [
+    [5,'杉山 恭子','すぎやま きょうこ','かおる','50代','女','08014403416','会社員','2026-01-01 14:37','','','kyorin.s55@gmail.com','2026/01/04','15:00','','YouTube-382','','','ｷﾘｻﾒ🦈','','','ﾌﾛﾝﾄ','','','0','0','','','0','ﾌﾛﾝﾄ竹ﾀﾞｯｼｭ',700000,'ﾕﾆｳﾞｧ(服部)(ｸﾚｶ)','成約','','','0','0','','0','0','0','0','','','',700000,0,'','','','',1,'','','','','','','5484362','','','','',2026,1,'0','','','0'],
+    [6,'小林村美','小林村美(つえみ)','Yuneco','50代','女','08017111077','パート','2026-01-01 15:12','','','t.214214@icloud.com','2026/01/09','15:00','','fbnaka-LP3-8-109','','','ｹｲｼﾞ🔥','','','ﾌﾛﾝﾄ','','','0','0','','','0','ﾌﾛﾝﾄ竹',650000,'ヒロミ(代行)','成約','','','0','0','','0','0','0','0','','','',650000,0,'','','','',1,'','','','','','','5484436','','','','',2026,1,'0','','','0'],
+    [7,'藤本圭祐','藤本圭祐','けいすけ','40代','男','08030688821','会社員','2026-01-01 15:17','','','k569663@gmail.com','2026/01/04','15:00','','YouTube-000','','','ｷﾘｻﾒ🦈','','','ﾌﾛﾝﾄ','','','0','0','','','0','ﾌﾛﾝﾄ竹ﾀﾞｯｼｭ',700000,'ﾕﾆｳﾞｧ(服部)(ｸﾚｶ)','成約','','','0','0','','0','0','0','0','','','',700000,0,'','','','',1,'','','','','','','5484289','','','','',2026,1,'0','','','0'],
+    [13,'大島直子','Naoko🔮','Naoko🔮','60代','女','09047206506','自営業','2026-01-01','','','rinbochan.mail@gmail.com','2026/01/05','15:00','','fbnaka-LP3-8-101','','','ｷﾘｻﾒ🦈','','','ﾌﾛﾝﾄ','','','0','0','','','0','ﾌﾛﾝﾄ梅',440000,'ヒロミ(代行)','成約','','','0','0','','0','0','0','0','','','',440000,0,'','','','',1,'','','','','','','5484307','','','','',2026,1,'0','','','0'],
+    [15,'岩崎 賢一','岩崎賢一','ケンスマイル','60代','男','09055099739','会社員','2026-01-01','','','ngbqs851@gmail.com','2026/01/04','15:00','','ytsa-lp7_cp27-2','','','ｷﾘｻﾒ🦈','','','ﾌﾛﾝﾄ','','','0','0','','','0','ﾌﾛﾝﾄ梅',550000,'ヒロミ(代行)','成約','','','0','0','','0','0','0','0','','','',550000,0,'','','','',1,'','','','','','','5484327','','','','',2026,1,'0','','','0'],
+    [56,'園田昌也','まさや','まさ','30代','男','08098763900','会社員','2026-01-04','','','msyaaa20@icloud.com','2026/01/08','15:00','','fbaki-lp1-122','','','阿部🍖','','','ﾌﾛﾝﾄ','','','0','0','','','0','ﾌﾛﾝﾄ梅',500000,'ﾕﾆｳﾞｧ(服部)(ｸﾚｶ)','成約','','','0','0','','0','0','0','0','','','',500000,0,'','','','',1,'','','','','','','5484373','','','','',2026,1,'0','','','0'],
+    [64,'堀昌和','虎','まさ','50代','男','09050621817','製造業','2026-01-05','','','m50@docomo.ne.jp','2026/01/07','18:00','','S-fbrio-fh2-LP9v-007','','','ｹｲｼﾞ🔥','','','ﾌﾛﾝﾄ','','','0','0','','','0','ﾌﾛﾝﾄ竹',600000,'ﾕﾆｳﾞｧ(服部)(ｸﾚｶ)','成約','','','0','0','','0','0','0','0','','','',600000,0,'','','','',1,'','','','','','','5484353','','','','',2026,1,'0','','','0'],
+    [70,'高橋 摩天男','まてお','まてお','30代','男','08094460722','会社員','2026-01-06','','','rm-1224@i.softbank.jp','2026/01/09','15:00','','fbaki-lp1-116','','','ｹｲｼﾞ🔥','','','ﾌﾛﾝﾄ','','','0','0','','','0','ﾌﾛﾝﾄ竹',600000,'ヒロミ(代行)','成約','','','0','0','','0','0','0','0','','','',500000,100000,'','','','',1,'','','','','','','5484390','','','','',2026,1,'0','','','0'],
+    [78,'松本美保','まつもとみほ','なし','60代','女','09084882421','フリーランス','2026-01-07','','','m1105cnn@ybb.ne.jp','2026/01/08','15:00','','None','','','ｵｵｸﾗ🐍','','','ﾌﾛﾝﾄ','','','0','0','','','0','ﾌﾛﾝﾄ梅ﾓﾆﾀｰ',300000,'ﾕﾆｳﾞｧ(服部)(ｸﾚｶ)','成約','','','0','0','','0','0','0','0','','','',300000,0,'','','','',1,'','','','','','','5484552','','','','',2026,1,'0','','','0'],
+    [97,'豊田直也','豊田直也','なおや','40代','男','09022610913','会社員','2026-01-08','','','naoya@icloud.com','2026/01/12','15:00','','fbnaka-LP3-8-151','','','阿部🍖','','','ﾌﾛﾝﾄ','','','0','0','','','0','ﾌﾛﾝﾄ竹ﾀﾞｯｼｭ',900000,'ﾕﾆｳﾞｧ(服部)(ｸﾚｶ)','成約','','','0','0','','0','0','0','0','','','',900000,0,'','','','',1,'','','','','','','5484422','','','','',2026,1,'0','','','0'],
+    [120,'飯田勝巳','飯田勝巳','','50代','男','09067970806','会社員','2026-01-10','','','weiss@gmail.com','2026/01/15','15:00','','None','','','ｱｯﾄ🐬','','','ﾌﾛﾝﾄ','','','0','0','','','0','ﾌﾛﾝﾄ梅ﾓﾆﾀｰ',300000,'ﾕﾆｳﾞｧ(服部)(ｸﾚｶ)','成約','','','0','0','','0','0','0','0','','','',300000,0,'','','','',1,'','','','','','','5485213','','','','',2026,1,'0','','','0'],
+    [293,'常泉 一','つねいずみ','','50代','男','090-3686-8018','会社員','2026-01-25','','','gunota@gmail.com','2026/01/30','15:00','','fbnaka-LP3-8-95','','','ｷﾘｻﾒ🦈','','','ﾌﾛﾝﾄ','','','0','0','','','0','',0,'','不成約','','','0','0','','0','0','0','0','','','',0,0,'','','','',1,'','','','','','','','','','','',2026,1,'0','','','0'],
+    [355,'澤田志野','Shino','','50代','女','09049262354','パート','2026-01-18','','','shino@icloud.com','2026/01/20','15:00','','エルトラNone','','','ｷﾘｻﾒ🦈','','','ﾌﾛﾝﾄ','','','0','0','','','0','',0,'','バックレ','','','0','0','','0','0','0','0','','','',0,0,'','','','',1,'','','','','','','','','','','',2026,1,'0','','','0'],
+    [393,'河合 弾','だん','','30代','男','09012904986','フリーター','2026-01-25','','','dan@icloud.com','2026/01/28','15:00','','fbryuji-lp4taisaku-078','','','ｷﾘｻﾒ🦈','','','ﾌﾛﾝﾄ','','','0','0','','','0','ﾌﾛﾝﾄ竹ﾀﾞｯｼｭ',700000,'ﾕﾆｳﾞｧ(服部)(ｸﾚｶ)','保留','','','0','0','','0','0','0','0','','','',0,700000,'','','','',1,'','','','','','','','','','','',2026,1,'0','','','0'],
+    [404,'山口年','山口年','','40代','男','09048209725','会社員','2026-01-28','','','tmc@gmail.com','2026/01/30','15:00','','fbryuji-lp4taisaku-072','','','阿部🍖','','','ﾌﾛﾝﾄ','','','0','0','','','0','ﾌﾛﾝﾄ梅',400000,'ﾕﾆｳﾞｧ(服部)(ｸﾚｶ)','成約','','','0','0','','0','0','0','0','','','',400000,0,'','','','',1,'','','','','','','5484998','','','','',2026,1,'0','','','0'],
+  ].forEach(a=>{
+    const cols=TABS.first.cols;const r={_id:uid()};
+    cols.forEach((c,i)=>{let v=a[i]!=null?a[i]:'';if(c.type==='n')v=Number(v)||0;if(c.type==='b')v=v==='1'||v===true||v==='TRUE';r[c.key]=v;});
+    hd.first.push(r);
+  });
+
+  // --- FIANA: 1回目 (5件) ---
+  const fd=DB.fiana;
+  [[1,'佐藤太郎','たろう','','40代','男','09011112222','会社員','2026-01-05','','','taro@ex.com','2026/01/08','15:00','','instagram-fiana-f4','','','ｷﾘｻﾒ🦈','','','ﾌﾛﾝﾄ','','','0','0','','','0','ﾌﾛﾝﾄ梅',400000,'ﾕﾆｳﾞｧ(服部)(ｸﾚｶ)','成約','','','0','0','','0','0','0','0','','','',400000,0,'','','','',1,'','','','','','','','','','','',2026,1,'0','','','0'],
+   [2,'鈴木花子','はなこ','','30代','女','08033334444','パート','2026-01-06','','','hanako@ex.com','2026/01/10','15:00','','fbaki-lp1-120','','','Nana🃏','','','ﾌﾛﾝﾄ','','','0','0','','','0','ﾌﾛﾝﾄ竹',600000,'ヒロミ(代行)','成約','','','0','0','','0','0','0','0','','','',600000,0,'','','','',1,'','','','','','','','','','','',2026,1,'0','','','0'],
+   [3,'田中一郎','いちろう','','50代','男','07055556666','自営業','2026-01-07','','','ichiro@ex.com','2026/01/12','15:00','','YouTube-000','','','大平🐘','','','ﾌﾛﾝﾄ','','','0','0','','','0','',0,'','不成約','','','0','0','','0','0','0','0','','','',0,0,'','','','',1,'','','','','','','','','','','',2026,1,'0','','','0'],
+   [4,'山田美咲','みさき','','40代','女','09077778888','主婦','2026-01-08','','','misaki@ex.com','2026/01/14','15:00','','fbnaka-LP3-8-91','','','阿部🍖','','','ﾌﾛﾝﾄ','','','0','0','','','0','ﾌﾛﾝﾄ梅ﾓﾆﾀｰ',200000,'ﾕﾆｳﾞｧ(服部)(ｸﾚｶ)','成約','','','0','0','','0','0','0','0','','','',200000,0,'','','','',1,'','','','','','','','','','','',2026,1,'0','','','0'],
+   [5,'伊藤健太','けんた','','20代','男','08099990000','フリーター','2026-01-10','','','kenta@ex.com','2026/01/15','15:00','','instagram2','','','ｹｲｼﾞ🔥','','','ﾌﾛﾝﾄ','','','0','0','','','0','ﾌﾛﾝﾄ梅',400000,'ﾕﾆｳﾞｧ(服部)(ｸﾚｶ)','保留','','','0','0','','0','0','0','0','','','',0,400000,'','','','',1,'','','','','','','','','','','',2026,1,'0','','','0'],
+  ].forEach(a=>{const cols=TABS.first.cols;const r={_id:uid()};cols.forEach((c,i)=>{let v=a[i]!=null?a[i]:'';if(c.type==='n')v=Number(v)||0;if(c.type==='b')v=v==='1'||v===true||v==='TRUE';r[c.key]=v;});fd.first.push(r);});
+
+  // --- 2回目以降 (10件) ---
+  const uCols=TABS.upsell.cols;
+  [
+    ['藤本圭祐','藤本圭祐','けいすけ','40代','男','東京','会社員','','k569663@gmail.com','YouTube-000','','','成約','2026/01/04','ｷﾘｻﾒ🦈',2,'1','','2026/01/05','','ﾏﾝﾂｰ','','','','0','ｴﾝｼﾞｪﾙ梅',400000,'ﾕﾆｳﾞｧ(服部)(ｸﾚｶ)','成約','','','','0',400000,0,'','','','','男','',2026,1,'0'],
+    ['杉山 恭子','すぎやま きょうこ','かおる','50代','女','京都','会社員','','kyorin.s55@gmail.com','YouTube-382','','','成約','2026/01/07','ｷﾘｻﾒ🦈',2,'1','','2026/01/06','','フロントアップ','','','','0','ｴﾝｼﾞｪﾙ梅',400000,'ﾕﾆｳﾞｧ(服部)(ｸﾚｶ)','成約','','','','0',400000,0,'','','','','女','',2026,1,'0'],
+    ['高橋 摩天男','まてお','まてお','30代','男','東京','会社員','','rm-1224@i.softbank.jp','fbaki-lp1-116','','','成約','2026/01/15','ｹｲｼﾞ🔥',2,'1','','2026/01/15','','ﾏﾝﾂｰ','','','','0','ｴﾝｼﾞｪﾙ梅',400000,'ヒロミ(代行)','成約','','','','0',300000,100000,'','','','','男','',2026,1,'0'],
+    ['吉村広美','yoshimuraひろみ','ひろみ','50代','女','大阪','パート','','kamachan@gmail.com','fbnaka-LP3-8-32','','','成約','2026/01/13','ｹｲｼﾞ🔥',2,'1','','2026/01/13','','フロントアップ','','','','0','ｴﾝｼﾞｪﾙ梅',500000,'ヒロミ(代行)','成約','','','','0',500000,0,'','','','','女','',2026,1,'0'],
+    ['飯田勝巳','飯田勝巳','','50代','男','','会社員','','weiss@gmail.com','None','','','成約','2026/01/15','ｱｯﾄ🐬',2,'1','','2026/01/15','','フロントアップ','','','','0','ｴﾝｼﾞｪﾙ梅',300000,'ﾕﾆｳﾞｧ(服部)(ｸﾚｶ)','成約','','','','0',300000,0,'','','','','男','',2026,1,'0'],
+    ['大島直子','Naoko🔮','Naoko','60代','女','','自営業','','rinbochan@gmail.com','fbnaka-LP3-8-101','','','成約','2026/01/05','ｷﾘｻﾒ🦈',2,'1','','2026/01/13','','ﾏﾝﾂｰ','','','','0','ﾈｸｽﾄ梅ｼｽﾃﾑ&ｻﾎﾟ',200000,'ﾕﾆｳﾞｧ(服部)(ｸﾚｶ)','成約','','','','0',200000,0,'','','','','女','',2026,1,'0'],
+    ['堀昌和','虎','まさ','50代','男','','製造業','','m50@docomo.ne.jp','S-fbrio-fh2-LP9v-007','','','成約','2026/01/07','ｹｲｼﾞ🔥',2,'1','','2026/01/07','','フロントアップ','','','','0','',0,'','不成約','','','','0',0,0,'','','','','男','',2026,1,'0'],
+    ['柏 裕美','hiromi_kashiwa','hiromi','40代','女','','主婦','','hirohiro@gmail.com','YouTube-276','','','成約','2026/01/05','ｷﾘｻﾒ🦈',2,'1','','2026/01/06','','ﾏﾝﾂｰ','','','','0','ﾈｸｽﾄ梅ｼｽﾃﾑ&ｻﾎﾟ',200000,'ヒロミ(代行)','成約','','','','0',200000,0,'','','','','女','',2026,1,'0'],
+    ['青木敢二','青木敢二','','50代','男','','自営業','','aoking@gmail.com','YouTube-367','','','成約','2026/01/13','ｷﾘｻﾒ🦈',2,'1','','2026/01/13','','ﾏﾝﾂｰ','','','','0','ﾈｸｽﾄ梅ｼｽﾃﾑ&ｻﾎﾟ',220000,'ヒロミ(代行)','成約','','','','0',220000,0,'','','','','男','',2026,1,'0'],
+    ['宮城 豊','宮城 豊','','40代','男','','会社員','','yutaka@yahoo.co.jp','fbaki-lp1-141','','','成約','2026/01/17','阿部🍖',2,'1','','2026/01/17','','フロントアップ','','','','0','ｴﾝｼﾞｪﾙ梅',400000,'ﾕﾆｳﾞｧ(服部)(ｸﾚｶ)','成約','','','','0',400000,0,'','','','','男','',2026,1,'0'],
+  ].forEach(a=>{const r={_id:uid()};uCols.forEach((c,i)=>{let v=a[i]!=null?a[i]:'';if(c.type==='n')v=Number(v)||0;if(c.type==='b')v=v==='1'||v===true||v==='TRUE';r[c.key]=v;});hd.upsell.push(r);});
+
+  // --- 入金管理 (15件, 未入金3件含む) ---
+  const pCols=TABS.payment.cols;
+  [
+    [13,'ｷﾘｻﾒ🦈','Naoko🔮','大島直子',1,'0','ヒロミ(代行)','1回目','2026/01/03',40000,'2026/01/03','','fbnaka-LP3-8-101','0','1','1','0','ﾌﾛﾝﾄ梅','ﾌﾛﾝﾄ','','','','','',1],
+    [7,'ｷﾘｻﾒ🦈','藤本圭祐','藤本圭祐',1,'0','ﾕﾆｳﾞｧ(服部)(ｸﾚｶ)','1回目','2026/01/04',700000,'2026/01/04','','YouTube-000','0','1','1','0','ﾌﾛﾝﾄ竹ﾀﾞｯｼｭ','ﾌﾛﾝﾄ','','','','','',1],
+    [15,'ｷﾘｻﾒ🦈','岩崎賢一','岩崎 賢一',1,'0','ヒロミ(代行)','1回目','2026/01/04',500000,'2026/01/04','','ytsa-lp7_cp27-2','0','1','1','0','ﾌﾛﾝﾄ梅','ﾌﾛﾝﾄ','','','','','',1],
+    [15,'ｷﾘｻﾒ🦈','岩崎賢一','岩崎 賢一',1,'0','ヒロミ(代行)','2回目','2026/01/05',50000,'2026/01/05','','ytsa-lp7_cp27-2','0','1','1','0','ﾌﾛﾝﾄ梅','ﾌﾛﾝﾄ','','','','','',2],
+    [64,'ｹｲｼﾞ🔥','虎','堀昌和',1,'0','ﾕﾆｳﾞｧ(服部)(ｸﾚｶ)','1回目','2026/01/07',600000,'2026/01/07','','S-fbrio-fh2-LP9v-007','0','1','1','0','ﾌﾛﾝﾄ竹','ﾌﾛﾝﾄ','','','','','',1],
+    [56,'阿部🍖','まさや','園田昌也',1,'0','ﾕﾆｳﾞｧ(服部)(ｸﾚｶ)','1回目','2026/01/08',400000,'2026/01/08','','fbaki-lp1-122','0','1','1','0','ﾌﾛﾝﾄ梅','ﾌﾛﾝﾄ','','','','','',1],
+    [56,'阿部🍖','まさや','園田昌也',1,'0','ヒロミ(代行)','2回目','2026/01/09',100000,'2026/01/08','PayPay銀行','fbaki-lp1-122','0','1','1','0','ﾌﾛﾝﾄ梅','ﾌﾛﾝﾄ','','','','','',2],
+    [97,'阿部🍖','豊田直也','豊田直也',1,'0','ﾕﾆｳﾞｧ(服部)(ｸﾚｶ)','1回目','2026/01/12',400000,'2026/01/12','','fbnaka-LP3-8-151','0','1','1','0','ﾌﾛﾝﾄ竹ﾀﾞｯｼｭ','ﾌﾛﾝﾄ','','','','','',1],
+    [97,'阿部🍖','豊田直也','豊田直也',1,'0','ﾕﾆｳﾞｧ(服部)(ｸﾚｶ)','2回目','2026/01/12',500000,'2026/01/12','','fbnaka-LP3-8-151','0','1','1','0','ﾌﾛﾝﾄ竹ﾀﾞｯｼｭ','ﾌﾛﾝﾄ','','','','','',2],
+    [138,'ｹｲｼﾞ🔥','yoshimuraひろみ','吉村広美',1,'0','ヒロミ(代行)','1回目','2026/01/13',600000,'2026/01/13','PayPay銀行(FE分)','fbnaka-LP3-8-32','0','1','1','0','ﾌﾛﾝﾄ竹','ﾌﾛﾝﾄ','','','','','',1],
+    [138,'ｹｲｼﾞ🔥','yoshimuraひろみ','吉村広美',2,'0','ヒロミ(代行)','1回目','2026/01/13',400000,'2026/01/13','PayPay銀行(UP分)','fbnaka-LP3-8-32','0','1','1','0','ｴﾝｼﾞｪﾙ梅','フロントアップ','','','','','',1],
+    [163,'大平🐘','kchan','村上 慶',1,'0','ヒロミ(代行)','1回目','2026/01/15',30000,'2026/01/15','PayPay銀行','fbaki-lp1-142','0','1','1','0','ﾌﾛﾝﾄ梅','ﾌﾛﾝﾄ','','','','','',1],
+    // 未入金3件
+    [70,'ｹｲｼﾞ🔥','まてお','高橋 摩天男',1,'0','ヒロミ(代行)','2回目','2026/01/20',100000,'','残金未入金','fbaki-lp1-116','0','0','0','0','ﾌﾛﾝﾄ竹','ﾌﾛﾝﾄ','','','','','',2],
+    [393,'ｷﾘｻﾒ🦈','だん','河合 弾',1,'0','ﾕﾆｳﾞｧ(服部)(ｸﾚｶ)','1回目','2026/01/30',700000,'','保留中','fbryuji-lp4taisaku-078','0','0','0','0','ﾌﾛﾝﾄ竹ﾀﾞｯｼｭ','ﾌﾛﾝﾄ','','','','','',0],
+    [120,'ｱｯﾄ🐬','飯田勝巳','飯田勝巳',1,'0','ﾕﾆｳﾞｧ(服部)(ｸﾚｶ)','3回目','2026/02/15',100000,'','分割残金','None','0','0','0','0','ﾌﾛﾝﾄ梅ﾓﾆﾀｰ','ﾌﾛﾝﾄ','','','','','',3],
+  ].forEach(a=>{const r={_id:uid()};pCols.forEach((c,i)=>{let v=a[i]!=null?a[i]:'';if(c.type==='n')v=Number(v)||0;if(c.type==='b')v=v==='1'||v===true||v==='TRUE';r[c.key]=v;});hd.payment.push(r);});
+
+  // --- 外注費 (10件) ---
+  [[1,'上杉 愛花','CS','1月',40000,'【CS】'],[2,'真吉 斉子','CS','1月',81000,'【CS】'],
+   [3,'合同会社KEEP INTENTION','SNS集計表制作費','1月',3300,'【SNS】'],[4,'江頭 愛美','インスタ','1月',189634,'【SNS】インスタ運用代行費'],
+   [5,'株式会社グランドル','マーケ','1月',313500,'【マーケ】LPRO'],[6,'ツツミナオヨシ','動画編集','1月',28398,'【動画】'],
+   [7,'株式会社エニー','広告FB運用代行手数料','1月',379201,'【広告】FB運用代行手数料'],
+   [8,'本橋 裕弥','CS','2月',169858,'【CS】'],[9,'町田 澪','インスタ','2月',545980,'【SNS】インスタ運用代行費'],
+   [10,'TogetherAhead合同会社','動画','1月',100000,'【動画】'],
+  ].forEach(a=>{hd.outsource.push({_id:uid(),連番:a[0],外注先:a[1],内容:a[2],対象月:a[3],金額:a[4],備考:a[5]});});
+
+  // --- 広告費 (10件) ---
+  [['1月','FB広告','リオン',1611386,''],['1月','FB広告','中嶋',5363933,''],['1月','FB広告','秋吉',3132301,''],
+   ['1月','YT広告','真田',1976364,''],['1月','YT広告','泉',148641,''],['1月','その他','利権(BIGO)',4723,''],
+   ['2月','FB広告','リオン',1600594,''],['2月','FB広告','中嶋',5834857,''],['2月','FB広告','秋吉',3227919,''],
+   ['2月','YT広告','真田',1625070,''],
+  ].forEach(a=>{hd.adcost.push({_id:uid(),対象月:a[0],広告種別:a[1],運用者:a[2],金額:a[3],備考:a[4]});});
+
+  // --- 合算_結果用 (5クローザー×3ヶ月=15件) ---
+  [['ｷﾘｻﾒ🦈','1月',37,17,6650000,7540000,21,10,4937000,20,12,5810000,'5.9%','64.7%'],
+   ['ｹｲｼﾞ🔥','1月',17,5,4600000,2810000,9,3,1600000,13,4,1850000,'100%','100%'],
+   ['阿部🍖','1月',14,7,3500000,3800000,8,1,400000,12,7,2300000,'28.6%','71.4%'],
+   ['大平🐘','1月',31,10,4220000,4730000,12,0,700000,0,0,0,'20%','30%'],
+   ['Nana🃏','1月',16,5,2713000,2410000,15,5,2650000,2,0,0,'100%','100%'],
+   ['ｷﾘｻﾒ🦈','2月',36,17,8373000,8073000,21,11,13890000,2,2,1500000,'55.6%','66.7%'],
+   ['ｹｲｼﾞ🔥','2月',30,9,4470000,4560000,7,1,2550000,1,1,300000,'55.6%','77.8%'],
+   ['阿部🍖','2月',19,11,4960000,5260000,14,5,1500000,2,1,600000,'9.1%','54.5%'],
+   ['大平🐘','2月',25,10,6230000,5550000,8,3,1680000,0,0,0,'10%','40%'],
+   ['Nana🃏','2月',30,11,4804000,5599500,22,4,8100000,0,0,0,'54.5%','72.7%'],
+   ['ｷﾘｻﾒ🦈','3月',33,19,9780000,10610000,19,6,3000000,0,0,0,'55.6%','88.9%'],
+   ['ｹｲｼﾞ🔥','3月',25,8,4540000,4650000,13,5,3389780,0,0,0,'100%','100%'],
+   ['阿部🍖','3月',20,10,5200000,5500000,10,4,2100000,1,1,500000,'30%','60%'],
+   ['大平🐘','3月',28,12,7100000,6800000,9,4,2200000,0,0,0,'15%','45%'],
+   ['Nana🃏','3月',22,9,4200000,4500000,16,6,5500000,0,0,0,'60%','80%'],
+  ].forEach(a=>{hd.result.push({_id:uid(),検索用:a[1]+a[0],月:a[1],クローザー名:a[0],フロント相談件数:a[2],フロント成約件数:a[3],フロント成約金額:a[4],フロント面談ベース金額:a[5],アップ相談件数:a[6],アップ成約件数:a[7],アップ成約金額:a[8],ローンチ相談件数:a[9],ローンチ成約件数:a[10],ローンチ成約金額:a[11],当日アップ面談率:a[12],当月アップ面談率:a[13]});});
+
+  // --- 月報_週報 (7件) ---
+  [['月報',2026,'1月','',42232535,96395,18793116,61122046,74,621892,8,''],
+   ['月報',2026,'2月','',48000000,120000,22000000,70120000,85,650000,10,''],
+   ['月報',2026,'3月','',58550931,0,18339780,76890711,102,670000,13,''],
+   ['週報',2026,'3月','03/02〜03/08',12500000,0,4200000,16700000,22,590000,2,''],
+   ['週報',2026,'3月','03/09〜03/15',15200000,0,5100000,20300000,28,620000,3,''],
+   ['週報',2026,'3月','03/16〜03/22',13800000,0,4800000,18600000,24,650000,4,''],
+   ['週報',2026,'3月','03/23〜03/29',17984486,0,10959780,28944266,28,680000,4,''],
+  ].forEach(a=>{hd.report.push({_id:uid(),種別:a[0],対象年:a[1],対象月:a[2],対象週:a[3],フロント着金額:a[4],ダウンセル着金額:a[5],アップ着金額:a[6],合計着金額:a[7],成約件数:a[8],平均成約単価:a[9],デポジット件数:a[10],備考:a[11]});});
+
+  // --- 卒業者リスト (10件) ---
+  const gCols=TABS.graduate.cols;
+  [[5,'フロント','杉山 恭子','すぎやま きょうこ','50代','08014403416','kyorin.s55@gmail.com','kyorin.s55@gmail.com','YouTube-382','ｷﾘｻﾒ🦈','ﾌﾛﾝﾄ竹ﾀﾞｯｼｭ','ｴﾝｼﾞｪﾙ梅','','','2026/04/07','5484362','','','','0','0','','','','','',0,'','',''],
+   [6,'フロント','小林村美','小林村美(つえみ)','50代','08017111077','t.214214@icloud.com','t.214214@icloud.com','fbnaka-LP3-8-109','ｹｲｼﾞ🔥','ﾌﾛﾝﾄ竹','','','','2026/04/09','5484436','','','','0','0','','','','','',0,'','',''],
+   [7,'フロント','藤本圭祐','藤本圭祐','40代','08030688821','k569663@gmail.com','k569663@gmail.com','YouTube-000','ｷﾘｻﾒ🦈','ﾌﾛﾝﾄ竹ﾀﾞｯｼｭ','ｴﾝｼﾞｪﾙ梅','','','2026/04/12','5484289','','','','0','0','1','','','','',0,'','',''],
+   [13,'フロント','大島直子','Naoko🔮','60代','09047206506','rinbochan.mail@gmail.com','rinbochan.mail@gmail.com','fbnaka-LP3-8-101','ｷﾘｻﾒ🦈','ﾌﾛﾝﾄ梅','ﾈｸｽﾄ梅ｼｽﾃﾑ&ｻﾎﾟ','','','2026/04/21','5484307','','','','0','0','1','','','','',0,'','',''],
+   [15,'フロント','岩崎 賢一','岩崎賢一','60代','09055099739','ngbqs851@gmail.com','ngbqs851@gmail.com','ytsa-lp7_cp27-2','ｷﾘｻﾒ🦈','ﾌﾛﾝﾄ梅','','','','2026/04/05','5484327','','','','0','0','','','','','',0,'','',''],
+   [56,'フロント','園田昌也','まさや','30代','08098763900','msyaaa20@icloud.com','msyaaa20@icloud.com','fbaki-lp1-122','阿部🍖','ﾌﾛﾝﾄ梅','','','','2026/04/08','5484373','','','','0','0','','','','','',0,'','',''],
+   [7,'アップ','藤本圭祐','藤本圭祐','40代','08030688821','k569663@gmail.com','k569663@gmail.com','YouTube-000','ｷﾘｻﾒ🦈','ﾌﾛﾝﾄ竹ﾀﾞｯｼｭ','ｴﾝｼﾞｪﾙ梅','','','2026/04/12','5484289','','','','0','0','1','','','','',0,'','',''],
+   [120,'フロント','飯田勝巳','飯田勝巳','50代','09067970806','weiss@gmail.com','weiss@gmail.com','None','ｱｯﾄ🐬','ﾌﾛﾝﾄ梅ﾓﾆﾀｰ','ｴﾝｼﾞｪﾙ梅','','','2026/04/15','5485213','','','','0','0','1','','','','',0,'','',''],
+   [97,'フロント','豊田直也','豊田直也','40代','09022610913','naoya@icloud.com','naoya@icloud.com','fbnaka-LP3-8-151','阿部🍖','ﾌﾛﾝﾄ竹ﾀﾞｯｼｭ','','','','2026/04/12','5484422','','','','0','0','1','','','','',0,'','',''],
+   [78,'フロント','松本美保','まつもとみほ','60代','09084882421','m1105cnn@ybb.ne.jp','m1105cnn@ybb.ne.jp','None','ｵｵｸﾗ🐍','ﾌﾛﾝﾄ梅ﾓﾆﾀｰ','','','','2026/04/17','5484552','','','','0','0','1','','','','',0,'','',''],
+  ].forEach(a=>{const r={_id:uid()};gCols.forEach((c,i)=>{let v=a[i]!=null?a[i]:'';if(c.type==='n')v=Number(v)||0;if(c.type==='b')v=v==='1'||v===true||v==='TRUE';r[c.key]=v;});hd.graduate.push(r);});
+
+  return DB;
+}
+
+// ================================================================
+// STATE
+// ================================================================
+let DB,curProj=null,curTab='first',curPage=1,editId=null,chLog=[];
+const PS=30;
+
+// ================================================================
+// INIT
+// ================================================================
+function init(){
+  const s=localStorage.getItem('mk_db');
+  if(s){try{DB=JSON.parse(s);_uid=parseInt(localStorage.getItem('mk_uid')||'500');}catch(e){DB=genDB();}}
+  else DB=genDB();
+  const cl=localStorage.getItem('mk_cl');if(cl)try{chLog=JSON.parse(cl);}catch(e){}
+  renderProjects();
+}
+function sDB(){localStorage.setItem('mk_db',JSON.stringify(DB));localStorage.setItem('mk_uid',String(_uid));localStorage.setItem('mk_cl',JSON.stringify(chLog.slice(-500)));}
+
+// ================================================================
+// PROJECT SELECT
+// ================================================================
+function renderProjects(){
+  document.getElementById('projectGrid').innerHTML=PROJECTS.map(p=>{
+    const d=DB[p.id];const cnt=d?Object.values(d).reduce((s,a)=>s+a.length,0):0;
+    return `<div class="project-card" onclick="openProj('${p.id}')" style="border-color:${p.color}33"><div class="p-icon">${p.icon}</div><div class="p-name" style="color:${p.color}">${p.name}</div><div class="p-count">${cnt>0?cnt+'件':'データなし'}</div></div>`;
+  }).join('');
+}
+function openProj(id){
+  curProj=id;const p=PROJECTS.find(pp=>pp.id===id);
+  document.getElementById('appTitle').innerHTML=`${p.icon} ${p.name}<span>成約管理</span>`;
+  document.getElementById('projectSelect').classList.remove('active');
+  document.getElementById('app').classList.add('active');
+  // Build tab bar
+  document.getElementById('tabBar').innerHTML=TAB_KEYS.map(k=>`<button class="tab-btn${k==='first'?' active':''}" data-tab="${k}" onclick="swTab('${k}')">${TABS[k].label}</button>`).join('');
+  swTab('first');
+}
+function goHome(){document.getElementById('app').classList.remove('active');document.getElementById('projectSelect').classList.add('active');renderProjects();}
+
+// ================================================================
+// TAB SWITCH
+// ================================================================
+function swTab(t){
+  curTab=t;curPage=1;
+  document.querySelectorAll('.tab-btn').forEach(b=>b.classList.toggle('active',b.dataset.tab===t));
+  buildFilters();render();
+}
+function gD(){return curProj&&DB[curProj]?DB[curProj][curTab]||[]:[]}
+function gC(){return TABS[curTab].cols}
+function gF(){return TABS[curTab].filters||[]}
+
+// ================================================================
+// FILTERS
+// ================================================================
+function buildFilters(){
+  const data=gD(),filters=gF(),box=document.getElementById('dynFilters');
+  box.innerHTML='';
+  filters.forEach(f=>{
+    const sel=document.createElement('select');sel.id=f.id;sel.onchange=()=>render();
+    sel.innerHTML=`<option value="">${f.label}</option>`;
+    let vals;
+    if(f.opts){vals=f.opts;}
+    else if(f.isMonth&&f.derived){
+      vals=[...new Set(data.map(r=>{const d=r['入金期日'];if(!d)return null;const m=d.split('/');return m.length>=2?m[1]+'月':null}).filter(Boolean))].sort();
+    }else if(f.derived&&f.id==='fCat'){
+      vals=[...new Set(data.map(r=>{const b=r['備考']||'';const m=b.match(/【(.+?)】/);return m?m[1]:null}).filter(Boolean))].sort();
+    }else{
+      vals=[...new Set(data.map(r=>String(r[f.key]||'')).filter(Boolean))].sort();
+    }
+    if(f.isMonth&&!f.derived){vals=vals.map(v=>String(v)).sort((a,b)=>parseInt(a)-parseInt(b));}
+    vals.forEach(v=>{const o=document.createElement('option');o.value=v;o.textContent=f.isMonth&&!isNaN(parseInt(v))?v+'月':v;sel.appendChild(o);});
+    box.appendChild(sel);
+  });
+  document.getElementById('sBox').value='';
+}
+
+// ================================================================
+// RENDER
+// ================================================================
+function render(){
+  const cols=gC();let data=[...gD()];const filters=gF();
+  // search
+  const q=document.getElementById('sBox').value.toLowerCase();
+  if(q){data=data.filter(r=>{const n=(r['名前']||r['氏名']||r['クローザー名']||r['外注先']||r['運用者']||'').toLowerCase();const l=(r['LINE名']||'').toLowerCase();return n.includes(q)||l.includes(q);});}
+  // dynamic filters
+  filters.forEach(f=>{
+    const sel=document.getElementById(f.id);if(!sel)return;const v=sel.value;if(!v)return;
+    if(f.derived&&f.isMonth){
+      data=data.filter(r=>{const d=r['入金期日'];if(!d)return false;return d.includes('/'+v.replace('月','').padStart(2,'0')+'/') || d.split('/')[1]+'月'===v;});
+    }else if(f.key==='ローンチ'||f.key==='寝た子オコサズ'){
+      data=data.filter(r=>String(!!r[f.key])===v.toLowerCase());
+    }else if(f.derived&&f.id==='fCat'){
+      data=data.filter(r=>(r['備考']||'').includes(v)||(r['内容']||'').toLowerCase().includes(v.toLowerCase()));
+    }else{
+      data=data.filter(r=>String(r[f.key])===v);
+    }
+  });
+
+  const tot=data.length,pgs=Math.ceil(tot/PS)||1;
+  if(curPage>pgs)curPage=pgs;
+  const st=(curPage-1)*PS,pd=data.slice(st,st+PS);
+  document.getElementById('rc').textContent=`${tot}件中 ${tot?st+1:0}〜${Math.min(st+PS,tot)}件`;
+
+  // header
+  document.getElementById('tHead').innerHTML='<tr>'+cols.map(c=>`<th class="${c.w||''} ${c.pin?'pin':''}">${c.label}</th>`).join('')+'</tr>';
+
+  // body
+  const isPayment=curTab==='payment';
+  const today=new Date().toISOString().slice(0,10);
+  document.getElementById('tBody').innerHTML=pd.map(row=>{
+    let warn='';
+    if(isPayment){const due=String(row['入金期日']||'').replace(/\//g,'-');const pd2=row['入金日'];if(due&&!pd2&&due<today)warn=' row-warn';}
+    return `<tr class="${warn}" onclick="openEdit(${row._id})">`+
+      cols.map(c=>{
+        const v=row[c.key];let d='';
+        if(c.type==='b'){d=v?'<span class="bool-t">✓</span>':'<span class="bool-f">-</span>';}
+        else if(c.type==='n'&&typeof v==='number'&&v!==0){d=(c.key.includes('額')||c.key.includes('金')||c.key==='金額')?'¥'+v.toLocaleString():String(v);}
+        else if(c.key.includes('成約状況')||c.key==='結果'){d=v?stH(v):'';}
+        else{d=v!=null&&v!==''?esc(String(v)):'';}
+        // highlight overdue payment
+        if(isPayment&&c.key==='入金日'&&!v&&row['入金期日']){const du=String(row['入金期日']).replace(/\//g,'-');if(du<today)d='<span style="color:var(--red);font-weight:700">未入金</span>';}
+        return `<td class="${c.pin?'pin':''} ${c.type==='n'?'num':''}">${d}</td>`;
+      }).join('')+'</tr>';
+  }).join('');
+
+  // pager
+  let ph='';
+  if(curPage>1)ph+=`<button onclick="gP(${curPage-1})">←</button>`;
+  for(let i=1;i<=pgs;i++){if(pgs>7&&i>3&&i<pgs-2&&Math.abs(i-curPage)>1){if(i===4||i===pgs-3)ph+='<span class="inf">…</span>';continue;}ph+=`<button class="${i===curPage?'active':''}" onclick="gP(${i})">${i}</button>`;}
+  if(curPage<pgs)ph+=`<button onclick="gP(${curPage+1})">→</button>`;
+  document.getElementById('pgr').innerHTML=ph;
+}
+function gP(p){curPage=p;render();}
+
+// ================================================================
+// MODAL
+// ================================================================
+function openEdit(id){
+  const data=gD(),row=data.find(r=>r._id===id);if(!row)return;
+  editId=id;document.getElementById('mTi').textContent=(row['名前']||row['氏名']||row['外注先']||row['クローザー名']||row['運用者']||'')+' ― 編集';
+  document.getElementById('bDl').style.display='';
+  bForm(row);document.getElementById('eMo').classList.add('active');
+}
+function openAdd(){
+  editId=null;document.getElementById('mTi').textContent='新規追加';document.getElementById('bDl').style.display='none';
+  const cols=gC(),row={_id:0};cols.forEach(c=>{row[c.key]=c.type==='b'?false:c.type==='n'?0:'';});
+  bForm(row);document.getElementById('eMo').classList.add('active');
+}
+function bForm(row){
+  const cols=gC(),fg=document.getElementById('mFo');let h='';
+  cols.forEach(c=>{
+    if(c.sec)h+=`<div class="fs">${c.sec}</div>`;
+    const v=row[c.key]!=null?row[c.key]:'';
+    const wide=c.type==='ta'||c.w==='xw';
+    h+=`<div class="fi${wide?' full':''}"><label>${c.label}</label>`;
+    if(c.type==='s'){h+=`<select data-key="${c.key}"><option value="">---</option>${(c.opts||[]).map(o=>`<option value="${esc(o)}"${v===o?' selected':''}>${esc(o)}</option>`).join('')}</select>`;}
+    else if(c.type==='b'){h+=`<select data-key="${c.key}"><option value="false"${!v?' selected':''}>いいえ</option><option value="true"${v?' selected':''}>はい</option></select>`;}
+    else if(c.type==='ta'){h+=`<textarea data-key="${c.key}" rows="2">${esc(String(v))}</textarea>`;}
+    else if(c.type==='n'){h+=`<input type="number" data-key="${c.key}" value="${v||0}">`;}
+    else if(c.type==='d'){h+=`<input type="date" data-key="${c.key}" value="${dI(v)}">`;}
+    else{h+=`<input type="text" data-key="${c.key}" value="${esc(String(v))}">`;}
+    h+=`</div>`;
+  });
+  fg.innerHTML=h;
+}
+function saveRow(){
+  const cols=gC(),data=gD(),fields=document.querySelectorAll('#mFo [data-key]'),vals={};
+  fields.forEach(el=>{const k=el.dataset.key,col=cols.find(c=>c.key===k);if(!col)return;let v=el.value;if(col.type==='b')v=(v==='true');else if(col.type==='n')v=parseFloat(v)||0;vals[k]=v;});
+  if(editId){const row=data.find(r=>r._id===editId);if(row){Object.keys(vals).forEach(k=>{if(row[k]!==vals[k]){chLog.push({ts:new Date().toISOString(),p:curProj,t:curTab,id:editId,f:k,o:row[k],n:vals[k]});}row[k]=vals[k];});}toast('保存しました');}
+  else{const nr={_id:uid()};Object.assign(nr,vals);data.push(nr);chLog.push({ts:new Date().toISOString(),p:curProj,t:curTab,id:nr._id,f:'_new',o:null,n:'created'});toast('追加しました');}
+  sDB();cMo();render();
+}
+function delRow(){if(!editId||!confirm('この行を削除しますか？'))return;const data=gD(),i=data.findIndex(r=>r._id===editId);if(i>=0){chLog.push({ts:new Date().toISOString(),p:curProj,t:curTab,id:editId,f:'_del',o:'existed',n:'deleted'});data.splice(i,1);sDB();toast('削除しました');cMo();render();}}
+function cMo(){document.getElementById('eMo').classList.remove('active');editId=null;}
+
+// ================================================================
+// HELPERS
+// ================================================================
+function stH(s){let c='st-x';if(s==='成約')c='st-g';else if(s==='成約（デポ）')c='st-g';else if(s==='不成約')c='st-r';else if(s==='保留')c='st-y';else if(s.includes('返金'))c='st-r';else if(s==='リスケ')c='st-p';else if(s.includes('バックレ'))c='st-r';else if(s.includes('キャンセル'))c='st-o';else if(s.includes('ブロック'))c='st-x';return `<span class="st ${c}">${esc(s)}</span>`;}
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+function dI(d){if(!d)return '';return String(d).replace(/\//g,'-').substring(0,10);}
+function toast(m){const t=document.getElementById('toast');t.textContent=m;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2000);}
+document.addEventListener('keydown',e=>{if(e.key==='Escape')cMo();});
+document.addEventListener('DOMContentLoaded',init);
+</script>
+</body>
+</html>
