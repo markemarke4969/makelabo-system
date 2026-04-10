@@ -661,115 +661,21 @@ export default function FianaDashboard() {
         </div>
       </div>
 
-      <div className="max-w-lg mx-auto px-4 py-4">
-        {/* システム切り替え */}
-        <div className="flex gap-2 mb-4 overflow-x-auto pb-1">
-          {EA_SYSTEMS.filter((s) => s.fullAccess).map((sys) => (
-            <button
-              key={sys.id}
-              onClick={() => setActiveSystem(sys.id)}
-              className={`flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap transition-all ${
-                activeSystem === sys.id
-                  ? "bg-indigo-500 text-white shadow-lg shadow-indigo-500/30"
-                  : "bg-white/5 text-gray-400 border border-white/10 hover:border-white/20"
-              }`}
-            >
-              <span>{sys.icon}</span>
-              <span>{sys.name}</span>
-            </button>
-          ))}
-          {EA_SYSTEMS.filter((s) => !s.fullAccess).map((sys) => {
-            const unlocked = isSystemUnlocked(sys.id);
-            const cost = SYSTEM_UNLOCK_COSTS.find((c) => c.systemId === sys.id);
-            if (unlocked) {
-              return (
-                <button
-                  key={sys.id}
-                  onClick={() => setActiveSystem(sys.id)}
-                  className={`flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap transition-all ${
-                    activeSystem === sys.id
-                      ? "bg-amber-500 text-black shadow-lg shadow-amber-500/30"
-                      : "bg-amber-500/10 text-amber-300 border border-amber-500/30 hover:border-amber-500/50"
-                  }`}
-                >
-                  <span>{sys.icon}</span>
-                  <span>{sys.name}</span>
-                  <span className="text-[10px]">体験中</span>
-                </button>
-              );
-            }
-            return (
-              <button
-                key={sys.id}
-                onClick={() => setUnlockConfirm(sys.id)}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap bg-white/5 text-gray-500 border border-white/10 hover:border-amber-500/30 hover:text-amber-400 transition-all cursor-pointer"
-              >
-                <span>{sys.icon}</span>
-                <span>{sys.name}</span>
-                <span className="text-[10px] text-amber-500/60">{cost?.fiaCost}fia</span>
-              </button>
-            );
-          })}
-        </div>
-
-        {/* ポートフォリオサマリー */}
-        <div
-          className="rounded-2xl p-5 mb-4 text-white"
-          style={{ background: "linear-gradient(135deg, #0f0c29, #302b63, #24243e)" }}
-        >
-          <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-2">
-              <span className="text-xl">
-                {EA_SYSTEMS.find((s) => s.id === activeSystem)?.icon}
-              </span>
-              <span className="text-sm opacity-80">
-                {EA_SYSTEMS.find((s) => s.id === activeSystem)?.name}
-              </span>
-            </div>
-            <span className="text-xs opacity-60">
-              最終更新: {now.getHours()}:{now.getMinutes().toString().padStart(2, "0")}
-            </span>
-          </div>
-
-          <p className="text-xs opacity-60 mb-1">仮想資産総額</p>
-          <p className="text-3xl font-bold mb-3 fiana-text-glow">
-            {formatJPYPlain(totalAsset)}
-          </p>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div className="bg-white/10 rounded-xl p-3">
-              <p className="text-xs opacity-60">本日の損益</p>
-              <p className={`text-lg font-bold ${todayPnl >= 0 ? "text-green-300" : "text-red-300"}`}>
-                {formatJPY(todayPnl)}
-              </p>
-              <p className="text-xs opacity-50">
-                {todayPnl >= 0 ? "+" : ""}{todayPnlPercent}%
-              </p>
-            </div>
-            <div className="bg-white/10 rounded-xl p-3">
-              <p className="text-xs opacity-60">累計損益</p>
-              <p className={`text-lg font-bold ${cumulativePnl >= 0 ? "text-green-300" : "text-red-300"}`}>
-                {formatJPY(cumulativePnl)}
-              </p>
-              <p className="text-xs opacity-50">
-                {cumulativePnl >= 0 ? "+" : ""}{pnlPercent}%
-              </p>
-            </div>
-          </div>
-
-          <div className="flex items-center justify-between mt-3 text-xs opacity-50">
-            <span>元本: {formatJPYPlain(profile.virtual_deposit)}</span>
-            <span>運用開始: {trialInfo.elapsed}日目</span>
-          </div>
-        </div>
-
-        {/* タブ切り替え */}
-        <div className="flex rounded-xl border border-white/10 mb-4 p-1 bg-white/5">
+      {/* タブ切り替え（ヘッダー直下に固定） */}
+      <div
+        className="sticky top-[53px] z-10 px-4 py-2 border-b"
+        style={{
+          background: "rgba(10, 10, 15, 0.95)",
+          backdropFilter: "blur(8px)",
+          borderColor: "var(--fiana-border)",
+        }}
+      >
+        <div className="max-w-lg mx-auto flex rounded-xl border border-white/10 p-1 bg-white/5">
           {[
-            { key: "portfolio" as const, label: "📈 チャート" },
-            { key: "trades" as const, label: "📋 取引ログ" },
+            { key: "portfolio" as const, label: "📈 運用" },
+            { key: "trades" as const, label: "📋 履歴" },
             { key: "fia" as const, label: "🔥 fia" },
-            { key: "inflation" as const, label: "💡 インフレ" },
+            { key: "inflation" as const, label: "💡 家計" },
           ].map((tab) => (
             <button
               key={tab.key}
@@ -784,10 +690,114 @@ export default function FianaDashboard() {
             </button>
           ))}
         </div>
+      </div>
+
+      <div className="max-w-lg mx-auto px-4 py-4">
 
         {/* チャートタブ */}
         {activeTab === "portfolio" && (
           <div className="space-y-4">
+            {/* システム切り替え */}
+            <div className="flex gap-2 overflow-x-auto pb-1">
+              {EA_SYSTEMS.filter((s) => s.fullAccess).map((sys) => (
+                <button
+                  key={sys.id}
+                  onClick={() => setActiveSystem(sys.id)}
+                  className={`flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap transition-all ${
+                    activeSystem === sys.id
+                      ? "bg-indigo-500 text-white shadow-lg shadow-indigo-500/30"
+                      : "bg-white/5 text-gray-400 border border-white/10 hover:border-white/20"
+                  }`}
+                >
+                  <span>{sys.icon}</span>
+                  <span>{sys.name}</span>
+                </button>
+              ))}
+              {EA_SYSTEMS.filter((s) => !s.fullAccess).map((sys) => {
+                const unlocked = isSystemUnlocked(sys.id);
+                const cost = SYSTEM_UNLOCK_COSTS.find((c) => c.systemId === sys.id);
+                if (unlocked) {
+                  return (
+                    <button
+                      key={sys.id}
+                      onClick={() => setActiveSystem(sys.id)}
+                      className={`flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap transition-all ${
+                        activeSystem === sys.id
+                          ? "bg-amber-500 text-black shadow-lg shadow-amber-500/30"
+                          : "bg-amber-500/10 text-amber-300 border border-amber-500/30 hover:border-amber-500/50"
+                      }`}
+                    >
+                      <span>{sys.icon}</span>
+                      <span>{sys.name}</span>
+                      <span className="text-[10px]">体験中</span>
+                    </button>
+                  );
+                }
+                return (
+                  <button
+                    key={sys.id}
+                    onClick={() => setUnlockConfirm(sys.id)}
+                    className="flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap bg-white/5 text-gray-500 border border-white/10 hover:border-amber-500/30 hover:text-amber-400 transition-all cursor-pointer"
+                  >
+                    <span>{sys.icon}</span>
+                    <span>{sys.name}</span>
+                    <span className="text-[10px] text-amber-500/60">{cost?.fiaCost}fia</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* ポートフォリオサマリー */}
+            <div
+              className="rounded-2xl p-5 text-white"
+              style={{ background: "linear-gradient(135deg, #0f0c29, #302b63, #24243e)" }}
+            >
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-xl">
+                    {EA_SYSTEMS.find((s) => s.id === activeSystem)?.icon}
+                  </span>
+                  <span className="text-sm opacity-80">
+                    {EA_SYSTEMS.find((s) => s.id === activeSystem)?.name}
+                  </span>
+                </div>
+                <span className="text-xs opacity-60">
+                  最終更新: {now.getHours()}:{now.getMinutes().toString().padStart(2, "0")}
+                </span>
+              </div>
+
+              <p className="text-xs opacity-60 mb-1">仮想資産総額</p>
+              <p className="text-3xl font-bold mb-3 fiana-text-glow">
+                {formatJPYPlain(totalAsset)}
+              </p>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="bg-white/10 rounded-xl p-3">
+                  <p className="text-xs opacity-60">本日の損益</p>
+                  <p className={`text-lg font-bold ${todayPnl >= 0 ? "text-green-300" : "text-red-300"}`}>
+                    {formatJPY(todayPnl)}
+                  </p>
+                  <p className="text-xs opacity-50">
+                    {todayPnl >= 0 ? "+" : ""}{todayPnlPercent}%
+                  </p>
+                </div>
+                <div className="bg-white/10 rounded-xl p-3">
+                  <p className="text-xs opacity-60">累計損益</p>
+                  <p className={`text-lg font-bold ${cumulativePnl >= 0 ? "text-green-300" : "text-red-300"}`}>
+                    {formatJPY(cumulativePnl)}
+                  </p>
+                  <p className="text-xs opacity-50">
+                    {cumulativePnl >= 0 ? "+" : ""}{pnlPercent}%
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between mt-3 text-xs opacity-50">
+                <span>元本: {formatJPYPlain(profile.virtual_deposit)}</span>
+                <span>運用開始: {trialInfo.elapsed}日目</span>
+              </div>
+            </div>
+
             <div className="fiana-card p-4">
               <h3 className="text-sm font-bold text-gray-300 mb-3">資産推移</h3>
               <div className="h-52">
