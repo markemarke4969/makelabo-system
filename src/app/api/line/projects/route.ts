@@ -13,20 +13,25 @@ export async function GET() {
 
 export async function POST(request: NextRequest) {
   const body = await request.json();
-  const { name, description, color, sort_order } = body;
+  const { name, description, color, sort_order, code } = body;
 
   if (!name || !String(name).trim()) {
     return Response.json({ error: "name is required" }, { status: 400 });
   }
 
+  const insertBody: Record<string, unknown> = {
+    name: String(name).trim(),
+    description: description?.trim() || null,
+    color: color || "#06C755",
+    sort_order: Number.isFinite(Number(sort_order)) ? Number(sort_order) : 0,
+  };
+  if (typeof code === "string" && code.trim()) {
+    insertBody.code = code.trim();
+  }
+
   const { data, error } = await supabase
     .from("line_projects")
-    .insert({
-      name: String(name).trim(),
-      description: description?.trim() || null,
-      color: color || "#06C755",
-      sort_order: Number.isFinite(Number(sort_order)) ? Number(sort_order) : 0,
-    })
+    .insert(insertBody)
     .select("*")
     .single();
 
@@ -47,7 +52,7 @@ export async function POST(request: NextRequest) {
 
 export async function PUT(request: NextRequest) {
   const body = await request.json();
-  const { id, name, description, color, sort_order } = body;
+  const { id, name, description, color, sort_order, code } = body;
 
   if (!id) {
     return Response.json({ error: "id is required" }, { status: 400 });
@@ -58,6 +63,10 @@ export async function PUT(request: NextRequest) {
   if (description !== undefined) updates.description = description?.trim() || null;
   if (color !== undefined) updates.color = color;
   if (sort_order !== undefined) updates.sort_order = Number(sort_order) || 0;
+  if (code !== undefined) {
+    const trimmed = typeof code === "string" ? code.trim() : "";
+    updates.code = trimmed || null;
+  }
 
   let { error } = await supabase.from("line_projects").update(updates).eq("id", id);
 
@@ -68,7 +77,16 @@ export async function PUT(request: NextRequest) {
     ({ error } = await supabase.from("line_projects").update(rest).eq("id", id));
   }
 
-  if (error) return Response.json({ error: error.message }, { status: 500 });
+  if (error) {
+    const pgCode = (error as { code?: string }).code;
+    if (pgCode === "23505") {
+      return Response.json(
+        { error: `案件コード「${code}」は既に使われています。別のコードにしてください。` },
+        { status: 400 },
+      );
+    }
+    return Response.json({ error: error.message }, { status: 500 });
+  }
   return Response.json({ ok: true });
 }
 

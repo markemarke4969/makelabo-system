@@ -210,7 +210,7 @@ export default function LineDashboard() {
   const router = useRouter();
 
   // 案件情報
-  const [project, setProject] = useState<{ id: string; name: string; color: string } | null>(null);
+  const [project, setProject] = useState<{ id: string; name: string; color: string; code: string | null } | null>(null);
   const [authChecked, setAuthChecked] = useState(false);
 
   // 案件チェック（認証はオプション）
@@ -487,14 +487,14 @@ export default function LineDashboard() {
     } catch { /* */ }
   }, [selectedAccount?.id]);
 
-  // 流入経路一覧取得
+  // 流入経路一覧取得（案件単位）
   const fetchInflowRoutes = useCallback(async () => {
-    if (!selectedAccount) return;
+    if (!project?.id) return;
     try {
-      const res = await fetch(`/api/line/inflow-routes?account_id=${selectedAccount.id}`);
+      const res = await fetch(`/api/line/inflow-routes?project_id=${project.id}`);
       if (res.ok) setInflowRoutes(await res.json());
     } catch { /* */ }
-  }, [selectedAccount?.id]);
+  }, [project?.id]);
 
   // テスト配信先アカウント取得
   const fetchTestFollowers = useCallback(async () => {
@@ -1055,10 +1055,13 @@ export default function LineDashboard() {
   useEffect(() => {
     if (selectedAccount) {
       fetchStepSequences();
-      fetchInflowRoutes();
       fetchTestFollowers();
     }
-  }, [selectedAccount, fetchStepSequences, fetchInflowRoutes, fetchTestFollowers]);
+  }, [selectedAccount, fetchStepSequences, fetchTestFollowers]);
+
+  useEffect(() => {
+    if (project?.id) fetchInflowRoutes();
+  }, [project?.id, fetchInflowRoutes]);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -3719,12 +3722,20 @@ export default function LineDashboard() {
           <>
             <header className="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between flex-shrink-0">
               <h1 className="text-base font-bold text-gray-800">流入経路</h1>
-              <button
-                onClick={() => { setInflowForm({ name: "", code: "", url: "", description: "" }); setEditingInflow(null); setShowInflowModal(true); }}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded-md transition"
-              >
-                {Icons.plus} 新規経路
-              </button>
+              <div className="flex items-center gap-2">
+                <a
+                  href="/line/inflow-stats"
+                  className="px-3 py-1.5 bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 text-xs font-medium rounded-md transition"
+                >
+                  レポートを見る
+                </a>
+                <button
+                  onClick={() => { setInflowForm({ name: "", code: "", url: "", description: "" }); setEditingInflow(null); setShowInflowModal(true); }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded-md transition"
+                >
+                  {Icons.plus} 新規経路
+                </button>
+              </div>
             </header>
             <main className="flex-1 overflow-y-auto p-6">
               {/* 流入経路モーダル */}
@@ -3758,11 +3769,11 @@ export default function LineDashboard() {
                       <button onClick={() => setShowInflowModal(false)} className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition">キャンセル</button>
                       <button
                         onClick={async () => {
-                          if (!inflowForm.name.trim() || !inflowForm.code.trim() || !selectedAccount) return;
+                          if (!inflowForm.name.trim() || !inflowForm.code.trim() || !project?.id) return;
                           const method = editingInflow ? "PUT" : "POST";
                           const body = editingInflow
                             ? { id: editingInflow.id, ...inflowForm }
-                            : { account_id: selectedAccount.id, ...inflowForm };
+                            : { project_id: project.id, ...inflowForm };
                           try {
                             const res = await fetch("/api/line/inflow-routes", { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
                             if (res.ok) {
@@ -3809,9 +3820,11 @@ export default function LineDashboard() {
                       </thead>
                       <tbody>
                         {inflowRoutes.map((route) => {
-                          const addUrl = selectedAccount?.basic_id
-                            ? `https://line.me/R/ti/p/@${selectedAccount.basic_id}?inflow=${route.code}`
-                            : `（Basic ID未設定）`;
+                          const origin =
+                            typeof window !== "undefined" ? window.location.origin : "";
+                          const addUrl = project?.code
+                            ? `${origin}/line/r/${project.code}/${route.code}`
+                            : `（案件コード未設定）`;
                           return (
                             <tr key={route.id} className="border-b border-gray-100 hover:bg-gray-50">
                               <td className="px-5 py-3">

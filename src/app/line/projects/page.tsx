@@ -10,6 +10,7 @@ interface Project {
   description: string | null;
   color: string;
   sort_order: number;
+  code: string | null;
 }
 
 interface ProjectForm {
@@ -17,6 +18,7 @@ interface ProjectForm {
   description: string;
   color: string;
   sort_order: number;
+  code: string;
 }
 
 const DEFAULT_COLORS = [
@@ -29,6 +31,7 @@ const emptyProjectForm: ProjectForm = {
   description: "",
   color: "#06C755",
   sort_order: 0,
+  code: "",
 };
 
 export default function LineProjects() {
@@ -102,6 +105,7 @@ export default function LineProjects() {
       description: p.description ?? "",
       color: p.color,
       sort_order: p.sort_order,
+      code: p.code ?? "",
     });
     setProjectMsg(null);
     setShowProjectModal(true);
@@ -301,6 +305,21 @@ export default function LineProjects() {
                   placeholder="例: MARI"
                   className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
                 />
+              </div>
+              <div>
+                <label className="text-xs text-gray-500 block mb-1 font-medium">
+                  案件コード
+                </label>
+                <input
+                  type="text"
+                  value={projectForm.code}
+                  onChange={(e) => setProjectForm({ ...projectForm, code: e.target.value.replace(/[^a-zA-Z0-9_-]/g, "") })}
+                  placeholder="例: mari"
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                />
+                <p className="text-[10px] text-gray-400 mt-1">
+                  中継URL <code className="font-mono">/line/r/&#123;案件コード&#125;/&#123;流入コード&#125;</code> に使われます。半角英数・ハイフン・アンダースコアのみ
+                </p>
               </div>
               <div>
                 <label className="text-xs text-gray-500 block mb-1 font-medium">説明</label>

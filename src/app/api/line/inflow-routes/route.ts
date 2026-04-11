@@ -2,42 +2,49 @@ import { NextRequest } from "next/server";
 import { supabase } from "@/lib/supabase";
 
 export async function GET(request: NextRequest) {
-  const accountId = request.nextUrl.searchParams.get("account_id");
+  const projectId = request.nextUrl.searchParams.get("project_id");
+  const accountId = request.nextUrl.searchParams.get("account_id"); // 後方互換
 
-  // まず集計付きで取得を試す。line_inflow_logs テーブルが未作成でも落ちないように fallback。
-  const withLogs = async () => {
+  // 集計付き取得。line_inflow_clicks が未作成の環境では fallback。
+  const withClicks = async () => {
     let q = supabase
       .from("line_inflow_routes")
-      .select("*, follower_count:line_inflow_logs(count)")
+      .select("*, click_count:line_inflow_clicks(count)")
       .order("created_at", { ascending: false });
-    if (accountId) q = q.eq("account_id", accountId);
+    if (projectId) q = q.eq("project_id", projectId);
+    else if (accountId) q = q.eq("account_id", accountId);
     return q;
   };
 
-  const withoutLogs = async () => {
+  const withoutClicks = async () => {
     let q = supabase
       .from("line_inflow_routes")
       .select("*")
       .order("created_at", { ascending: false });
-    if (accountId) q = q.eq("account_id", accountId);
+    if (projectId) q = q.eq("project_id", projectId);
+    else if (accountId) q = q.eq("account_id", accountId);
     return q;
   };
 
-  let { data, error } = await withLogs();
+  let { data, error } = await withClicks();
   if (error) {
-    ({ data, error } = await withoutLogs());
+    ({ data, error } = await withoutClicks());
   }
 
   if (error) {
     return Response.json({ error: error.message }, { status: 500 });
   }
 
-  const formatted = (data ?? []).map((route: any) => ({
-    ...route,
-    follower_count: Array.isArray(route.follower_count)
-      ? route.follower_count[0]?.count ?? 0
-      : route.follower_count ?? 0,
-  }));
+  const formatted = (data ?? []).map((route: any) => {
+    const clickCount = Array.isArray(route.click_count)
+      ? route.click_count[0]?.count ?? 0
+      : route.click_count ?? 0;
+    return {
+      ...route,
+      click_count: clickCount,
+      follower_count: clickCount,
+    };
+  });
 
   return Response.json(formatted);
 }
@@ -45,25 +52,50 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   const body = await request.json();
 
-  if (!body.account_id || !body.name || !body.code) {
-    return Response.json({ error: "account_id, name, and code are required" }, { status: 400 });
+  if (!body.name || !body.code) {
+    return Response.json({ error: "name と code は必須です" }, { status: 400 });
+  }
+  if (!body.project_id && !body.account_id) {
+    return Response.json({ error: "project_id または account_id が必須です" }, { status: 400 });
   }
 
-  // account_id の存在確認（FK エラーの事前検出）
-  const { data: acc } = await supabase
-    .from("line_accounts")
-    .select("id")
-    .eq("id", body.account_id)
-    .maybeSingle();
-  if (!acc) {
-    return Response.json(
-      { error: `指定されたLINEアカウントが見つかりません (account_id: ${body.account_id})` },
-      { status: 400 },
-    );
+  // project_id が指定されていれば project の存在確認
+  let projectId: string | null = body.project_id ?? null;
+  let accountId: string | null = body.account_id ?? null;
+
+  if (projectId) {
+    const { data: proj } = await supabase
+      .from("line_projects")
+      .select("id")
+      .eq("id", projectId)
+      .maybeSingle();
+    if (!proj) {
+      return Response.json(
+        { error: `指定された案件が見つかりません (project_id: ${projectId})` },
+        { status: 400 },
+      );
+    }
   }
 
-  const insertBody = {
-    account_id: body.account_id,
+  // account_id 指定時は存在確認 + project_id 自動補完
+  if (accountId) {
+    const { data: acc } = await supabase
+      .from("line_accounts")
+      .select("id, project_id")
+      .eq("id", accountId)
+      .maybeSingle();
+    if (!acc) {
+      return Response.json(
+        { error: `指定されたLINEアカウントが見つかりません (account_id: ${accountId})` },
+        { status: 400 },
+      );
+    }
+    if (!projectId && acc.project_id) projectId = acc.project_id;
+  }
+
+  const insertBody: Record<string, unknown> = {
+    project_id: projectId,
+    account_id: accountId, // 後方互換のため null 許容
     name: body.name,
     code: body.code,
     url: body.url || null,
@@ -78,33 +110,26 @@ export async function POST(request: NextRequest) {
 
   if (error) {
     console.error("[inflow-routes POST] error:", error);
-    // PostgreSQL エラーコード判別
-    const code = (error as { code?: string }).code;
-    if (code === "23505") {
+    const pgCode = (error as { code?: string }).code;
+    if (pgCode === "23505") {
       return Response.json(
         { error: `経路コード「${body.code}」は既に使われています。別のコードを指定してください。` },
         { status: 400 },
       );
     }
-    if (code === "23503") {
+    if (pgCode === "23503") {
       return Response.json(
         { error: `関連データが見つかりません（FK違反: ${error.message}）` },
         { status: 400 },
       );
     }
-    if (code === "42P01") {
+    if (pgCode === "42P01") {
       return Response.json(
-        { error: "line_inflow_routes テーブルが存在しません。Supabaseでテーブルを作成してください。" },
+        { error: "line_inflow_routes テーブルが存在しません。" },
         { status: 500 },
       );
     }
-    if (code === "42501" || /permission|rls|policy/i.test(error.message)) {
-      return Response.json(
-        { error: `権限エラー（RLS）: ${error.message}` },
-        { status: 500 },
-      );
-    }
-    return Response.json({ error: error.message, code }, { status: 500 });
+    return Response.json({ error: error.message, code: pgCode }, { status: 500 });
   }
 
   return Response.json({ ok: true, id: data.id });
