@@ -36,6 +36,35 @@ export default function LineLogin() {
     }
   };
 
+  const handleTestLogin = async () => {
+    setError("");
+    setLoading(true);
+    try {
+      const res = await fetch("/api/line/test-login", { method: "POST" });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setError(`お試しログイン準備失敗: ${data.error ?? res.status}`);
+        return;
+      }
+      const { email: testEmail, password: testPassword } = await res.json();
+
+      const supabase = createClient();
+      const { error: signInError } = await supabase.auth.signInWithPassword({
+        email: testEmail,
+        password: testPassword,
+      });
+      if (signInError) {
+        setError(`ログインエラー: ${signInError.message}`);
+        return;
+      }
+      router.push("/line/projects");
+    } catch (e) {
+      setError(`エラーが発生しました: ${(e as Error).message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-[#1e2744] flex items-center justify-center px-4">
       <div className="w-full max-w-sm">
@@ -98,13 +127,14 @@ export default function LineLogin() {
             <div className="flex-1 h-px bg-gray-200" />
           </div>
 
-          {/* サンプルログイン */}
+          {/* お試しログイン */}
           <button
             type="button"
-            onClick={() => router.push("/line/projects")}
-            className="w-full py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-600 font-medium rounded-lg text-sm transition"
+            onClick={handleTestLogin}
+            disabled={loading}
+            className="w-full py-2.5 bg-gray-100 hover:bg-gray-200 disabled:opacity-60 text-gray-600 font-medium rounded-lg text-sm transition"
           >
-            ID/Pass なしでお試しログイン
+            {loading ? "ログイン中..." : "ID/Pass なしでお試しログイン"}
           </button>
         </div>
 

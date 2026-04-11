@@ -125,3 +125,58 @@ export async function GET(request: NextRequest) {
     results,
   });
 }
+
+// 管理画面からの手動テスト用（BAN 切替は行わず、結果だけ返す）
+export async function POST(request: NextRequest) {
+  const body = await request.json().catch(() => ({}));
+  const accountId: string | undefined = body.account_id;
+
+  if (!accountId) {
+    return Response.json({ error: "account_id is required" }, { status: 400 });
+  }
+
+  const { data: acc, error } = await supabase
+    .from("line_accounts")
+    .select("id, account_name, channel_access_token")
+    .eq("id", accountId)
+    .maybeSingle();
+
+  if (error) return Response.json({ error: error.message }, { status: 500 });
+  if (!acc) return Response.json({ error: "アカウントが見つかりません" }, { status: 404 });
+  if (!acc.channel_access_token) {
+    return Response.json(
+      { ok: false, status: -1, detail: "チャネルアクセストークンが未設定です" },
+      { status: 200 },
+    );
+  }
+
+  // LINE /v2/bot/info で生存確認
+  const res = await fetch("https://api.line.me/v2/bot/info", {
+    headers: { Authorization: `Bearer ${acc.channel_access_token}` },
+  });
+  const text = await res.text();
+
+  if (res.ok) {
+    let info: { displayName?: string; userId?: string; basicId?: string } = {};
+    try { info = JSON.parse(text); } catch { /* ignore */ }
+    return Response.json({
+      ok: true,
+      status: res.status,
+      displayName: info.displayName,
+      basicId: info.basicId,
+      userId: info.userId,
+    });
+  }
+
+  return Response.json({
+    ok: false,
+    status: res.status,
+    detail: text.slice(0, 300),
+    hint:
+      res.status === 401
+        ? "トークンが無効です。LINE Developers で長期トークンを再発行し、アカウント管理で更新してください。"
+        : res.status === 403
+          ? "アクセス拒否。チャネル種別またはスコープを確認してください。"
+          : undefined,
+  });
+}

@@ -19,6 +19,7 @@ interface Follower {
   account_id?: string;
   memo?: string | null;
   labels?: string[];
+  is_test?: boolean;
 }
 
 interface Message {
@@ -39,6 +40,9 @@ interface LineAccount {
   basic_id: string | null;
   is_active: boolean;
   group_name?: string | null;
+  project_id?: string | null;
+  role?: "main" | "standby" | "banned" | null;
+  greeting_message?: string | null;
 }
 
 interface Label {
@@ -49,10 +53,70 @@ interface Label {
   assigned_users: string[]; // line_user_id[]
 }
 
+interface Template {
+  id: string;
+  title: string;
+  body: string;
+  created_at: string;
+}
+
+interface StepSequence {
+  id: string;
+  account_id: string;
+  name: string;
+  status: string;
+  created_at: string;
+  messages: StepMessage[];
+}
+
+interface StepMessage {
+  id: string;
+  sequence_id: string;
+  step_order: number;
+  delay_minutes: number;
+  media: string;
+  title: string;
+  body: string | null;
+  status: string;
+  msg_type?: string | null;
+  payload?: Record<string, unknown> | null;
+}
+
+interface InflowRoute {
+  id: string;
+  account_id: string;
+  name: string;
+  code: string;
+  url: string | null;
+  description: string | null;
+  is_active: boolean;
+  created_at: string;
+  follower_count?: number;
+}
+
 // メインビュー
 type MainView = "accounts" | "account-detail" | "settings";
 // アカウント詳細内のサブビュー
-type AccountSubView = "followers" | "chat" | "step" | "schedule" | "friend-page" | "labels";
+type AccountSubView = "followers" | "chat" | "step" | "schedule" | "friend-page" | "labels" | "templates" | "inflow";
+
+// ============================================================
+// 絵文字データ
+// ============================================================
+const EMOJI_CATEGORIES: { name: string; emojis: string[] }[] = [
+  { name: "顔", emojis: ["😀","😃","😄","😁","😆","😅","🤣","😂","🙂","😊","😇","🥰","😍","😘","😗","😋","😛","😜","🤪","😝","🤑","🤗","🤭","🤫","🤔","🤐","🤨","😐","😑","😶","😏","😒","🙄","😬","🤥","😌","😔","😪","🤤","😴","😷","🤒","🤕","🤢","🤮","🥵","🥶","🥴","😵","🤯","🤠","🥳","😎","🤓","🧐","😕","😟","🙁","😮","😯","😲","😳","🥺","😦","😧","😨","😰","😥","😢","😭","😱","😖","😣","😞","😓","😩","😫","🥱","😤","😡","😠","🤬","😈","👿"] },
+  { name: "手", emojis: ["👋","🤚","🖐","✋","🖖","👌","🤌","🤏","✌️","🤞","🤟","🤘","🤙","👈","👉","👆","🖕","👇","☝️","👍","👎","✊","👊","🤛","🤜","👏","🙌","👐","🤲","🤝","🙏"] },
+  { name: "ハート", emojis: ["❤️","🧡","💛","💚","💙","💜","🖤","🤍","🤎","💔","❣️","💕","💞","💓","💗","💖","💘","💝","💟","♥️","🩷","🩵","🩶"] },
+  { name: "記号", emojis: ["⭐","🌟","✨","💫","🔥","💯","✅","❌","⭕","❗","❓","💤","💬","👀","🎉","🎊","🎵","🎶","📌","📎","💡","📝","📅","🏠","🚀","⚡","🌈","☀️","🌙","⛅"] },
+  { name: "食べ物", emojis: ["🍎","🍊","🍋","🍌","🍉","🍇","🍓","🫐","🍈","🍒","🍑","🥭","🍍","🥥","🥝","🍅","🥑","🍔","🍕","🍣","🍱","🍜","🍝","🍩","🍪","🎂","🍰","☕","🍵","🧋","🍺","🍻","🥂","🍷"] },
+];
+
+// LINE公式スタンプ（packageId, stickerId のペア）
+// https://developers.line.biz/en/docs/messaging-api/sticker-list/
+const LINE_STICKER_PACKS: { name: string; packageId: number; stickers: number[] }[] = [
+  { name: "ブラウン&コニー", packageId: 11537, stickers: [52002734,52002735,52002736,52002737,52002738,52002739,52002740,52002741,52002742,52002743,52002744,52002745,52002746,52002747,52002748,52002749,52002750,52002751,52002752,52002753,52002754,52002755,52002756,52002757,52002758,52002759,52002760,52002761,52002762,52002763,52002764,52002765,52002766,52002767,52002768,52002769,52002770,52002771,52002772,52002773] },
+  { name: "ムーン", packageId: 11538, stickers: [51626494,51626495,51626496,51626497,51626498,51626499,51626500,51626501,51626502,51626503,51626504,51626505,51626506,51626507,51626508,51626509,51626510,51626511,51626512,51626513,51626514,51626515,51626516,51626517,51626518,51626519,51626520,51626521,51626522,51626523,51626524,51626525,51626526,51626527,51626528,51626529,51626530,51626531,51626532,51626533] },
+  { name: "ジェームズ", packageId: 11539, stickers: [52114110,52114111,52114112,52114113,52114114,52114115,52114116,52114117,52114118,52114119,52114120,52114121,52114122,52114123,52114124,52114125,52114126,52114127,52114128,52114129,52114130,52114131,52114132,52114133,52114134,52114135,52114136,52114137,52114138,52114139,52114140,52114141,52114142,52114143,52114144,52114145,52114146,52114147,52114148,52114149] },
+];
 
 // ============================================================
 // アイコンコンポーネント
@@ -91,6 +155,9 @@ const Icons = {
   emoji: (
     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M14.828 14.828a4 4 0 01-5.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
   ),
+  sticker: (
+    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" /></svg>
+  ),
   settings: (
     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
   ),
@@ -123,6 +190,12 @@ const Icons = {
   ),
   close: (
     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+  ),
+  document: (
+    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+  ),
+  menu: (
+    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" /></svg>
   ),
 };
 
@@ -193,6 +266,141 @@ export default function LineDashboard() {
   const [dragSourceGroup, setDragSourceGroup] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<{ type: "group" | "account"; id: string } | null>(null);
 
+  // Feature 1: Name editing
+  const [editingName, setEditingName] = useState(false);
+  const [editNameValue, setEditNameValue] = useState("");
+
+  // Feature 2: Label selection in chat sidebar
+  const [showLabelPicker, setShowLabelPicker] = useState(false);
+
+  // Feature 3: Memo save feedback
+  const [memoSaving, setMemoSaving] = useState(false);
+  const [memoSaveMsg, setMemoSaveMsg] = useState<string | null>(null);
+
+  // Feature 4: Image & video file inputs
+  const imageInputRef = useRef<HTMLInputElement>(null);
+  const videoInputRef = useRef<HTMLInputElement>(null);
+
+  // Feature 5: Templates
+  const [templates, setTemplates] = useState<Template[]>([]);
+  const [showTemplateModal, setShowTemplateModal] = useState(false);
+  const [editingTemplate, setEditingTemplate] = useState<Template | null>(null);
+  const [templateForm, setTemplateForm] = useState({ title: "", body: "" });
+  const [showTemplatePopup, setShowTemplatePopup] = useState(false);
+
+  // Feature 6: Mobile responsive
+  const [showMobileSidebar, setShowMobileSidebar] = useState(false);
+  const [showMobileChat, setShowMobileChat] = useState(false);
+  const [showMobileProfile, setShowMobileProfile] = useState(false);
+
+  // Feature 7: Emoji popup
+  const [showEmojiPopup, setShowEmojiPopup] = useState(false);
+  const [emojiCategory, setEmojiCategory] = useState(0);
+  // Sticker popup
+  const [showStickerPopup, setShowStickerPopup] = useState(false);
+  const [stickerPackIdx, setStickerPackIdx] = useState(0);
+  const [sendingSticker, setSendingSticker] = useState(false);
+  const stickerPopupRef = useRef<HTMLDivElement>(null);
+
+  // Step sequences
+  const [stepSequences, setStepSequences] = useState<StepSequence[]>([]);
+  const [showStepModal, setShowStepModal] = useState(false);
+  const [editingSequence, setEditingSequence] = useState<StepSequence | null>(null);
+  const [stepForm, setStepForm] = useState({ name: "" });
+  const [showStepMsgModal, setShowStepMsgModal] = useState(false);
+  const [stepMsgForm, setStepMsgForm] = useState({ sequence_id: "", step_order: 1, delay_minutes: 0, media: "LINE", title: "", body: "" });
+  const [editingStepMsg, setEditingStepMsg] = useState<StepMessage | null>(null);
+
+  // Inflow routes
+  const [inflowRoutes, setInflowRoutes] = useState<InflowRoute[]>([]);
+  const [showInflowModal, setShowInflowModal] = useState(false);
+  const [inflowForm, setInflowForm] = useState({ name: "", code: "", url: "", description: "" });
+  const [editingInflow, setEditingInflow] = useState<InflowRoute | null>(null);
+
+  // ステップ／予約配信作成ページ
+  type BroadcastMsgType = "text" | "image" | "button" | "carousel" | "audio" | "video" | "sticker";
+  type TimingMode = "immediate" | "datetime" | "daysAfter";
+  interface BroadcastMessage {
+    msgType: BroadcastMsgType;
+    body: string;
+    imageUrl: string;
+    videoUrl: string;
+    videoPreviewUrl: string;
+    audioUrl: string;
+    audioDuration: number;
+    stickerPackageId: string;
+    stickerId: string;
+    buttonText: string;
+    buttonActions: { label: string; uri: string }[];
+    carouselColumns: { title: string; text: string; imageUrl: string; uri: string; label: string }[];
+  }
+  interface BroadcastForm {
+    name: string;
+    condition: "all" | "filtered";
+    messages: BroadcastMessage[];
+    customSender: string;
+    timingMode: TimingMode;
+    timingDate: string;
+    timingDays: number;
+    timingHours: number;
+    timingMinutes: number;
+    existingReaderAction: string;
+    postAction: string;
+    urlDomain: string;
+    status: "active" | "paused";
+    testTargetId: string;
+  }
+  const emptyMessage = (): BroadcastMessage => ({
+    msgType: "text",
+    body: "",
+    imageUrl: "",
+    videoUrl: "",
+    videoPreviewUrl: "",
+    audioUrl: "",
+    audioDuration: 60,
+    stickerPackageId: "11537",
+    stickerId: "52002734",
+    buttonText: "",
+    buttonActions: [{ label: "詳細を見る", uri: "" }],
+    carouselColumns: [
+      { title: "タイトル1", text: "説明1", imageUrl: "", uri: "", label: "詳細" },
+      { title: "タイトル2", text: "説明2", imageUrl: "", uri: "", label: "詳細" },
+    ],
+  });
+  const emptyBroadcast: BroadcastForm = {
+    name: "",
+    condition: "all",
+    messages: [emptyMessage()],
+    customSender: "",
+    timingMode: "immediate",
+    timingDate: "",
+    timingDays: 0,
+    timingHours: 0,
+    timingMinutes: 0,
+    existingReaderAction: "配信時間前の読者：配信予約　配信時間後の読者：配信しない",
+    postAction: "実行しない",
+    urlDomain: "デフォルト",
+    status: "active",
+    testTargetId: "",
+  };
+  // ユーザー詳細モーダル
+  const [showUserDetail, setShowUserDetail] = useState(false);
+  const [userDetailTarget, setUserDetailTarget] = useState<Follower | null>(null);
+  const [userDetailForm, setUserDetailForm] = useState({ display_name: "", memo: "", is_test: false });
+
+  // テスト配信先アカウント（is_test=true のフォロワー）
+  const [testFollowers, setTestFollowers] = useState<Follower[]>([]);
+
+  // 全案件一覧（所属変更セレクト用）
+  const [allProjects, setAllProjects] = useState<{ id: string; name: string; color: string }[]>([]);
+
+  const [showStepCreator, setShowStepCreator] = useState(false);
+  const [stepCreatorForm, setStepCreatorForm] = useState<BroadcastForm>(emptyBroadcast);
+  // 編集中のシーケンスID（nullなら新規作成）
+  const [editingSequenceId, setEditingSequenceId] = useState<string | null>(null);
+  const [showScheduleCreator, setShowScheduleCreator] = useState(false);
+  const [scheduleCreatorForm, setScheduleCreatorForm] = useState<BroadcastForm>(emptyBroadcast);
+
   const [form, setForm] = useState({
     account_name: "",
     channel_id: "",
@@ -200,23 +408,50 @@ export default function LineDashboard() {
     channel_secret: "",
     channel_access_token: "",
     group_name: "",
+    project_id: "",
+    role: "main" as "main" | "standby",
+    greeting_message: "",
   });
   const [editingId, setEditingId] = useState<string | null>(null);
 
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const emojiPopupRef = useRef<HTMLDivElement>(null);
+  const templatePopupRef = useRef<HTMLDivElement>(null);
+  const labelPickerRef = useRef<HTMLDivElement>(null);
+
+  // Close popups on outside click
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (showEmojiPopup && emojiPopupRef.current && !emojiPopupRef.current.contains(e.target as Node)) {
+        setShowEmojiPopup(false);
+      }
+      if (showTemplatePopup && templatePopupRef.current && !templatePopupRef.current.contains(e.target as Node)) {
+        setShowTemplatePopup(false);
+      }
+      if (showLabelPicker && labelPickerRef.current && !labelPickerRef.current.contains(e.target as Node)) {
+        setShowLabelPicker(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [showEmojiPopup, showTemplatePopup, showLabelPicker]);
 
   // ============================================================
   // API
   // ============================================================
   const fetchFollowers = useCallback(async () => {
+    // 案件未ロード時は全件を誤って取らない
+    if (!project?.id) { setFollowers([]); return; }
     setLoading(true);
     try {
-      const pid = project?.id;
-      const url = pid ? `/api/line/followers?project_id=${pid}` : "/api/line/followers";
+      // 個別アカウント選択中はそのアカウントのフォロワーのみ。未選択時は案件単位で取得。
+      const url = selectedAccount?.id
+        ? `/api/line/followers?account_id=${selectedAccount.id}`
+        : `/api/line/followers?project_id=${project.id}`;
       const res = await fetch(url);
       setFollowers(await res.json());
     } catch { /* */ } finally { setLoading(false); }
-  }, [project?.id]);
+  }, [project?.id, selectedAccount?.id]);
 
   const fetchMessages = useCallback(async (userId?: string) => {
     try {
@@ -227,13 +462,48 @@ export default function LineDashboard() {
   }, []);
 
   const fetchAccounts = useCallback(async () => {
+    // 案件未ロード時は全件を誤って取らない
+    if (!project?.id) { setAccounts([]); return; }
     try {
-      const pid = project?.id;
-      const url = pid ? `/api/line/accounts?project_id=${pid}` : "/api/line/accounts";
-      const res = await fetch(url);
+      const res = await fetch(`/api/line/accounts?project_id=${project.id}`);
       setAccounts(await res.json());
     } catch { /* */ }
   }, [project?.id]);
+
+  // 全案件取得（所属変更セレクト用）
+  const fetchAllProjects = useCallback(async () => {
+    try {
+      const res = await fetch("/api/line/projects");
+      if (res.ok) setAllProjects(await res.json());
+    } catch { /* */ }
+  }, []);
+
+  // ステップ配信一覧取得
+  const fetchStepSequences = useCallback(async () => {
+    if (!selectedAccount) return;
+    try {
+      const res = await fetch(`/api/line/step-sequences?account_id=${selectedAccount.id}`);
+      if (res.ok) setStepSequences(await res.json());
+    } catch { /* */ }
+  }, [selectedAccount?.id]);
+
+  // 流入経路一覧取得
+  const fetchInflowRoutes = useCallback(async () => {
+    if (!selectedAccount) return;
+    try {
+      const res = await fetch(`/api/line/inflow-routes?account_id=${selectedAccount.id}`);
+      if (res.ok) setInflowRoutes(await res.json());
+    } catch { /* */ }
+  }, [selectedAccount?.id]);
+
+  // テスト配信先アカウント取得
+  const fetchTestFollowers = useCallback(async () => {
+    if (!selectedAccount) return;
+    try {
+      const res = await fetch(`/api/line/followers?test_only=1&account_id=${selectedAccount.id}`);
+      if (res.ok) setTestFollowers(await res.json());
+    } catch { /* */ }
+  }, [selectedAccount?.id]);
 
   // 未読件数を計算（全メッセージから取得）
   const fetchUnreadCounts = useCallback(async () => {
@@ -432,13 +702,15 @@ export default function LineDashboard() {
     setShowSortMode(false);
   };
 
-  // 通常表示用のグループ
-  const sortedGroupedAccounts = accounts.reduce<Record<string, LineAccount[]>>((groups, acc) => {
-    const group = acc.group_name || "未分類";
-    if (!groups[group]) groups[group] = [];
-    groups[group].push(acc);
-    return groups;
-  }, {});
+  // 通常表示用のグループ（本番のみ。サブ・BAN は除外）
+  const sortedGroupedAccounts = accounts
+    .filter((acc) => !acc.role || acc.role === "main")
+    .reduce<Record<string, LineAccount[]>>((groups, acc) => {
+      const group = acc.group_name || "未分類";
+      if (!groups[group]) groups[group] = [];
+      groups[group].push(acc);
+      return groups;
+    }, {});
 
   // 選択削除
   const toggleSelect = (id: string) => {
@@ -512,13 +784,164 @@ export default function LineDashboard() {
     );
   };
 
+  // Feature 1: Save display name
+  const saveDisplayName = async () => {
+    if (!selectedUser || !editNameValue.trim()) {
+      setEditingName(false);
+      return;
+    }
+    try {
+      const res = await fetch("/api/line/followers", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: selectedUser.id, display_name: editNameValue.trim() }),
+      });
+      if (res.ok) {
+        const updatedName = editNameValue.trim();
+        setSelectedUser((prev) => prev ? { ...prev, display_name: updatedName } : null);
+        setFollowers((prev) =>
+          prev.map((f) => f.id === selectedUser.id ? { ...f, display_name: updatedName } : f)
+        );
+      } else {
+        alert("名前の更新に失敗しました");
+      }
+    } catch {
+      alert("名前の更新に失敗しました");
+    }
+    setEditingName(false);
+  };
+
+  // Feature 3: Save memo
+  const saveMemo = async () => {
+    if (!selectedUser) return;
+    setMemoSaving(true);
+    setMemoSaveMsg(null);
+    try {
+      const res = await fetch("/api/line/followers", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: selectedUser.id, memo: memoText }),
+      });
+      if (res.ok) {
+        setSelectedUser((prev) => prev ? { ...prev, memo: memoText } : null);
+        setFollowers((prev) =>
+          prev.map((f) => f.id === selectedUser.id ? { ...f, memo: memoText } : f)
+        );
+        setMemoSaveMsg("保存しました");
+        setTimeout(() => setMemoSaveMsg(null), 2000);
+      } else {
+        setMemoSaveMsg("保存に失敗しました");
+      }
+    } catch {
+      setMemoSaveMsg("保存に失敗しました");
+    } finally {
+      setMemoSaving(false);
+    }
+  };
+
+  // Feature 4: File attachment handlers
+  const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    alert(`画像「${file.name}」が選択されました。\n画像送信機能は近日公開予定です。`);
+    e.target.value = "";
+  };
+
+  const handleVideoSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    alert(`動画「${file.name}」が選択されました。\n動画送信機能は近日公開予定です。`);
+    e.target.value = "";
+  };
+
+  // Feature 5: Template CRUD
+  const saveTemplate = () => {
+    if (!templateForm.title.trim() || !templateForm.body.trim()) return;
+    if (editingTemplate) {
+      setTemplates((prev) =>
+        prev.map((t) =>
+          t.id === editingTemplate.id
+            ? { ...t, title: templateForm.title.trim(), body: templateForm.body.trim() }
+            : t
+        )
+      );
+    } else {
+      const newTpl: Template = {
+        id: crypto.randomUUID(),
+        title: templateForm.title.trim(),
+        body: templateForm.body.trim(),
+        created_at: new Date().toISOString(),
+      };
+      setTemplates((prev) => [newTpl, ...prev]);
+    }
+    setTemplateForm({ title: "", body: "" });
+    setEditingTemplate(null);
+    setShowTemplateModal(false);
+  };
+
+  const deleteTemplate = (id: string) => {
+    if (!confirm("この定型文を削除しますか？")) return;
+    setTemplates((prev) => prev.filter((t) => t.id !== id));
+  };
+
+  const startEditTemplate = (tpl: Template) => {
+    setEditingTemplate(tpl);
+    setTemplateForm({ title: tpl.title, body: tpl.body });
+    setShowTemplateModal(true);
+  };
+
+  const insertTemplate = (body: string) => {
+    setChatInput((prev) => prev + body);
+    setShowTemplatePopup(false);
+  };
+
+  // Feature 7: Insert emoji
+  const insertEmoji = (emoji: string) => {
+    setChatInput((prev) => prev + emoji);
+  };
+
+  // Send LINE sticker
+  const sendSticker = async (packageId: number, stickerId: number) => {
+    if (!selectedUser || sendingSticker) return;
+    setSendingSticker(true);
+    try {
+      const res = await fetch("/api/line/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          line_user_id: selectedUser.line_user_id,
+          account_id: selectedAccount?.id ?? selectedUser.account_id,
+          type: "sticker",
+          packageId,
+          stickerId,
+        }),
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        alert(data.error ?? "スタンプ送信失敗");
+      } else {
+        fetchMessages(selectedUser.line_user_id);
+        setShowStickerPopup(false);
+      }
+    } catch {
+      alert("スタンプ送信エラー");
+    } finally {
+      setSendingSticker(false);
+    }
+  };
+
+  // Helper: get labels assigned to a user
+  const getUserLabels = (lineUserId: string) => {
+    return labels.filter((l) => l.assigned_users.includes(lineUserId));
+  };
+
   const resetForm = () => {
-    setForm({ account_name: "", channel_id: "", basic_id: "", channel_secret: "", channel_access_token: "", group_name: "" });
+    setForm({ account_name: "", channel_id: "", basic_id: "", channel_secret: "", channel_access_token: "", group_name: "", project_id: "", role: "main", greeting_message: "" });
     setEditingId(null);
     setSaveMsg(null);
   };
 
-  const startEdit = (acc: LineAccount & { channel_secret?: string; channel_access_token?: string }) => {
+  const startEdit = (acc: LineAccount & { channel_secret?: string; channel_access_token?: string; greeting_message?: string | null }) => {
     setForm({
       account_name: acc.account_name ?? "",
       channel_id: acc.channel_id,
@@ -526,16 +949,76 @@ export default function LineDashboard() {
       channel_secret: acc.channel_secret ?? "",
       channel_access_token: acc.channel_access_token ?? "",
       group_name: acc.group_name ?? "",
+      project_id: acc.project_id ?? "",
+      role: acc.role === "standby" ? "standby" : "main",
+      greeting_message: acc.greeting_message ?? "",
     });
     setEditingId(acc.id);
     setSaveMsg(null);
     setShowAddAccount(true);
   };
 
+  // ワンクリックで役割切替（本番↔サブ）
+  const toggleAccountRole = async (acc: LineAccount) => {
+    const newRole: "main" | "standby" = acc.role === "main" ? "standby" : "main";
+    const res = await fetch("/api/line/accounts", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: acc.id, role: newRole }),
+    });
+    if (res.ok) {
+      fetchAccounts();
+    } else {
+      const data = await res.json().catch(() => ({}));
+      alert(`役割切替失敗: ${data.error ?? res.status}`);
+    }
+  };
+
+  // 案件から外す
+  const detachAccountFromProject = async (acc: LineAccount) => {
+    if (!confirm(`「${acc.account_name ?? acc.channel_id}」を現在の案件から外しますか？\n（アカウント自体は残ります）`)) return;
+    const res = await fetch("/api/line/accounts", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: acc.id, detach: true }),
+    });
+    if (res.ok) {
+      fetchAccounts();
+    } else {
+      const data = await res.json().catch(() => ({}));
+      alert(`処理失敗: ${data.error ?? res.status}`);
+    }
+  };
+
+  // アカウントを完全削除
+  const deleteAccountHard = async (acc: LineAccount) => {
+    if (!confirm(`「${acc.account_name ?? acc.channel_id}」を完全に削除しますか？\n\n⚠️ 紐付く友だち・メッセージ履歴も全て削除されます。取り消せません。`)) return;
+    if (!confirm(`本当に削除しますか？\n「${acc.account_name ?? acc.channel_id}」と全ての関連データが失われます。`)) return;
+    const res = await fetch("/api/line/accounts", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: acc.id }),
+    });
+    if (res.ok) {
+      fetchAccounts();
+    } else {
+      const data = await res.json().catch(() => ({}));
+      alert(`削除失敗: ${data.error ?? res.status}`);
+    }
+  };
+
   const saveAccount = async () => {
-    if (!form.channel_id || !form.channel_secret || !form.channel_access_token) {
-      setSaveMsg({ ok: false, text: "チャネルID・シークレット・アクセストークンは必須です" });
-      return;
+    // 新規登録時のみ secret/token を必須にする。編集時は空欄なら既存値を維持
+    if (!editingId) {
+      if (!form.channel_id || !form.channel_secret || !form.channel_access_token) {
+        setSaveMsg({ ok: false, text: "チャネルID・シークレット・アクセストークンは必須です" });
+        return;
+      }
+    } else {
+      if (!form.channel_id) {
+        setSaveMsg({ ok: false, text: "チャネルIDは必須です" });
+        return;
+      }
     }
     setSaving(true);
     setSaveMsg(null);
@@ -543,7 +1026,11 @@ export default function LineDashboard() {
       const res = await fetch("/api/line/accounts", {
         method: editingId ? "PUT" : "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(editingId ? { id: editingId, ...form } : { ...form, project_id: project?.id }),
+        body: JSON.stringify(
+          editingId
+            ? { id: editingId, ...form }
+            : { ...form, project_id: form.project_id || project?.id || null },
+        ),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "保存失敗");
@@ -562,7 +1049,16 @@ export default function LineDashboard() {
     fetchFollowers();
     fetchAccounts();
     fetchUnreadCounts();
-  }, [fetchFollowers, fetchAccounts, fetchUnreadCounts]);
+    fetchAllProjects();
+  }, [fetchFollowers, fetchAccounts, fetchUnreadCounts, fetchAllProjects]);
+
+  useEffect(() => {
+    if (selectedAccount) {
+      fetchStepSequences();
+      fetchInflowRoutes();
+      fetchTestFollowers();
+    }
+  }, [selectedAccount, fetchStepSequences, fetchInflowRoutes, fetchTestFollowers]);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -575,7 +1071,11 @@ export default function LineDashboard() {
       const res = await fetch("/api/line/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ line_user_id: selectedUser.line_user_id, message: chatInput.trim() }),
+        body: JSON.stringify({
+          line_user_id: selectedUser.line_user_id,
+          account_id: selectedAccount?.id ?? selectedUser.account_id,
+          message: chatInput.trim(),
+        }),
       });
       if (!res.ok) {
         const data = await res.json();
@@ -583,6 +1083,8 @@ export default function LineDashboard() {
         return;
       }
       setChatInput("");
+      setShowEmojiPopup(false);
+      setShowTemplatePopup(false);
       fetchMessages(selectedUser.line_user_id);
     } catch {
       alert("送信エラー");
@@ -598,10 +1100,140 @@ export default function LineDashboard() {
     setSelectedUser(null);
   };
 
+  // ステップ／予約配信: 保存処理（新規 or 既存シーケンス編集）
+  const saveBroadcast = async (kind: "step" | "schedule", form: BroadcastForm) => {
+    if (!form.name.trim() || !selectedAccount) {
+      alert("管理名称を入力してください");
+      return false;
+    }
+    if (!form.messages || form.messages.length === 0) {
+      alert("メッセージが1通もありません");
+      return false;
+    }
+    const fullName = `${kind === "schedule" ? "[予約] " : ""}${form.name.trim()}`;
+    try {
+      let sequenceId: string;
+      if (editingSequenceId) {
+        // 既存シーケンスを更新 + 既存メッセージを全削除
+        const putRes = await fetch("/api/line/step-sequences", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: editingSequenceId, name: fullName, status: form.status }),
+        });
+        if (!putRes.ok) {
+          const data = await putRes.json().catch(() => ({}));
+          alert(`シーケンス更新失敗: ${data.error ?? putRes.status}`);
+          return false;
+        }
+        sequenceId = editingSequenceId;
+        const existing = stepSequences.find((s) => s.id === editingSequenceId);
+        if (existing?.messages?.length) {
+          await Promise.all(
+            existing.messages.map((m) =>
+              fetch("/api/line/step-messages", {
+                method: "DELETE",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ id: m.id }),
+              }),
+            ),
+          );
+        }
+      } else {
+        // 新規シーケンス作成
+        const seqRes = await fetch("/api/line/step-sequences", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            account_id: selectedAccount.id,
+            name: fullName,
+          }),
+        });
+        if (!seqRes.ok) {
+          const data = await seqRes.json().catch(() => ({}));
+          alert(
+            `シーケンス作成失敗: ${data.error ?? seqRes.status}\n\n` +
+              `DBエラーの可能性があります。\n` +
+              `Supabase SQL Editor で supabase-schema-line-step.sql を実行してください。`,
+          );
+          return false;
+        }
+        const created = await seqRes.json();
+        sequenceId = created.id;
+      }
+
+      const baseDelay =
+        form.timingMode === "immediate"
+          ? 0
+          : form.timingDays * 1440 + form.timingHours * 60 + form.timingMinutes;
+
+      for (let i = 0; i < form.messages.length; i++) {
+        const msg = form.messages[i];
+        const msgRes = await fetch("/api/line/step-messages", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            sequence_id: sequenceId,
+            step_order: i + 1,
+            delay_minutes: baseDelay,
+            media: "LINE",
+            title: i === 0 ? form.name.trim() : `${form.name.trim()} (${i + 1}通目)`,
+            body: msg.body,
+            msg_type: msg.msgType,
+            payload: msg,
+            status: form.status,
+          }),
+        });
+        if (!msgRes.ok) {
+          const data = await msgRes.json().catch(() => ({}));
+          alert(`メッセージ${i + 1}作成失敗: ${data.error ?? msgRes.status}`);
+          return false;
+        }
+      }
+      await fetchStepSequences();
+      return true;
+    } catch (e) {
+      alert(`保存エラー: ${(e as Error).message}`);
+      return false;
+    }
+  };
+
+  // 既存シーケンスを編集画面で開く
+  const openEditStep = (seq: StepSequence) => {
+    const rawMessages = seq.messages ?? [];
+    const messages: BroadcastMessage[] = rawMessages
+      .slice()
+      .sort((a, b) => a.step_order - b.step_order)
+      .map((m) => {
+        const payload = m.payload;
+        if (payload && typeof payload === "object") {
+          return { ...emptyMessage(), ...(payload as Partial<BroadcastMessage>) };
+        }
+        return { ...emptyMessage(), body: m.body ?? "" };
+      });
+    const firstDelay = rawMessages[0]?.delay_minutes ?? 0;
+    setStepCreatorForm({
+      ...emptyBroadcast,
+      name: seq.name.replace(/^\[予約\] /, ""),
+      messages: messages.length > 0 ? messages : [emptyMessage()],
+      timingMode: firstDelay === 0 ? "immediate" : "daysAfter",
+      timingDays: Math.floor(firstDelay / 1440),
+      timingHours: Math.floor((firstDelay % 1440) / 60),
+      timingMinutes: firstDelay % 60,
+      status: seq.status === "paused" ? "paused" : "active",
+    });
+    setEditingSequenceId(seq.id);
+    setShowStepCreator(true);
+  };
+
   const openChat = (f: Follower) => {
     setSelectedUser(f);
     setMemoText(f.memo ?? "");
+    setEditingName(false);
+    setShowLabelPicker(false);
+    setMemoSaveMsg(null);
     fetchMessages(f.line_user_id);
+    // On mobile, show chat fullscreen
+    setShowMobileChat(true);
   };
 
   const downloadCSV = (type: "followers" | "messages") => {
@@ -648,18 +1280,671 @@ export default function LineDashboard() {
       f.line_user_id.includes(searchQuery);
   });
 
+  // 配信作成フォーム（ステップ配信・予約配信で共用）
+  const renderBroadcastCreator = (
+    form: BroadcastForm,
+    setForm: (f: BroadcastForm) => void,
+    onCancel: () => void,
+    onSave: () => void,
+    titleLabel: string,
+  ) => {
+    const msgTabs: { key: BroadcastMsgType; label: string }[] = [
+      { key: "text", label: "テキスト" },
+      { key: "image", label: "画像" },
+      { key: "button", label: "ボタン" },
+      { key: "carousel", label: "カルーセル" },
+      { key: "audio", label: "音声" },
+      { key: "video", label: "動画" },
+      { key: "sticker", label: "スタンプ" },
+    ];
+    const updateMsg = (mi: number, patch: Partial<BroadcastMessage>) => {
+      const next = [...form.messages];
+      next[mi] = { ...next[mi], ...patch };
+      setForm({ ...form, messages: next });
+    };
+    const addMessage = () => {
+      setForm({ ...form, messages: [...form.messages, emptyMessage()] });
+    };
+    const removeMessage = (mi: number) => {
+      if (form.messages.length <= 1) return;
+      setForm({ ...form, messages: form.messages.filter((_, j) => j !== mi) });
+    };
+    return (
+      <div className="bg-gray-50 rounded-lg border border-gray-200 overflow-hidden">
+        <div className="bg-white px-5 py-3 border-b border-gray-200">
+          <h2 className="text-sm font-bold text-gray-800">{titleLabel}</h2>
+        </div>
+        {/* 管理名称 */}
+        <div className="bg-white border-b border-gray-200 px-5 py-4">
+          <div className="flex items-center gap-4">
+            <label className="text-xs text-gray-600 font-medium w-24 flex-shrink-0">管理名称</label>
+            <input
+              type="text"
+              value={form.name}
+              onChange={(e) => setForm({ ...form, name: e.target.value })}
+              className="flex-1 border border-gray-200 rounded-md px-3 py-2 text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
+            />
+          </div>
+        </div>
+        {/* 配信条件 */}
+        <div className="px-5 py-4 border-b border-gray-200">
+          <h3 className="text-xs font-bold text-gray-700 mb-3">配信条件</h3>
+          <div className="space-y-2">
+            <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+              <input
+                type="radio"
+                name={`${titleLabel}-condition`}
+                checked={form.condition === "all"}
+                onChange={() => setForm({ ...form, condition: "all" })}
+                className="accent-blue-600"
+              />
+              シナリオ登録者全員に配信（条件を指定しない）
+            </label>
+            <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+              <input
+                type="radio"
+                name={`${titleLabel}-condition`}
+                checked={form.condition === "filtered"}
+                onChange={() => setForm({ ...form, condition: "filtered" })}
+                className="accent-blue-600"
+              />
+              条件に該当する登録者に配信（条件を指定する）
+            </label>
+            <button
+              type="button"
+              className="mt-2 px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white text-xs font-medium rounded-md transition"
+            >
+              対象者確認
+            </button>
+          </div>
+        </div>
+        {/* 配信メッセージ */}
+        <div className="px-5 py-4 border-b border-gray-200">
+          <h3 className="text-xs font-bold text-gray-700 mb-3">配信メッセージ</h3>
+          <div className="flex items-center gap-4 mb-3">
+            <label className="text-xs text-gray-600 w-24 flex-shrink-0">カスタム送信者</label>
+            <select
+              value={form.customSender}
+              onChange={(e) => setForm({ ...form, customSender: e.target.value })}
+              className="flex-1 border border-gray-200 rounded-md px-3 py-2 text-sm bg-white"
+            >
+              <option value="">利用しない（デフォルト送信者で送信）</option>
+            </select>
+          </div>
+          {/* メッセージごとに繰り返し表示 */}
+          {form.messages.map((msg, mi) => (
+            <div key={mi} className="mb-4">
+              <div className="grid grid-cols-1 lg:grid-cols-[1fr_280px] gap-4">
+                <div className="bg-white border border-gray-200 rounded-md">
+                  <div className="px-3 pt-2 flex items-center justify-between">
+                    <span className="text-xs text-gray-500">メッセージ{mi + 1}</span>
+                    {form.messages.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => removeMessage(mi)}
+                        className="text-[10px] text-red-500 hover:text-red-700"
+                      >
+                        このメッセージを削除
+                      </button>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-1 border-b border-gray-200 px-3 overflow-x-auto">
+                    {msgTabs.map((t) => (
+                      <button
+                        key={t.key}
+                        type="button"
+                        onClick={() => updateMsg(mi, { msgType: t.key })}
+                        className={`px-2 py-2 text-xs font-medium border-b-2 transition whitespace-nowrap ${
+                          msg.msgType === t.key
+                            ? "border-blue-500 text-blue-600"
+                            : "border-transparent text-gray-500 hover:text-gray-700"
+                        }`}
+                      >
+                        {t.label}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="p-3">
+                    {msg.msgType === "text" && (
+                      <div>
+                        <label className="text-xs text-gray-600 mb-1 flex items-center gap-1">
+                          本文 <span className="text-[10px] text-red-500 bg-red-50 px-1 rounded">必須</span>
+                        </label>
+                        <textarea
+                          value={msg.body}
+                          onChange={(e) => updateMsg(mi, { body: e.target.value })}
+                          rows={6}
+                          placeholder="テキストを入力"
+                          className="w-full border border-gray-200 rounded-md px-3 py-2 text-sm resize-none focus:border-blue-400 focus:outline-none"
+                        />
+                        <p className="text-[10px] text-gray-400 mt-1">① 置き換え文字 {"{display_name}"} 等が使えます</p>
+                      </div>
+                    )}
+                    {msg.msgType === "image" && (
+                      <div className="space-y-2">
+                        <label className="text-xs text-gray-600">画像URL (originalContentUrl) <span className="text-[10px] text-red-500">必須</span></label>
+                        <input
+                          type="url"
+                          value={msg.imageUrl}
+                          onChange={(e) => updateMsg(mi, { imageUrl: e.target.value })}
+                          placeholder="https://example.com/image.jpg"
+                          className="w-full border border-gray-200 rounded-md px-3 py-2 text-sm focus:border-blue-400 focus:outline-none"
+                        />
+                        <p className="text-[10px] text-gray-400">JPEG/PNG、最大10MB、HTTPS必須。LINE Messaging API仕様準拠。</p>
+                      </div>
+                    )}
+                    {msg.msgType === "video" && (
+                      <div className="space-y-2">
+                        <label className="text-xs text-gray-600">動画URL (originalContentUrl) <span className="text-[10px] text-red-500">必須</span></label>
+                        <input
+                          type="url"
+                          value={msg.videoUrl}
+                          onChange={(e) => updateMsg(mi, { videoUrl: e.target.value })}
+                          placeholder="https://example.com/video.mp4"
+                          className="w-full border border-gray-200 rounded-md px-3 py-2 text-sm focus:border-blue-400 focus:outline-none"
+                        />
+                        <label className="text-xs text-gray-600">プレビュー画像URL (previewImageUrl) <span className="text-[10px] text-red-500">必須</span></label>
+                        <input
+                          type="url"
+                          value={msg.videoPreviewUrl}
+                          onChange={(e) => updateMsg(mi, { videoPreviewUrl: e.target.value })}
+                          placeholder="https://example.com/preview.jpg"
+                          className="w-full border border-gray-200 rounded-md px-3 py-2 text-sm focus:border-blue-400 focus:outline-none"
+                        />
+                        <p className="text-[10px] text-gray-400">MP4、最大200MB、HTTPS必須。</p>
+                      </div>
+                    )}
+                    {msg.msgType === "audio" && (
+                      <div className="space-y-2">
+                        <div>
+                          <label className="text-xs text-gray-600">音声URL (m4a) <span className="text-[10px] text-red-500">必須</span></label>
+                          <input
+                            type="url"
+                            value={msg.audioUrl}
+                            onChange={(e) => updateMsg(mi, { audioUrl: e.target.value })}
+                            placeholder="https://example.com/audio.m4a"
+                            className="w-full border border-gray-200 rounded-md px-3 py-2 text-sm focus:border-blue-400 focus:outline-none"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-xs text-gray-600">再生時間（ミリ秒）</label>
+                          <input
+                            type="number"
+                            value={msg.audioDuration}
+                            onChange={(e) => updateMsg(mi, { audioDuration: Number(e.target.value) })}
+                            className="w-full border border-gray-200 rounded-md px-3 py-2 text-sm focus:border-blue-400 focus:outline-none"
+                          />
+                        </div>
+                        <p className="text-[10px] text-gray-400">M4A形式、最大200MB、HTTPS必須。</p>
+                      </div>
+                    )}
+                    {msg.msgType === "sticker" && (
+                      <div className="space-y-2">
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <label className="text-xs text-gray-600">packageId</label>
+                            <input
+                              type="text"
+                              value={msg.stickerPackageId}
+                              onChange={(e) => updateMsg(mi, { stickerPackageId: e.target.value })}
+                              className="w-full border border-gray-200 rounded-md px-3 py-2 text-sm focus:border-blue-400 focus:outline-none"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-xs text-gray-600">stickerId</label>
+                            <input
+                              type="text"
+                              value={msg.stickerId}
+                              onChange={(e) => updateMsg(mi, { stickerId: e.target.value })}
+                              className="w-full border border-gray-200 rounded-md px-3 py-2 text-sm focus:border-blue-400 focus:outline-none"
+                            />
+                          </div>
+                        </div>
+                        <p className="text-[10px] text-gray-400">
+                          一覧: <a className="text-blue-500 underline" href="https://developers.line.biz/en/docs/messaging-api/sticker-list/" target="_blank" rel="noreferrer">LINE sticker list</a>
+                        </p>
+                      </div>
+                    )}
+                    {msg.msgType === "button" && (
+                      <div className="space-y-2">
+                        <label className="text-xs text-gray-600">メッセージ本文</label>
+                        <textarea
+                          value={msg.buttonText}
+                          onChange={(e) => updateMsg(mi, { buttonText: e.target.value })}
+                          rows={2}
+                          placeholder="ボタンメッセージの本文"
+                          className="w-full border border-gray-200 rounded-md px-3 py-2 text-sm resize-none focus:border-blue-400 focus:outline-none"
+                        />
+                        <div className="text-xs text-gray-600 pt-1">ボタン（最大4つ）</div>
+                        {msg.buttonActions.map((act, i) => (
+                          <div key={i} className="flex gap-2">
+                            <input
+                              type="text"
+                              value={act.label}
+                              onChange={(e) => {
+                                const next = [...msg.buttonActions];
+                                next[i] = { ...next[i], label: e.target.value };
+                                updateMsg(mi, { buttonActions: next });
+                              }}
+                              placeholder="ラベル"
+                              className="flex-1 border border-gray-200 rounded-md px-2 py-1.5 text-xs"
+                            />
+                            <input
+                              type="url"
+                              value={act.uri}
+                              onChange={(e) => {
+                                const next = [...msg.buttonActions];
+                                next[i] = { ...next[i], uri: e.target.value };
+                                updateMsg(mi, { buttonActions: next });
+                              }}
+                              placeholder="URL"
+                              className="flex-[2] border border-gray-200 rounded-md px-2 py-1.5 text-xs"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => updateMsg(mi, { buttonActions: msg.buttonActions.filter((_, j) => j !== i) })}
+                              className="px-2 text-xs text-red-500 hover:text-red-700"
+                            >
+                              削除
+                            </button>
+                          </div>
+                        ))}
+                        {msg.buttonActions.length < 4 && (
+                          <button
+                            type="button"
+                            onClick={() => updateMsg(mi, { buttonActions: [...msg.buttonActions, { label: "", uri: "" }] })}
+                            className="text-xs text-blue-600 hover:text-blue-800"
+                          >
+                            + ボタンを追加
+                          </button>
+                        )}
+                      </div>
+                    )}
+                    {msg.msgType === "carousel" && (
+                      <div className="space-y-3">
+                        {msg.carouselColumns.map((col, i) => (
+                          <div key={i} className="border border-gray-200 rounded-md p-2 space-y-1.5">
+                            <div className="flex items-center justify-between">
+                              <span className="text-xs font-medium text-gray-600">カラム{i + 1}</span>
+                              {msg.carouselColumns.length > 1 && (
+                                <button
+                                  type="button"
+                                  onClick={() => updateMsg(mi, { carouselColumns: msg.carouselColumns.filter((_, j) => j !== i) })}
+                                  className="text-[10px] text-red-500"
+                                >
+                                  削除
+                                </button>
+                              )}
+                            </div>
+                            <input
+                              type="text"
+                              value={col.title}
+                              onChange={(e) => {
+                                const next = [...msg.carouselColumns];
+                                next[i] = { ...next[i], title: e.target.value };
+                                updateMsg(mi, { carouselColumns: next });
+                              }}
+                              placeholder="タイトル"
+                              className="w-full border border-gray-200 rounded-md px-2 py-1 text-xs"
+                            />
+                            <textarea
+                              value={col.text}
+                              onChange={(e) => {
+                                const next = [...msg.carouselColumns];
+                                next[i] = { ...next[i], text: e.target.value };
+                                updateMsg(mi, { carouselColumns: next });
+                              }}
+                              rows={2}
+                              placeholder="説明文"
+                              className="w-full border border-gray-200 rounded-md px-2 py-1 text-xs resize-none"
+                            />
+                            <input
+                              type="url"
+                              value={col.imageUrl}
+                              onChange={(e) => {
+                                const next = [...msg.carouselColumns];
+                                next[i] = { ...next[i], imageUrl: e.target.value };
+                                updateMsg(mi, { carouselColumns: next });
+                              }}
+                              placeholder="画像URL（任意）"
+                              className="w-full border border-gray-200 rounded-md px-2 py-1 text-xs"
+                            />
+                            <div className="flex gap-1.5">
+                              <input
+                                type="text"
+                                value={col.label}
+                                onChange={(e) => {
+                                  const next = [...msg.carouselColumns];
+                                  next[i] = { ...next[i], label: e.target.value };
+                                  updateMsg(mi, { carouselColumns: next });
+                                }}
+                                placeholder="ボタン名"
+                                className="flex-1 border border-gray-200 rounded-md px-2 py-1 text-xs"
+                              />
+                              <input
+                                type="url"
+                                value={col.uri}
+                                onChange={(e) => {
+                                  const next = [...msg.carouselColumns];
+                                  next[i] = { ...next[i], uri: e.target.value };
+                                  updateMsg(mi, { carouselColumns: next });
+                                }}
+                                placeholder="ボタンURL"
+                                className="flex-[2] border border-gray-200 rounded-md px-2 py-1 text-xs"
+                              />
+                            </div>
+                          </div>
+                        ))}
+                        {msg.carouselColumns.length < 10 && (
+                          <button
+                            type="button"
+                            onClick={() => updateMsg(mi, { carouselColumns: [...msg.carouselColumns, { title: "", text: "", imageUrl: "", uri: "", label: "詳細" }] })}
+                            className="text-xs text-blue-600 hover:text-blue-800"
+                          >
+                            + カラムを追加（最大10）
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* LINE風プレビュー */}
+                <div className="bg-[#8CABD8] rounded-lg p-3 flex flex-col gap-2 min-h-[320px]">
+                  <div className="text-[10px] text-white/80 text-center font-medium">プレビュー</div>
+                  <div className="flex items-start gap-2">
+                    <div className="w-8 h-8 rounded-full bg-white/80 flex items-center justify-center flex-shrink-0 text-[10px] text-gray-500">L</div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-[10px] text-white/90 mb-0.5">{selectedAccount?.account_name ?? "LINE公式"}</div>
+                      {msg.msgType === "text" && (
+                        <div className="inline-block max-w-full bg-white rounded-2xl rounded-tl-sm px-3 py-2 text-xs text-gray-800 whitespace-pre-wrap break-words shadow-sm">
+                          {msg.body || <span className="text-gray-400">テキストを入力するとここにプレビューされます</span>}
+                        </div>
+                      )}
+                      {msg.msgType === "image" && (
+                        msg.imageUrl ? (
+                          <img src={msg.imageUrl} alt="preview" className="max-w-full rounded-lg shadow-sm" />
+                        ) : (
+                          <div className="inline-block bg-white rounded-lg p-6 text-[10px] text-gray-400 shadow-sm">画像URL未入力</div>
+                        )
+                      )}
+                      {msg.msgType === "video" && (
+                        msg.videoPreviewUrl ? (
+                          <div className="relative inline-block">
+                            <img src={msg.videoPreviewUrl} alt="video" className="max-w-full rounded-lg shadow-sm" />
+                            <div className="absolute inset-0 flex items-center justify-center">
+                              <div className="w-10 h-10 bg-black/60 rounded-full flex items-center justify-center text-white">▶</div>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="inline-block bg-white rounded-lg p-6 text-[10px] text-gray-400 shadow-sm">動画プレビュー画像URL未入力</div>
+                        )
+                      )}
+                      {msg.msgType === "audio" && (
+                        <div className="inline-block bg-white rounded-2xl px-3 py-2 text-xs shadow-sm">
+                          <div className="flex items-center gap-2">
+                            <div className="w-8 h-8 rounded-full bg-[#06C755] flex items-center justify-center text-white">▶</div>
+                            <span className="text-gray-500">{(msg.audioDuration / 1000).toFixed(1)}秒</span>
+                          </div>
+                        </div>
+                      )}
+                      {msg.msgType === "sticker" && msg.stickerPackageId && msg.stickerId && (
+                        <img
+                          src={`https://stickershop.line-scdn.net/stickershop/v1/sticker/${msg.stickerId}/android/sticker.png`}
+                          alt="sticker"
+                          className="w-24 h-24 object-contain"
+                        />
+                      )}
+                      {msg.msgType === "button" && (
+                        <div className="inline-block bg-white rounded-lg overflow-hidden shadow-sm w-full max-w-[220px]">
+                          <div className="p-3 text-xs text-gray-800 whitespace-pre-wrap break-words">
+                            {msg.buttonText || <span className="text-gray-400">本文を入力</span>}
+                          </div>
+                          <div className="border-t border-gray-100">
+                            {msg.buttonActions.map((a, i) => (
+                              <div key={i} className="px-3 py-2 text-xs text-[#06C755] border-b border-gray-100 last:border-b-0 text-center">
+                                {a.label || "ボタン"}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      {msg.msgType === "carousel" && (
+                        <div className="flex gap-2 overflow-x-auto pb-2">
+                          {msg.carouselColumns.map((c, i) => (
+                            <div key={i} className="flex-shrink-0 w-36 bg-white rounded-lg overflow-hidden shadow-sm">
+                              {c.imageUrl && <img src={c.imageUrl} alt="" className="w-full h-20 object-cover" />}
+                              <div className="p-2">
+                                <div className="text-xs font-bold text-gray-800 truncate">{c.title || "タイトル"}</div>
+                                <div className="text-[10px] text-gray-500 line-clamp-2">{c.text || "説明"}</div>
+                              </div>
+                              <div className="border-t border-gray-100 px-2 py-1.5 text-[10px] text-[#06C755] text-center">
+                                {c.label || "詳細"}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ))}
+          <div className="flex gap-2 mt-1">
+            <button
+              type="button"
+              onClick={addMessage}
+              className="px-3 py-1.5 text-xs text-green-600 border border-green-600 rounded-md hover:bg-green-50"
+            >
+              + 追加（{form.messages.length + 1}通目）
+            </button>
+          </div>
+        </div>
+        {/* 送信のタイミング */}
+        <div className="px-5 py-4 border-b border-gray-200">
+          <h3 className="text-xs font-bold text-gray-700 mb-3">
+            送信のタイミング <span className="text-[10px] text-red-500 bg-red-50 px-1 rounded">必須</span>
+          </h3>
+          <div className="space-y-2">
+            <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+              <input
+                type="radio"
+                name={`${titleLabel}-timing`}
+                checked={form.timingMode === "immediate"}
+                onChange={() => setForm({ ...form, timingMode: "immediate" })}
+                className="accent-blue-600"
+              />
+              シナリオ登録直後
+            </label>
+            <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+              <input
+                type="radio"
+                name={`${titleLabel}-timing`}
+                checked={form.timingMode === "datetime"}
+                onChange={() => setForm({ ...form, timingMode: "datetime" })}
+                className="accent-blue-600"
+              />
+              送信日時を指定
+              {form.timingMode === "datetime" && (
+                <input
+                  type="datetime-local"
+                  value={form.timingDate}
+                  onChange={(e) => setForm({ ...form, timingDate: e.target.value })}
+                  className="ml-2 border border-gray-200 rounded-md px-2 py-1 text-xs"
+                />
+              )}
+            </label>
+            <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+              <input
+                type="radio"
+                name={`${titleLabel}-timing`}
+                checked={form.timingMode === "daysAfter"}
+                onChange={() => setForm({ ...form, timingMode: "daysAfter" })}
+                className="accent-blue-600"
+              />
+              送信日を指定
+              {form.timingMode === "daysAfter" && (
+                <span className="ml-2 flex items-center gap-1 text-xs">
+                  （登録
+                  <input
+                    type="number"
+                    min={0}
+                    value={form.timingDays}
+                    onChange={(e) => setForm({ ...form, timingDays: Number(e.target.value) })}
+                    className="w-12 border border-gray-200 rounded px-1 py-0.5 text-xs"
+                  />
+                  日後の
+                  <input
+                    type="number"
+                    min={0}
+                    max={23}
+                    value={form.timingHours}
+                    onChange={(e) => setForm({ ...form, timingHours: Number(e.target.value) })}
+                    className="w-12 border border-gray-200 rounded px-1 py-0.5 text-xs"
+                  />
+                  時
+                  <input
+                    type="number"
+                    min={0}
+                    max={59}
+                    value={form.timingMinutes}
+                    onChange={(e) => setForm({ ...form, timingMinutes: Number(e.target.value) })}
+                    className="w-12 border border-gray-200 rounded px-1 py-0.5 text-xs"
+                  />
+                  分）
+                </span>
+              )}
+            </label>
+          </div>
+        </div>
+        {/* 追加オプション */}
+        <div className="px-5 py-4 border-b border-gray-200 space-y-3 text-sm">
+          <div className="flex items-center gap-4">
+            <label className="text-xs text-gray-600 w-36 flex-shrink-0">既存読者への送信</label>
+            <select
+              value={form.existingReaderAction}
+              onChange={(e) => setForm({ ...form, existingReaderAction: e.target.value })}
+              className="flex-1 border border-gray-200 rounded-md px-3 py-2 text-sm bg-white"
+            >
+              <option>配信時間前の読者：配信予約　配信時間後の読者：配信しない</option>
+              <option>配信時間前の読者：配信予約　配信時間後の読者：即時配信</option>
+            </select>
+          </div>
+          <div className="flex items-center gap-4">
+            <label className="text-xs text-gray-600 w-36 flex-shrink-0">送信後に実行するアクション</label>
+            <select
+              value={form.postAction}
+              onChange={(e) => setForm({ ...form, postAction: e.target.value })}
+              className="flex-1 border border-gray-200 rounded-md px-3 py-2 text-sm bg-white"
+            >
+              <option>実行しない</option>
+            </select>
+          </div>
+          <div className="flex items-center gap-4">
+            <label className="text-xs text-gray-600 w-36 flex-shrink-0">URL置換ドメイン</label>
+            <select
+              value={form.urlDomain}
+              onChange={(e) => setForm({ ...form, urlDomain: e.target.value })}
+              className="flex-1 border border-gray-200 rounded-md px-3 py-2 text-sm bg-white"
+            >
+              <option>デフォルト</option>
+            </select>
+          </div>
+          <div className="flex items-center gap-4">
+            <label className="text-xs text-gray-600 w-36 flex-shrink-0">テスト送信</label>
+            <div className="flex-1 flex items-center gap-2">
+              <select
+                value={form.testTargetId}
+                onChange={(e) => setForm({ ...form, testTargetId: e.target.value })}
+                className="flex-1 border border-gray-200 rounded-md px-3 py-2 text-sm bg-white"
+              >
+                <option value="">
+                  {testFollowers.length === 0
+                    ? "テストアカウントが登録されていません（友だち一覧からテストアカウントに追加）"
+                    : "テスト送信先アカウントを選択してください"}
+                </option>
+                {testFollowers.map((f) => (
+                  <option key={f.id} value={f.line_user_id}>
+                    {f.display_name ?? "名前なし"}（{f.line_user_id.slice(0, 10)}...）
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                disabled={!form.testTargetId || !form.messages[0]?.body.trim()}
+                onClick={async () => {
+                  try {
+                    const res = await fetch("/api/line/send", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        line_user_id: form.testTargetId,
+                        account_id: selectedAccount?.id,
+                        message: form.messages[0]?.body ?? "",
+                      }),
+                    });
+                    if (res.ok) {
+                      alert("テスト送信しました");
+                    } else {
+                      const data = await res.json().catch(() => ({}));
+                      alert(`テスト送信失敗: ${data.error ?? res.status}`);
+                    }
+                  } catch (e) {
+                    alert(`送信エラー: ${(e as Error).message}`);
+                  }
+                }}
+                className="px-3 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white text-xs font-medium rounded-md"
+              >
+                送信
+              </button>
+            </div>
+          </div>
+          <div className="flex items-center gap-4">
+            <label className="text-xs text-gray-600 w-36 flex-shrink-0">ステータス</label>
+            <select
+              value={form.status}
+              onChange={(e) => setForm({ ...form, status: e.target.value as "active" | "paused" })}
+              className="flex-1 border border-gray-200 rounded-md px-3 py-2 text-sm bg-white"
+            >
+              <option value="active">稼働中</option>
+              <option value="paused">一時停止</option>
+            </select>
+          </div>
+        </div>
+        {/* アクションボタン */}
+        <div className="px-5 py-4 bg-white flex gap-2">
+          <button
+            type="button"
+            onClick={onSave}
+            className="px-6 py-2 bg-green-600 hover:bg-green-700 text-white text-sm font-medium rounded-md transition"
+          >
+            保存
+          </button>
+          <button
+            type="button"
+            onClick={onCancel}
+            className="px-5 py-2 bg-gray-100 hover:bg-gray-200 text-gray-600 text-sm rounded-md transition"
+          >
+            キャンセル
+          </button>
+        </div>
+      </div>
+    );
+  };
+
   const StatusBadge = ({ status }: { status: string }) => {
     const styles: Record<string, string> = {
       following: "bg-green-100 text-green-700",
       unfollowed: "bg-gray-100 text-gray-500",
       blocked: "bg-red-100 text-red-600",
     };
-    const labels: Record<string, string> = {
+    const labelsMap: Record<string, string> = {
       following: "友だち", unfollowed: "解除", blocked: "ブロック",
     };
     return (
       <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${styles[status] ?? styles.unfollowed}`}>
-        {labels[status] ?? status}
+        {labelsMap[status] ?? status}
       </span>
     );
   };
@@ -674,6 +1959,8 @@ export default function LineDashboard() {
     { key: "schedule", label: "予約配信", icon: Icons.schedule },
     { key: "friend-page", label: "友だち追加ページ", icon: Icons.friendAdd },
     { key: "labels", label: "ラベル管理", icon: Icons.label },
+    { key: "templates", label: "定型文管理", icon: Icons.document },
+    { key: "inflow", label: "流入経路", icon: Icons.friendAdd },
   ];
 
   // ============================================================
@@ -681,8 +1968,30 @@ export default function LineDashboard() {
   // ============================================================
   return (
     !authChecked ? <div className="min-h-screen bg-[#1e2744] flex items-center justify-center"><div className="text-white/50 text-sm">読み込み中...</div></div> : <div className="min-h-screen h-screen bg-[#f5f6fa] text-gray-800 flex overflow-hidden">
+
+      {/* Hidden file inputs for image/video */}
+      <input
+        ref={imageInputRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={handleImageSelect}
+      />
+      <input
+        ref={videoInputRef}
+        type="file"
+        accept="video/*"
+        className="hidden"
+        onChange={handleVideoSelect}
+      />
+
+      {/* ===== Mobile overlay for sidebar ===== */}
+      {showMobileSidebar && (
+        <div className="fixed inset-0 bg-black/40 z-40 md:hidden" onClick={() => setShowMobileSidebar(false)} />
+      )}
+
       {/* ===== 左サイドバー ===== */}
-      <aside className="w-52 bg-[#1e2744] text-white flex flex-col flex-shrink-0">
+      <aside className={`${showMobileSidebar ? "translate-x-0" : "-translate-x-full"} md:translate-x-0 fixed md:relative z-50 md:z-auto w-52 bg-[#1e2744] text-white flex flex-col flex-shrink-0 h-full transition-transform duration-200`}>
         {/* ロゴ + 案件名 */}
         <div className="px-4 py-3 border-b border-white/10">
           <div className="flex items-center gap-2.5">
@@ -693,6 +2002,10 @@ export default function LineDashboard() {
               <div className="font-bold text-sm text-white truncate">{project?.name || "LINE ハーネス"}</div>
               <div className="text-[10px] text-white/40">LINE Harness</div>
             </div>
+            {/* Mobile close button */}
+            <button onClick={() => setShowMobileSidebar(false)} className="md:hidden text-white/50 hover:text-white">
+              {Icons.close}
+            </button>
           </div>
           <button
             onClick={() => router.push("/line/projects")}
@@ -710,7 +2023,7 @@ export default function LineDashboard() {
                 <span className="text-[10px] uppercase tracking-wider text-white/40 font-medium">シナリオ管理</span>
               </div>
               <button
-                onClick={() => { setMainView("accounts"); setSelectedAccount(null); setSelectedUser(null); }}
+                onClick={() => { setMainView("accounts"); setSelectedAccount(null); setSelectedUser(null); setShowMobileSidebar(false); }}
                 className={`w-full flex items-center gap-2.5 px-4 py-2 text-[13px] transition-colors ${mainView === "accounts" ? "bg-white/10 text-white border-l-[3px] border-[#06C755]" : "text-white/60 hover:text-white hover:bg-white/5"}`}
               >
                 {Icons.users}
@@ -733,7 +2046,7 @@ export default function LineDashboard() {
                 <span className="text-[10px] uppercase tracking-wider text-white/40 font-medium">設定</span>
               </div>
               <button
-                onClick={() => setMainView("settings")}
+                onClick={() => { setMainView("settings"); setShowMobileSidebar(false); }}
                 className={`w-full flex items-center gap-2.5 px-4 py-2 text-[13px] transition-colors ${mainView === "settings" ? "bg-white/10 text-white border-l-[3px] border-[#06C755]" : "text-white/60 hover:text-white hover:bg-white/5"}`}
               >
                 {Icons.settings}
@@ -744,7 +2057,7 @@ export default function LineDashboard() {
             /* アカウント詳細時のサイドバー */
             <>
               <button
-                onClick={() => { setMainView("accounts"); setSelectedAccount(null); setSelectedUser(null); }}
+                onClick={() => { setMainView("accounts"); setSelectedAccount(null); setSelectedUser(null); setShowMobileSidebar(false); }}
                 className="w-full flex items-center gap-2 px-4 py-2.5 text-[13px] text-white/50 hover:text-white hover:bg-white/5 transition-colors border-b border-white/10"
               >
                 {Icons.back}
@@ -764,7 +2077,7 @@ export default function LineDashboard() {
               {accountDetailMenu.map((item) => (
                 <button
                   key={item.key}
-                  onClick={() => { setAccountSubView(item.key); setSelectedUser(null); }}
+                  onClick={() => { setAccountSubView(item.key); setSelectedUser(null); setShowMobileSidebar(false); }}
                   className={`w-full flex items-center gap-2.5 px-4 py-2.5 text-[13px] transition-colors ${accountSubView === item.key ? "bg-[#4f8ff7] text-white" : "text-white/60 hover:text-white hover:bg-white/5"}`}
                 >
                   {item.icon}
@@ -776,7 +2089,7 @@ export default function LineDashboard() {
                 <span className="text-[10px] uppercase tracking-wider text-white/40 font-medium">その他</span>
               </div>
               <button
-                onClick={() => { setMainView("settings"); }}
+                onClick={() => { setMainView("settings"); setShowMobileSidebar(false); }}
                 className="w-full flex items-center gap-2.5 px-4 py-2 text-[13px] text-white/60 hover:text-white hover:bg-white/5 transition-colors"
               >
                 {Icons.settings}
@@ -794,12 +2107,20 @@ export default function LineDashboard() {
       {/* ===== メインエリア ===== */}
       <div className="flex-1 flex flex-col min-w-0">
 
+        {/* Mobile top bar with hamburger */}
+        <div className="md:hidden bg-[#1e2744] text-white px-3 py-2 flex items-center gap-3 flex-shrink-0">
+          <button onClick={() => setShowMobileSidebar(true)} className="p-1">
+            {Icons.menu}
+          </button>
+          <span className="text-sm font-medium truncate">{project?.name || "LINE ハーネス"}</span>
+        </div>
+
         {/* ============================================================ */}
         {/* アカウント一覧 */}
         {/* ============================================================ */}
         {mainView === "accounts" && (
           <>
-            <header className="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between flex-shrink-0">
+            <header className="bg-white border-b border-gray-200 px-4 md:px-6 py-3 flex items-center justify-between flex-shrink-0">
               <h1 className="text-base font-bold text-gray-800">アカウント一覧</h1>
               <div className="flex items-center gap-2">
                 <button
@@ -807,18 +2128,18 @@ export default function LineDashboard() {
                   className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded-md transition"
                 >
                   {Icons.plus}
-                  追加
+                  <span className="hidden sm:inline">追加</span>
                 </button>
                 <button
                   onClick={() => setShowGroupManager(true)}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white text-xs font-medium rounded-md transition"
+                  className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white text-xs font-medium rounded-md transition"
                 >
                   {Icons.folder}
                   グループ管理
                 </button>
                 <button
                   onClick={enterSortMode}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-orange-500 hover:bg-orange-600 text-white text-xs font-medium rounded-md transition"
+                  className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 bg-orange-500 hover:bg-orange-600 text-white text-xs font-medium rounded-md transition"
                 >
                   {Icons.sort}
                   表示順変更
@@ -826,7 +2147,7 @@ export default function LineDashboard() {
               </div>
             </header>
 
-            <main className="flex-1 overflow-y-auto p-6">
+            <main className="flex-1 overflow-y-auto p-4 md:p-6">
               {/* アカウント追加モーダル */}
               {showAddAccount && (
                 <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
@@ -1141,7 +2462,7 @@ export default function LineDashboard() {
         {mainView === "account-detail" && accountSubView === "chat" && (
           <div className="flex-1 flex min-h-0">
             {/* --- チャットリスト（左） --- */}
-            <div className="w-72 bg-white border-r border-gray-200 flex flex-col flex-shrink-0">
+            <div className={`${showMobileChat ? "hidden" : "flex"} md:flex w-full md:w-72 bg-white border-r border-gray-200 flex-col flex-shrink-0`}>
               <div className="px-3 py-3 border-b border-gray-200">
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-sm font-bold text-gray-700">LINE チャット</span>
@@ -1204,38 +2525,52 @@ export default function LineDashboard() {
             {/* --- チャットメイン（中央） --- */}
             {selectedUser ? (
               <>
-                <div className="flex-1 flex flex-col min-w-0">
+                <div className={`${!showMobileChat ? "hidden" : "flex"} md:flex flex-1 flex-col min-w-0`}>
                   {/* チャットヘッダー */}
-                  <div className="bg-white border-b border-gray-200 px-4 py-2.5 flex items-center gap-3 flex-shrink-0">
-                    <span className="text-sm text-gray-500">チャット内容</span>
-                    <div className="flex items-center gap-3 ml-auto">
+                  <div className="bg-white border-b border-gray-200 px-3 md:px-4 py-2.5 flex items-center gap-3 flex-shrink-0">
+                    {/* Mobile back button */}
+                    <button
+                      onClick={() => { setShowMobileChat(false); setShowMobileProfile(false); }}
+                      className="md:hidden p-1 text-gray-500 hover:text-gray-700"
+                    >
+                      {Icons.back}
+                    </button>
+                    <span className="text-sm text-gray-500 truncate">{selectedUser.display_name ?? "チャット内容"}</span>
+                    <div className="flex items-center gap-2 md:gap-3 ml-auto flex-shrink-0">
                       {(unreadCounts[selectedUser.line_user_id] ?? 0) > 0 && (
-                        <span className="text-xs text-red-500 font-medium">
+                        <span className="text-xs text-red-500 font-medium hidden sm:inline">
                           未読 {unreadCounts[selectedUser.line_user_id]} 件
                         </span>
                       )}
                       <button
                         onClick={() => markAsRead(selectedUser.line_user_id)}
                         disabled={(unreadCounts[selectedUser.line_user_id] ?? 0) === 0}
-                        className={`px-3 py-1 text-xs font-medium rounded-md transition ${
+                        className={`px-2 md:px-3 py-1 text-xs font-medium rounded-md transition ${
                           (unreadCounts[selectedUser.line_user_id] ?? 0) > 0
                             ? "bg-blue-600 hover:bg-blue-700 text-white"
                             : "bg-gray-100 text-gray-400 cursor-not-allowed"
                         }`}
                       >
-                        既読にする
+                        既読
                       </button>
                       <button
                         onClick={() => toggleNeedsAction(selectedUser.line_user_id)}
-                        className={`px-3 py-1 text-xs font-medium rounded-md border-2 transition ${
+                        className={`px-2 md:px-3 py-1 text-xs font-medium rounded-md border-2 transition ${
                           needsAction.has(selectedUser.line_user_id)
                             ? "bg-red-50 text-red-600 border-red-500 hover:bg-red-100"
                             : "bg-white text-red-500 border-red-400 hover:bg-red-50"
                         }`}
                       >
-                        {needsAction.has(selectedUser.line_user_id) ? "要対応 解除" : "要対応"}
+                        {needsAction.has(selectedUser.line_user_id) ? "解除" : "要対応"}
                       </button>
-                      <span className="text-xs text-gray-400">{messages.length} 件</span>
+                      {/* Mobile profile toggle */}
+                      <button
+                        onClick={() => setShowMobileProfile(!showMobileProfile)}
+                        className="md:hidden p-1 text-gray-500 hover:text-blue-600"
+                      >
+                        {Icons.user}
+                      </button>
+                      <span className="text-xs text-gray-400 hidden md:inline">{messages.length} 件</span>
                     </div>
                   </div>
 
@@ -1291,11 +2626,129 @@ export default function LineDashboard() {
                   {/* 送信ツールバー + 入力 */}
                   <div className="bg-white border-t border-gray-200 flex-shrink-0">
                     {/* ツールボタン */}
-                    <div className="flex items-center gap-1 px-3 py-1.5 border-b border-gray-100">
-                      <button className="p-1.5 hover:bg-gray-100 rounded-md text-gray-500 transition" title="画像添付">{Icons.image}</button>
-                      <button className="p-1.5 hover:bg-gray-100 rounded-md text-gray-500 transition" title="動画添付">{Icons.video}</button>
-                      <button className="p-1.5 hover:bg-gray-100 rounded-md text-gray-500 transition" title="定型文">{Icons.template}</button>
-                      <button className="p-1.5 hover:bg-gray-100 rounded-md text-gray-500 transition" title="絵文字">{Icons.emoji}</button>
+                    <div className="flex items-center gap-1 px-3 py-1.5 border-b border-gray-100 relative">
+                      <button onClick={() => imageInputRef.current?.click()} className="p-1.5 hover:bg-gray-100 rounded-md text-gray-500 transition" title="画像添付">{Icons.image}</button>
+                      <button onClick={() => videoInputRef.current?.click()} className="p-1.5 hover:bg-gray-100 rounded-md text-gray-500 transition" title="動画添付">{Icons.video}</button>
+
+                      {/* Template popup trigger */}
+                      <div className="relative" ref={templatePopupRef}>
+                        <button
+                          onClick={() => { setShowTemplatePopup(!showTemplatePopup); setShowEmojiPopup(false); }}
+                          className={`p-1.5 hover:bg-gray-100 rounded-md transition ${showTemplatePopup ? "bg-blue-50 text-blue-600" : "text-gray-500"}`}
+                          title="定型文"
+                        >
+                          {Icons.template}
+                        </button>
+                        {showTemplatePopup && (
+                          <div className="absolute bottom-full left-0 mb-1 w-64 bg-white rounded-lg shadow-xl border border-gray-200 z-30 max-h-64 overflow-y-auto">
+                            <div className="px-3 py-2 border-b border-gray-100 text-xs font-medium text-gray-500">定型文を選択</div>
+                            {templates.length === 0 ? (
+                              <div className="px-3 py-4 text-center text-xs text-gray-400">
+                                定型文がありません。<br />サイドバーの「定型文管理」から作成してください。
+                              </div>
+                            ) : (
+                              templates.map((tpl) => (
+                                <button
+                                  key={tpl.id}
+                                  onClick={() => insertTemplate(tpl.body)}
+                                  className="w-full text-left px-3 py-2.5 hover:bg-blue-50 border-b border-gray-50 transition"
+                                >
+                                  <div className="text-sm font-medium text-gray-800 truncate">{tpl.title}</div>
+                                  <div className="text-xs text-gray-400 truncate mt-0.5">{tpl.body}</div>
+                                </button>
+                              ))
+                            )}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Emoji popup trigger */}
+                      <div className="relative" ref={emojiPopupRef}>
+                        <button
+                          onClick={() => { setShowEmojiPopup(!showEmojiPopup); setShowTemplatePopup(false); setShowStickerPopup(false); }}
+                          className={`p-1.5 hover:bg-gray-100 rounded-md transition ${showEmojiPopup ? "bg-blue-50 text-blue-600" : "text-gray-500"}`}
+                          title="絵文字"
+                        >
+                          {Icons.emoji}
+                        </button>
+                        {showEmojiPopup && (
+                          <div className="absolute bottom-full right-0 md:left-0 md:right-auto mb-1 w-72 bg-white rounded-lg shadow-xl border border-gray-200 z-30">
+                            {/* Category tabs */}
+                            <div className="flex border-b border-gray-100 px-1 pt-1 gap-0.5 overflow-x-auto">
+                              {EMOJI_CATEGORIES.map((cat, idx) => (
+                                <button
+                                  key={cat.name}
+                                  onClick={() => setEmojiCategory(idx)}
+                                  className={`px-2.5 py-1.5 text-xs rounded-t-md whitespace-nowrap transition ${
+                                    emojiCategory === idx ? "bg-blue-50 text-blue-600 font-medium" : "text-gray-500 hover:bg-gray-50"
+                                  }`}
+                                >
+                                  {cat.name}
+                                </button>
+                              ))}
+                            </div>
+                            {/* Emoji grid */}
+                            <div className="p-2 grid grid-cols-8 gap-0.5 max-h-48 overflow-y-auto">
+                              {EMOJI_CATEGORIES[emojiCategory].emojis.map((emoji, idx) => (
+                                <button
+                                  key={idx}
+                                  onClick={() => insertEmoji(emoji)}
+                                  className="w-8 h-8 flex items-center justify-center text-lg hover:bg-gray-100 rounded transition"
+                                >
+                                  {emoji}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Sticker popup trigger */}
+                      <div className="relative" ref={stickerPopupRef}>
+                        <button
+                          onClick={() => { setShowStickerPopup(!showStickerPopup); setShowEmojiPopup(false); setShowTemplatePopup(false); }}
+                          className={`p-1.5 hover:bg-gray-100 rounded-md transition ${showStickerPopup ? "bg-blue-50 text-blue-600" : "text-gray-500"}`}
+                          title="スタンプ"
+                        >
+                          {Icons.sticker}
+                        </button>
+                        {showStickerPopup && (
+                          <div className="absolute bottom-full right-0 mb-1 w-80 bg-white rounded-lg shadow-xl border border-gray-200 z-30">
+                            {/* Pack tabs */}
+                            <div className="flex border-b border-gray-100 px-1 pt-1 gap-0.5 overflow-x-auto">
+                              {LINE_STICKER_PACKS.map((pack, idx) => (
+                                <button
+                                  key={pack.packageId}
+                                  onClick={() => setStickerPackIdx(idx)}
+                                  className={`px-2.5 py-1.5 text-xs rounded-t-md whitespace-nowrap transition ${
+                                    stickerPackIdx === idx ? "bg-blue-50 text-blue-600 font-medium" : "text-gray-500 hover:bg-gray-50"
+                                  }`}
+                                >
+                                  {pack.name}
+                                </button>
+                              ))}
+                            </div>
+                            {/* Sticker grid */}
+                            <div className="p-2 grid grid-cols-4 gap-1 max-h-56 overflow-y-auto">
+                              {LINE_STICKER_PACKS[stickerPackIdx].stickers.map((stickerId) => (
+                                <button
+                                  key={stickerId}
+                                  onClick={() => sendSticker(LINE_STICKER_PACKS[stickerPackIdx].packageId, stickerId)}
+                                  disabled={sendingSticker}
+                                  className="w-full aspect-square flex items-center justify-center hover:bg-gray-100 rounded-lg transition disabled:opacity-50"
+                                >
+                                  <img
+                                    src={`https://stickershop.line-scdn.net/stickershop/v1/sticker/${stickerId}/android/sticker.png`}
+                                    alt={`sticker-${stickerId}`}
+                                    className="w-14 h-14 object-contain"
+                                    loading="lazy"
+                                  />
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
                     </div>
                     {/* メッセージ入力 */}
                     <div className="flex items-center gap-2 px-3 py-2.5">
@@ -1321,7 +2774,13 @@ export default function LineDashboard() {
                 </div>
 
                 {/* --- 右サイドパネル: プロフィール・メモ・ラベル --- */}
-                <div className="w-72 bg-white border-l border-gray-200 flex flex-col flex-shrink-0 overflow-y-auto">
+                <div className={`${showMobileProfile ? "fixed inset-0 z-40 md:relative md:inset-auto" : "hidden md:flex"} md:flex w-full md:w-72 bg-white border-l border-gray-200 flex-col flex-shrink-0 overflow-y-auto`}>
+                  {/* Mobile close for profile panel */}
+                  <div className="md:hidden flex items-center justify-between px-4 py-3 border-b border-gray-200 bg-gray-50">
+                    <span className="text-sm font-bold text-gray-700">プロフィール</span>
+                    <button onClick={() => setShowMobileProfile(false)} className="text-gray-400 hover:text-gray-600">{Icons.close}</button>
+                  </div>
+
                   {/* プロフィール */}
                   <div className="px-4 py-5 text-center border-b border-gray-200">
                     {selectedUser.picture_url ? (
@@ -1331,9 +2790,50 @@ export default function LineDashboard() {
                         <svg className="w-10 h-10" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" /></svg>
                       </div>
                     )}
-                    <div className="flex items-center justify-center gap-1.5">
-                      <h3 className="text-base font-bold text-gray-800">{selectedUser.display_name ?? "名前なし"}</h3>
-                      <button className="text-gray-400 hover:text-blue-500 transition">{Icons.edit}</button>
+                    {/* Feature 1: Inline name editing */}
+                    <div className="flex flex-col items-center gap-1.5">
+                      {editingName ? (
+                        <div className="flex flex-col items-center gap-2">
+                          <input
+                            type="text"
+                            value={editNameValue}
+                            onChange={(e) => setEditNameValue(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" && !e.nativeEvent.isComposing) saveDisplayName();
+                              if (e.key === "Escape") setEditingName(false);
+                            }}
+                            autoFocus
+                            className="text-base font-bold text-gray-800 text-center border border-blue-400 rounded-md px-2 py-0.5 focus:outline-none focus:ring-1 focus:ring-blue-400 w-40"
+                          />
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() => setEditingName(false)}
+                              className="px-3 py-1 text-xs text-gray-500 hover:bg-gray-100 rounded-md transition"
+                            >
+                              キャンセル
+                            </button>
+                            <button
+                              onClick={saveDisplayName}
+                              className="px-3 py-1 text-xs bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-md transition"
+                            >
+                              保存
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-1.5">
+                          <h3 className="text-base font-bold text-gray-800">{selectedUser.display_name ?? "名前なし"}</h3>
+                          <button
+                            onClick={() => {
+                              setEditNameValue(selectedUser.display_name ?? "");
+                              setEditingName(true);
+                            }}
+                            className="text-gray-400 hover:text-blue-500 transition"
+                          >
+                            {Icons.edit}
+                          </button>
+                        </div>
+                      )}
                     </div>
                     <p className="text-xs text-gray-400 mt-1 font-mono">{selectedUser.line_user_id.slice(0, 16)}...</p>
                   </div>
@@ -1360,16 +2860,62 @@ export default function LineDashboard() {
                     </div>
                   </div>
 
-                  {/* ラベル */}
-                  <div className="px-4 py-3 border-b border-gray-200">
+                  {/* Feature 2: ラベル with picker */}
+                  <div className="px-4 py-3 border-b border-gray-200 relative">
                     <div className="flex items-center justify-between mb-2">
                       <span className="text-xs font-medium text-gray-500">ラベル</span>
-                      <button className="text-[10px] text-blue-600 hover:text-blue-800">+ 追加</button>
+                      <div className="relative" ref={labelPickerRef}>
+                        <button
+                          onClick={() => setShowLabelPicker(!showLabelPicker)}
+                          className="text-[10px] text-blue-600 hover:text-blue-800"
+                        >
+                          + 追加
+                        </button>
+                        {showLabelPicker && (
+                          <div className="absolute right-0 top-full mt-1 w-52 bg-white rounded-lg shadow-xl border border-gray-200 z-30 max-h-60 overflow-y-auto">
+                            <div className="px-3 py-2 border-b border-gray-100 text-xs font-medium text-gray-500">ラベルを選択</div>
+                            {labels.length === 0 ? (
+                              <div className="px-3 py-4 text-center text-xs text-gray-400">
+                                ラベルがありません。<br />「ラベル管理」から作成してください。
+                              </div>
+                            ) : (
+                              labels.map((label) => {
+                                const isAssigned = label.assigned_users.includes(selectedUser.line_user_id);
+                                return (
+                                  <button
+                                    key={label.id}
+                                    onClick={() => toggleLabelUser(label.id, selectedUser.line_user_id)}
+                                    className={`w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-gray-50 transition ${isAssigned ? "bg-blue-50/50" : ""}`}
+                                  >
+                                    <span className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: label.color }} />
+                                    <span className="text-xs text-gray-700 flex-1 truncate">{label.name}</span>
+                                    {isAssigned && (
+                                      <svg className="w-3.5 h-3.5 text-blue-600 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" /></svg>
+                                    )}
+                                  </button>
+                                );
+                              })
+                            )}
+                          </div>
+                        )}
+                      </div>
                     </div>
                     <div className="flex flex-wrap gap-1.5">
-                      {(selectedUser.labels && selectedUser.labels.length > 0) ? (
-                        selectedUser.labels.map((label, i) => (
-                          <span key={i} className="px-2 py-0.5 bg-blue-100 text-blue-700 text-[11px] rounded-full">{label}</span>
+                      {getUserLabels(selectedUser.line_user_id).length > 0 ? (
+                        getUserLabels(selectedUser.line_user_id).map((label) => (
+                          <span
+                            key={label.id}
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] text-white"
+                            style={{ backgroundColor: label.color }}
+                          >
+                            {label.name}
+                            <button
+                              onClick={() => toggleLabelUser(label.id, selectedUser.line_user_id)}
+                              className="hover:bg-white/20 rounded-full p-0.5 transition"
+                            >
+                              <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M6 18L18 6M6 6l12 12" /></svg>
+                            </button>
+                          </span>
                         ))
                       ) : (
                         <span className="text-xs text-gray-400">ラベルなし</span>
@@ -1377,11 +2923,24 @@ export default function LineDashboard() {
                     </div>
                   </div>
 
-                  {/* メモ */}
+                  {/* Feature 3: メモ with save */}
                   <div className="px-4 py-3 border-b border-gray-200">
                     <div className="flex items-center justify-between mb-2">
                       <span className="text-xs font-medium text-gray-500">メモ</span>
-                      <button className="text-[10px] text-blue-600 hover:text-blue-800">保存</button>
+                      <div className="flex items-center gap-2">
+                        {memoSaveMsg && (
+                          <span className={`text-[10px] ${memoSaveMsg === "保存しました" ? "text-green-600" : "text-red-500"}`}>
+                            {memoSaveMsg}
+                          </span>
+                        )}
+                        <button
+                          onClick={saveMemo}
+                          disabled={memoSaving}
+                          className="text-[10px] text-blue-600 hover:text-blue-800 disabled:opacity-50"
+                        >
+                          {memoSaving ? "保存中..." : "保存"}
+                        </button>
+                      </div>
                     </div>
                     <textarea
                       value={memoText}
@@ -1398,6 +2957,9 @@ export default function LineDashboard() {
                     <div className="flex gap-2">
                       <select className="flex-1 border border-gray-200 rounded-md px-2 py-1.5 text-xs bg-white focus:border-blue-400 focus:outline-none">
                         <option>テンプレートを選択</option>
+                        {templates.map((tpl) => (
+                          <option key={tpl.id} value={tpl.id}>{tpl.title}</option>
+                        ))}
                       </select>
                       <button className="px-3 py-1.5 bg-[#06C755] hover:bg-[#05a648] text-white text-xs font-medium rounded-md transition">送信</button>
                     </div>
@@ -1406,7 +2968,7 @@ export default function LineDashboard() {
               </>
             ) : (
               /* チャット未選択 */
-              <div className="flex-1 flex items-center justify-center bg-gray-50">
+              <div className={`${showMobileChat ? "hidden" : "hidden"} md:flex flex-1 items-center justify-center bg-gray-50`}>
                 <div className="text-center text-gray-400">
                   <div className="w-16 h-16 rounded-full bg-gray-200 flex items-center justify-center mx-auto mb-3">
                     {Icons.chat}
@@ -1423,7 +2985,7 @@ export default function LineDashboard() {
         {/* ============================================================ */}
         {mainView === "account-detail" && accountSubView === "followers" && (
           <>
-            <header className="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between flex-shrink-0">
+            <header className="bg-white border-b border-gray-200 px-4 md:px-6 py-3 flex items-center justify-between flex-shrink-0">
               <div className="flex items-center gap-3">
                 <h1 className="text-base font-bold text-gray-800">LINE 友だち</h1>
                 <span className="text-sm text-gray-400">{filteredFollowers.length} 件</span>
@@ -1436,7 +2998,7 @@ export default function LineDashboard() {
                   </button>
                 )}
               </div>
-              <div className="relative w-64">
+              <div className="relative w-40 md:w-64">
                 <span className="absolute left-3 top-1/2 -translate-y-1/2">{Icons.search}</span>
                 <input
                   type="text"
@@ -1447,8 +3009,8 @@ export default function LineDashboard() {
                 />
               </div>
             </header>
-            <main className="flex-1 overflow-y-auto p-6">
-              <div className="bg-white rounded-lg border border-gray-200 overflow-hidden max-w-5xl">
+            <main className="flex-1 overflow-y-auto p-4 md:p-6">
+              <div className="bg-white rounded-lg border border-gray-200 overflow-hidden max-w-5xl overflow-x-auto">
                 {filteredFollowers.length === 0 ? (
                   <div className="p-16 text-center text-gray-400">読者がいません</div>
                 ) : (
@@ -1464,8 +3026,8 @@ export default function LineDashboard() {
                           />
                         </th>
                         <th className="px-5 py-3 font-medium">ユーザー</th>
-                        <th className="px-5 py-3 font-medium">ステータス</th>
-                        <th className="px-5 py-3 font-medium">友だち追加日</th>
+                        <th className="px-5 py-3 font-medium hidden md:table-cell">ステータス</th>
+                        <th className="px-5 py-3 font-medium hidden md:table-cell">友だち追加日</th>
                         <th className="px-5 py-3 font-medium">操作</th>
                       </tr>
                     </thead>
@@ -1481,20 +3043,35 @@ export default function LineDashboard() {
                             />
                           </td>
                           <td className="px-5 py-3">
-                            <div className="flex items-center gap-3">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setUserDetailTarget(f);
+                                setUserDetailForm({
+                                  display_name: f.display_name ?? "",
+                                  memo: f.memo ?? "",
+                                  is_test: !!f.is_test,
+                                });
+                                setShowUserDetail(true);
+                              }}
+                              className="flex items-center gap-3 text-left hover:opacity-80 cursor-pointer group"
+                            >
                               {f.picture_url ? (
                                 <img src={f.picture_url} alt="" className="w-9 h-9 rounded-full object-cover" />
                               ) : (
                                 <div className="w-9 h-9 rounded-full bg-gray-200 flex items-center justify-center text-gray-400">{Icons.user}</div>
                               )}
                               <div>
-                                <div className="font-medium text-gray-800">{f.display_name ?? "名前なし"}</div>
+                                <div className="font-medium text-gray-800 group-hover:text-blue-600 group-hover:underline">
+                                  {f.display_name ?? "名前なし"}
+                                  {f.is_test && <span className="ml-1.5 px-1.5 py-0.5 text-[10px] bg-purple-100 text-purple-700 rounded">TEST</span>}
+                                </div>
                                 <div className="text-xs text-gray-400 font-mono">{f.line_user_id.slice(0, 12)}...</div>
                               </div>
-                            </div>
+                            </button>
                           </td>
-                          <td className="px-5 py-3"><StatusBadge status={f.status} /></td>
-                          <td className="px-5 py-3 text-gray-500">{fmtShort(f.followed_at)}</td>
+                          <td className="px-5 py-3 hidden md:table-cell"><StatusBadge status={f.status} /></td>
+                          <td className="px-5 py-3 text-gray-500 hidden md:table-cell">{fmtShort(f.followed_at)}</td>
                           <td className="px-5 py-3">
                             <button
                               onClick={() => { setAccountSubView("chat"); openChat(f); }}
@@ -1518,13 +3095,227 @@ export default function LineDashboard() {
         {/* ============================================================ */}
         {mainView === "account-detail" && accountSubView === "step" && (
           <>
-            <header className="bg-white border-b border-gray-200 px-6 py-3 flex-shrink-0">
+            <header className="bg-white border-b border-gray-200 px-6 py-3 flex items-center flex-shrink-0">
               <h1 className="text-base font-bold text-gray-800">ステップ配信</h1>
             </header>
-            <main className="flex-1 flex items-center justify-center">
-              <div className="text-center text-gray-400">
-                <p className="text-lg mb-1">ステップ配信</p>
-                <p className="text-sm">この機能は準備中です</p>
+            <main className="flex-1 overflow-y-auto p-6">
+              {/* 左上の新規追加ボタン */}
+              {!showStepCreator && (
+                <div className="max-w-5xl mb-4">
+                  <button
+                    onClick={() => { setStepCreatorForm(emptyBroadcast); setEditingSequenceId(null); setShowStepCreator(true); }}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded-md transition"
+                  >
+                    {Icons.plus} 新規追加
+                  </button>
+                </div>
+              )}
+              {showStepCreator && (
+                <div className="max-w-5xl mb-6">
+                  {renderBroadcastCreator(
+                    stepCreatorForm,
+                    setStepCreatorForm,
+                    () => { setShowStepCreator(false); setEditingSequenceId(null); },
+                    async () => {
+                      const ok = await saveBroadcast("step", stepCreatorForm);
+                      if (ok) { setShowStepCreator(false); setStepCreatorForm(emptyBroadcast); setEditingSequenceId(null); }
+                    },
+                    editingSequenceId ? "ステップ配信編集" : "新規ステップ配信作成",
+                  )}
+                </div>
+              )}
+              {/* シーケンス作成/編集モーダル */}
+              {showStepModal && (
+                <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+                  <div className="bg-white rounded-xl shadow-xl w-full max-w-md mx-4">
+                    <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
+                      <h3 className="font-bold text-gray-800">{editingSequence ? "シーケンス編集" : "新規シーケンス"}</h3>
+                      <button onClick={() => setShowStepModal(false)} className="text-gray-400 hover:text-gray-600">{Icons.close}</button>
+                    </div>
+                    <div className="p-5">
+                      <label className="text-xs text-gray-500 block mb-1.5 font-medium">シーケンス名</label>
+                      <input type="text" value={stepForm.name} onChange={(e) => setStepForm({ name: e.target.value })} placeholder="例: 登録直後シーケンス" autoFocus className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400" />
+                    </div>
+                    <div className="flex justify-end gap-2 px-5 py-4 border-t border-gray-200">
+                      <button onClick={() => setShowStepModal(false)} className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition">キャンセル</button>
+                      <button
+                        onClick={async () => {
+                          if (!stepForm.name.trim() || !selectedAccount) return;
+                          const method = editingSequence ? "PUT" : "POST";
+                          const body = editingSequence
+                            ? { id: editingSequence.id, name: stepForm.name.trim() }
+                            : { account_id: selectedAccount.id, name: stepForm.name.trim() };
+                          const res = await fetch("/api/line/step-sequences", { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+                          if (res.ok) { setShowStepModal(false); fetchStepSequences(); }
+                        }}
+                        disabled={!stepForm.name.trim()}
+                        className="px-5 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition"
+                      >
+                        {editingSequence ? "更新" : "作成"}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* ステップメッセージ追加モーダル */}
+              {showStepMsgModal && (
+                <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+                  <div className="bg-white rounded-xl shadow-xl w-full max-w-lg mx-4">
+                    <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
+                      <h3 className="font-bold text-gray-800">{editingStepMsg ? "ステップ編集" : "ステップ追加"}</h3>
+                      <button onClick={() => setShowStepMsgModal(false)} className="text-gray-400 hover:text-gray-600">{Icons.close}</button>
+                    </div>
+                    <div className="p-5 space-y-3">
+                      <div className="grid grid-cols-3 gap-3">
+                        <div>
+                          <label className="text-xs text-gray-500 block mb-1 font-medium">媒体</label>
+                          <select value={stepMsgForm.media} onChange={(e) => setStepMsgForm({ ...stepMsgForm, media: e.target.value })} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:border-blue-400 focus:outline-none">
+                            <option value="LINE">LINE</option>
+                            <option value="email">メール</option>
+                            <option value="sms">SMS</option>
+                            <option value="action">アクション</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="text-xs text-gray-500 block mb-1 font-medium">送信タイミング</label>
+                          <div className="flex items-center gap-1">
+                            <input type="number" min={0} value={stepMsgForm.delay_minutes} onChange={(e) => setStepMsgForm({ ...stepMsgForm, delay_minutes: Number(e.target.value) })} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:border-blue-400 focus:outline-none" />
+                            <span className="text-xs text-gray-500 whitespace-nowrap">分後</span>
+                          </div>
+                        </div>
+                        <div>
+                          <label className="text-xs text-gray-500 block mb-1 font-medium">順番</label>
+                          <input type="number" min={1} value={stepMsgForm.step_order} onChange={(e) => setStepMsgForm({ ...stepMsgForm, step_order: Number(e.target.value) })} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:border-blue-400 focus:outline-none" />
+                        </div>
+                      </div>
+                      <div>
+                        <label className="text-xs text-gray-500 block mb-1 font-medium">管理名称</label>
+                        <input type="text" value={stepMsgForm.title} onChange={(e) => setStepMsgForm({ ...stepMsgForm, title: e.target.value })} placeholder="例: 登録直後のLINEメッセージ" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400" />
+                      </div>
+                      <div>
+                        <label className="text-xs text-gray-500 block mb-1 font-medium">本文</label>
+                        <textarea value={stepMsgForm.body} onChange={(e) => setStepMsgForm({ ...stepMsgForm, body: e.target.value })} rows={5} placeholder="メッセージ内容" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm resize-none focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400" />
+                      </div>
+                    </div>
+                    <div className="flex justify-end gap-2 px-5 py-4 border-t border-gray-200">
+                      <button onClick={() => setShowStepMsgModal(false)} className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition">キャンセル</button>
+                      <button
+                        onClick={async () => {
+                          if (!stepMsgForm.title.trim()) return;
+                          const method = editingStepMsg ? "PUT" : "POST";
+                          const body = editingStepMsg
+                            ? { id: editingStepMsg.id, ...stepMsgForm }
+                            : stepMsgForm;
+                          const res = await fetch("/api/line/step-messages", { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+                          if (res.ok) { setShowStepMsgModal(false); fetchStepSequences(); }
+                        }}
+                        disabled={!stepMsgForm.title.trim()}
+                        className="px-5 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition"
+                      >
+                        {editingStepMsg ? "更新" : "追加"}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <div className="max-w-5xl space-y-4">
+                {stepSequences.length === 0 ? (
+                  <div className="bg-white rounded-lg border border-gray-200 p-16 text-center text-gray-400">
+                    <p className="text-lg mb-2">ステップ配信がありません</p>
+                    <p className="text-sm">「新規シーケンス」から作成してください</p>
+                  </div>
+                ) : (
+                  stepSequences.map((seq) => (
+                    <div key={seq.id} className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+                      {/* シーケンスヘッダー: 管理名称の行をクリックで編集画面を開く */}
+                      <div
+                        onClick={() => openEditStep(seq)}
+                        className="flex items-center justify-between px-5 py-3 bg-gray-50 border-b border-gray-200 cursor-pointer hover:bg-gray-100 transition"
+                      >
+                        <div className="flex items-center gap-3 min-w-0">
+                          <h3 className="text-sm font-bold text-gray-800 truncate">{seq.name}</h3>
+                          <span className={`px-2 py-0.5 text-xs rounded-full font-medium flex-shrink-0 ${
+                            seq.status === "active" ? "bg-green-100 text-green-700" : seq.status === "paused" ? "bg-yellow-100 text-yellow-700" : "bg-gray-100 text-gray-500"
+                          }`}>
+                            {seq.status === "active" ? "稼働中" : seq.status === "paused" ? "一時停止" : "下書き"}
+                          </span>
+                          <span className="text-xs text-gray-400 flex-shrink-0">{seq.messages?.length ?? 0}通</span>
+                        </div>
+                        <div className="flex items-center gap-2 flex-shrink-0" onClick={(e) => e.stopPropagation()}>
+                          <button
+                            onClick={async () => {
+                              const newStatus = seq.status === "active" ? "paused" : "active";
+                              await fetch("/api/line/step-sequences", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: seq.id, status: newStatus }) });
+                              fetchStepSequences();
+                            }}
+                            className={`px-3 py-1 text-xs font-medium rounded-md transition ${seq.status === "active" ? "bg-yellow-100 text-yellow-700 hover:bg-yellow-200" : "bg-green-100 text-green-700 hover:bg-green-200"}`}
+                          >
+                            {seq.status === "active" ? "一時停止" : "稼働開始"}
+                          </button>
+                          <button
+                            onClick={async () => {
+                              if (!confirm(`「${seq.name}」を削除しますか？`)) return;
+                              await fetch("/api/line/step-sequences", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: seq.id }) });
+                              fetchStepSequences();
+                            }}
+                            className="px-2 py-1 text-xs text-red-500 hover:bg-red-50 rounded-md transition"
+                          >
+                            削除
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* ステップメッセージ概要（クリックで編集画面） */}
+                      {(!seq.messages || seq.messages.length === 0) ? (
+                        <button
+                          type="button"
+                          onClick={() => openEditStep(seq)}
+                          className="w-full px-5 py-6 text-center text-sm text-gray-400 hover:bg-gray-50"
+                        >
+                          メッセージがありません（クリックして編集）
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => openEditStep(seq)}
+                          className="w-full text-left"
+                        >
+                          <table className="w-full text-sm">
+                            <thead>
+                              <tr className="border-b border-gray-200 text-gray-500 text-left bg-gray-50/50">
+                                <th className="px-5 py-2.5 font-medium w-16">順番</th>
+                                <th className="px-5 py-2.5 font-medium w-20">媒体</th>
+                                <th className="px-5 py-2.5 font-medium">管理名称</th>
+                                <th className="px-5 py-2.5 font-medium w-28">送信タイミング</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {seq.messages.slice().sort((a, b) => a.step_order - b.step_order).map((msg) => {
+                                const timing = msg.delay_minutes === 0 ? "登録直後" : msg.delay_minutes < 60 ? `${msg.delay_minutes}分後` : msg.delay_minutes < 1440 ? `${Math.floor(msg.delay_minutes / 60)}時間後` : `${Math.floor(msg.delay_minutes / 1440)}日後`;
+                                return (
+                                  <tr key={msg.id} className="border-b border-gray-100 hover:bg-gray-50">
+                                    <td className="px-5 py-2.5 text-gray-500">{msg.step_order}</td>
+                                    <td className="px-5 py-2.5">
+                                      <span className={`px-2 py-0.5 text-xs rounded font-medium ${
+                                        msg.media === "LINE" ? "bg-[#06C755]/10 text-[#06C755]" : msg.media === "email" ? "bg-blue-100 text-blue-700" : msg.media === "sms" ? "bg-purple-100 text-purple-700" : "bg-gray-100 text-gray-600"
+                                      }`}>
+                                        {msg.media}
+                                      </span>
+                                    </td>
+                                    <td className="px-5 py-2.5 text-gray-800">{msg.title}</td>
+                                    <td className="px-5 py-2.5 text-gray-500">{timing}</td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </button>
+                      )}
+                    </div>
+                  ))
+                )}
               </div>
             </main>
           </>
@@ -1538,11 +3329,37 @@ export default function LineDashboard() {
             <header className="bg-white border-b border-gray-200 px-6 py-3 flex-shrink-0">
               <h1 className="text-base font-bold text-gray-800">予約配信</h1>
             </header>
-            <main className="flex-1 flex items-center justify-center">
-              <div className="text-center text-gray-400">
-                <p className="text-lg mb-1">予約配信</p>
-                <p className="text-sm">この機能は準備中です</p>
-              </div>
+            <main className="flex-1 overflow-y-auto p-6">
+              {!showScheduleCreator && (
+                <div className="max-w-5xl mb-4">
+                  <button
+                    onClick={() => { setScheduleCreatorForm({ ...emptyBroadcast, timingMode: "datetime" }); setShowScheduleCreator(true); }}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded-md transition"
+                  >
+                    {Icons.plus} 新規追加
+                  </button>
+                </div>
+              )}
+              {showScheduleCreator && (
+                <div className="max-w-5xl mb-6">
+                  {renderBroadcastCreator(
+                    scheduleCreatorForm,
+                    setScheduleCreatorForm,
+                    () => setShowScheduleCreator(false),
+                    async () => {
+                      const ok = await saveBroadcast("schedule", scheduleCreatorForm);
+                      if (ok) { setShowScheduleCreator(false); setScheduleCreatorForm(emptyBroadcast); }
+                    },
+                    "新規予約配信作成",
+                  )}
+                </div>
+              )}
+              {!showScheduleCreator && (
+                <div className="max-w-5xl bg-white rounded-lg border border-gray-200 p-16 text-center text-gray-400">
+                  <p className="text-lg mb-2">予約配信がありません</p>
+                  <p className="text-sm">「新規追加」から作成してください</p>
+                </div>
+              )}
             </main>
           </>
         )}
@@ -1599,7 +3416,7 @@ export default function LineDashboard() {
         {/* ============================================================ */}
         {mainView === "account-detail" && accountSubView === "labels" && (
           <>
-            <header className="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between flex-shrink-0">
+            <header className="bg-white border-b border-gray-200 px-4 md:px-6 py-3 flex items-center justify-between flex-shrink-0">
               <h1 className="text-base font-bold text-gray-800">ラベル管理</h1>
               <div className="flex items-center gap-2">
                 <button
@@ -1609,17 +3426,17 @@ export default function LineDashboard() {
                   {Icons.plus}
                   追加
                 </button>
-                <button className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white text-xs font-medium rounded-md transition">
+                <button className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white text-xs font-medium rounded-md transition">
                   {Icons.folder}
                   グループ管理
                 </button>
-                <button className="flex items-center gap-1.5 px-3 py-1.5 bg-orange-500 hover:bg-orange-600 text-white text-xs font-medium rounded-md transition">
+                <button className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 bg-orange-500 hover:bg-orange-600 text-white text-xs font-medium rounded-md transition">
                   {Icons.sort}
                   並び替え
                 </button>
               </div>
             </header>
-            <main className="flex-1 overflow-y-auto p-6">
+            <main className="flex-1 overflow-y-auto p-4 md:p-6">
               {/* ラベル追加モーダル */}
               {showAddLabel && (
                 <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
@@ -1791,6 +3608,274 @@ export default function LineDashboard() {
         )}
 
         {/* ============================================================ */}
+        {/* アカウント詳細: 定型文管理 (Feature 5) */}
+        {/* ============================================================ */}
+        {mainView === "account-detail" && accountSubView === "templates" && (
+          <>
+            <header className="bg-white border-b border-gray-200 px-4 md:px-6 py-3 flex items-center justify-between flex-shrink-0">
+              <h1 className="text-base font-bold text-gray-800">定型文管理</h1>
+              <button
+                onClick={() => {
+                  setEditingTemplate(null);
+                  setTemplateForm({ title: "", body: "" });
+                  setShowTemplateModal(true);
+                }}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded-md transition"
+              >
+                {Icons.plus}
+                新規作成
+              </button>
+            </header>
+            <main className="flex-1 overflow-y-auto p-4 md:p-6">
+              {/* テンプレート作成/編集モーダル */}
+              {showTemplateModal && (
+                <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+                  <div className="bg-white rounded-xl shadow-xl w-full max-w-lg mx-4">
+                    <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
+                      <h3 className="font-bold text-gray-800">{editingTemplate ? "定型文を編集" : "定型文を作成"}</h3>
+                      <button onClick={() => setShowTemplateModal(false)} className="text-gray-400 hover:text-gray-600">{Icons.close}</button>
+                    </div>
+                    <div className="p-5 space-y-4">
+                      <div>
+                        <label className="text-xs text-gray-500 block mb-1.5 font-medium">タイトル</label>
+                        <input
+                          type="text"
+                          value={templateForm.title}
+                          onChange={(e) => setTemplateForm({ ...templateForm, title: e.target.value })}
+                          placeholder="例: 挨拶メッセージ、予約確認"
+                          autoFocus
+                          className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs text-gray-500 block mb-1.5 font-medium">本文</label>
+                        <textarea
+                          value={templateForm.body}
+                          onChange={(e) => setTemplateForm({ ...templateForm, body: e.target.value })}
+                          placeholder="定型文の本文を入力..."
+                          rows={6}
+                          className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm resize-none focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                        />
+                      </div>
+                    </div>
+                    <div className="flex justify-end gap-2 px-5 py-4 border-t border-gray-200">
+                      <button onClick={() => setShowTemplateModal(false)} className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition">キャンセル</button>
+                      <button
+                        onClick={saveTemplate}
+                        disabled={!templateForm.title.trim() || !templateForm.body.trim()}
+                        className="px-5 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition"
+                      >
+                        {editingTemplate ? "更新" : "作成"}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <div className="max-w-5xl">
+                {templates.length === 0 ? (
+                  <div className="bg-white rounded-lg border border-gray-200 p-16 text-center text-gray-400">
+                    <p className="text-lg mb-2">定型文がありません</p>
+                    <p className="text-sm">「新規作成」ボタンから定型文を作成してください</p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {templates.map((tpl) => (
+                      <div key={tpl.id} className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+                        <div className="flex items-center justify-between px-5 py-3.5">
+                          <div className="min-w-0 flex-1 mr-4">
+                            <div className="text-sm font-medium text-gray-800">{tpl.title}</div>
+                            <div className="text-xs text-gray-400 mt-1 line-clamp-2 whitespace-pre-wrap">{tpl.body}</div>
+                            <div className="text-[10px] text-gray-300 mt-1">{fmtShort(tpl.created_at)}</div>
+                          </div>
+                          <div className="flex items-center gap-2 flex-shrink-0">
+                            <button
+                              onClick={() => startEditTemplate(tpl)}
+                              className="px-3 py-1.5 text-xs text-blue-600 hover:bg-blue-50 rounded-md transition font-medium"
+                            >
+                              編集
+                            </button>
+                            <button
+                              onClick={() => deleteTemplate(tpl.id)}
+                              className="px-3 py-1.5 text-xs text-red-400 hover:text-red-600 hover:bg-red-50 rounded-md transition"
+                            >
+                              削除
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </main>
+          </>
+        )}
+
+        {/* ============================================================ */}
+        {/* アカウント詳細: 流入経路 */}
+        {/* ============================================================ */}
+        {mainView === "account-detail" && accountSubView === "inflow" && (
+          <>
+            <header className="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between flex-shrink-0">
+              <h1 className="text-base font-bold text-gray-800">流入経路</h1>
+              <button
+                onClick={() => { setInflowForm({ name: "", code: "", url: "", description: "" }); setEditingInflow(null); setShowInflowModal(true); }}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded-md transition"
+              >
+                {Icons.plus} 新規経路
+              </button>
+            </header>
+            <main className="flex-1 overflow-y-auto p-6">
+              {/* 流入経路モーダル */}
+              {showInflowModal && (
+                <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+                  <div className="bg-white rounded-xl shadow-xl w-full max-w-md mx-4">
+                    <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
+                      <h3 className="font-bold text-gray-800">{editingInflow ? "経路編集" : "新規流入経路"}</h3>
+                      <button onClick={() => setShowInflowModal(false)} className="text-gray-400 hover:text-gray-600">{Icons.close}</button>
+                    </div>
+                    <div className="p-5 space-y-3">
+                      <div>
+                        <label className="text-xs text-gray-500 block mb-1 font-medium">経路名 <span className="text-red-500">*</span></label>
+                        <input type="text" value={inflowForm.name} onChange={(e) => setInflowForm({ ...inflowForm, name: e.target.value })} placeholder="例: YouTube広告経由" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400" />
+                      </div>
+                      <div>
+                        <label className="text-xs text-gray-500 block mb-1 font-medium">経路コード <span className="text-red-500">*</span></label>
+                        <input type="text" value={inflowForm.code} onChange={(e) => setInflowForm({ ...inflowForm, code: e.target.value })} placeholder="例: yt-ad-2024" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400" />
+                        <p className="text-[10px] text-gray-400 mt-1">友だち追加URLの末尾に付与されるパラメータ</p>
+                      </div>
+                      <div>
+                        <label className="text-xs text-gray-500 block mb-1 font-medium">流入元URL</label>
+                        <input type="text" value={inflowForm.url} onChange={(e) => setInflowForm({ ...inflowForm, url: e.target.value })} placeholder="https://..." className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400" />
+                      </div>
+                      <div>
+                        <label className="text-xs text-gray-500 block mb-1 font-medium">説明</label>
+                        <textarea value={inflowForm.description} onChange={(e) => setInflowForm({ ...inflowForm, description: e.target.value })} rows={2} placeholder="メモ" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm resize-none focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400" />
+                      </div>
+                    </div>
+                    <div className="flex justify-end gap-2 px-5 py-4 border-t border-gray-200">
+                      <button onClick={() => setShowInflowModal(false)} className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition">キャンセル</button>
+                      <button
+                        onClick={async () => {
+                          if (!inflowForm.name.trim() || !inflowForm.code.trim() || !selectedAccount) return;
+                          const method = editingInflow ? "PUT" : "POST";
+                          const body = editingInflow
+                            ? { id: editingInflow.id, ...inflowForm }
+                            : { account_id: selectedAccount.id, ...inflowForm };
+                          try {
+                            const res = await fetch("/api/line/inflow-routes", { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+                            if (res.ok) {
+                              setShowInflowModal(false);
+                              setEditingInflow(null);
+                              setInflowForm({ name: "", code: "", url: "", description: "" });
+                              await fetchInflowRoutes();
+                            } else {
+                              const data = await res.json().catch(() => ({}));
+                              alert(`流入経路の保存に失敗しました\n${data.error ?? `HTTP ${res.status}`}`);
+                            }
+                          } catch (e) {
+                            alert(`流入経路の保存に失敗しました\n${(e as Error).message}`);
+                          }
+                        }}
+                        disabled={!inflowForm.name.trim() || !inflowForm.code.trim()}
+                        className="px-5 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition"
+                      >
+                        {editingInflow ? "更新" : "作成"}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <div className="max-w-5xl">
+                {inflowRoutes.length === 0 ? (
+                  <div className="bg-white rounded-lg border border-gray-200 p-16 text-center text-gray-400">
+                    <p className="text-lg mb-2">流入経路がありません</p>
+                    <p className="text-sm">「新規経路」から作成してください</p>
+                  </div>
+                ) : (
+                  <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-gray-200 text-gray-500 text-left bg-gray-50">
+                          <th className="px-5 py-3 font-medium">経路名</th>
+                          <th className="px-5 py-3 font-medium">コード</th>
+                          <th className="px-5 py-3 font-medium">友だち数</th>
+                          <th className="px-5 py-3 font-medium">友だち追加URL</th>
+                          <th className="px-5 py-3 font-medium">状態</th>
+                          <th className="px-5 py-3 font-medium">操作</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {inflowRoutes.map((route) => {
+                          const addUrl = selectedAccount?.basic_id
+                            ? `https://line.me/R/ti/p/@${selectedAccount.basic_id}?inflow=${route.code}`
+                            : `（Basic ID未設定）`;
+                          return (
+                            <tr key={route.id} className="border-b border-gray-100 hover:bg-gray-50">
+                              <td className="px-5 py-3">
+                                <div className="font-medium text-gray-800">{route.name}</div>
+                                {route.description && <div className="text-xs text-gray-400 mt-0.5">{route.description}</div>}
+                              </td>
+                              <td className="px-5 py-3 font-mono text-gray-500 text-xs">{route.code}</td>
+                              <td className="px-5 py-3">
+                                <span className="text-blue-600 font-bold">{route.follower_count ?? 0}</span>
+                                <span className="text-gray-400 text-xs ml-0.5">人</span>
+                              </td>
+                              <td className="px-5 py-3">
+                                <div className="flex items-center gap-1.5">
+                                  <input readOnly value={addUrl} className="flex-1 border border-gray-200 rounded-md px-2 py-1 text-xs font-mono text-blue-600 bg-gray-50 min-w-0" />
+                                  <button
+                                    onClick={() => navigator.clipboard.writeText(addUrl)}
+                                    className="px-2 py-1 bg-gray-100 hover:bg-gray-200 text-gray-600 text-xs rounded-md transition flex-shrink-0"
+                                  >
+                                    コピー
+                                  </button>
+                                </div>
+                              </td>
+                              <td className="px-5 py-3">
+                                <span className={`px-2 py-0.5 text-xs rounded-full font-medium ${route.is_active ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"}`}>
+                                  {route.is_active ? "有効" : "無効"}
+                                </span>
+                              </td>
+                              <td className="px-5 py-3">
+                                <div className="flex items-center gap-1">
+                                  <button
+                                    onClick={() => {
+                                      setInflowForm({ name: route.name, code: route.code, url: route.url ?? "", description: route.description ?? "" });
+                                      setEditingInflow(route);
+                                      setShowInflowModal(true);
+                                    }}
+                                    className="text-xs text-blue-600 hover:text-blue-800"
+                                  >
+                                    編集
+                                  </button>
+                                  <button
+                                    onClick={async () => {
+                                      if (!confirm(`「${route.name}」を削除しますか？`)) return;
+                                      await fetch("/api/line/inflow-routes", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: route.id }) });
+                                      fetchInflowRoutes();
+                                    }}
+                                    className="text-xs text-red-500 hover:text-red-700"
+                                  >
+                                    削除
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </main>
+          </>
+        )}
+
+        {/* ============================================================ */}
         {/* アカウント管理（設定） */}
         {/* ============================================================ */}
         {mainView === "settings" && (
@@ -1798,14 +3883,14 @@ export default function LineDashboard() {
             <header className="bg-white border-b border-gray-200 px-6 py-3 flex-shrink-0">
               <h1 className="text-base font-bold text-gray-800">アカウント管理</h1>
             </header>
-            <main className="flex-1 overflow-y-auto p-6">
+            <main className="flex-1 overflow-y-auto p-4 md:p-6">
               <div className="max-w-4xl space-y-6">
                 {/* 登録フォーム */}
-                <div className="bg-white rounded-lg border border-gray-200 p-6">
+                <div className="bg-white rounded-lg border border-gray-200 p-4 md:p-6">
                   <h3 className="text-sm font-bold text-gray-800 mb-4">
                     {editingId ? "アカウント編集" : "新規アカウント登録"}
                   </h3>
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
                       <label className="text-xs text-gray-500 block mb-1 font-medium">アカウント名</label>
                       <input type="text" value={form.account_name} onChange={(e) => setForm({ ...form, account_name: e.target.value })} placeholder="ハピネスサロン音声相談LINE" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400" />
@@ -1822,13 +3907,96 @@ export default function LineDashboard() {
                       <label className="text-xs text-gray-500 block mb-1 font-medium">Basic ID</label>
                       <input type="text" value={form.basic_id} onChange={(e) => setForm({ ...form, basic_id: e.target.value })} placeholder="576ergby (@除く)" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400" />
                     </div>
-                    <div className="col-span-2">
-                      <label className="text-xs text-gray-500 block mb-1 font-medium">チャネルシークレット <span className="text-red-500">*</span></label>
-                      <input type="password" value={form.channel_secret} onChange={(e) => setForm({ ...form, channel_secret: e.target.value })} placeholder="LINE Developersからコピー" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400" />
+                    <div className="md:col-span-2">
+                      <label className="text-xs text-gray-500 block mb-1 font-medium">
+                        チャネルシークレット {editingId ? <span className="text-gray-400">（変更時のみ入力）</span> : <span className="text-red-500">*</span>}
+                      </label>
+                      <input
+                        type="password"
+                        value={form.channel_secret}
+                        onChange={(e) => setForm({ ...form, channel_secret: e.target.value })}
+                        placeholder={editingId ? "空欄なら既存値を維持" : "LINE Developersからコピー"}
+                        className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                      />
                     </div>
-                    <div className="col-span-2">
-                      <label className="text-xs text-gray-500 block mb-1 font-medium">チャネルアクセストークン <span className="text-red-500">*</span></label>
-                      <input type="password" value={form.channel_access_token} onChange={(e) => setForm({ ...form, channel_access_token: e.target.value })} placeholder="発行済みトークン" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400" />
+                    <div className="md:col-span-2">
+                      <label className="text-xs text-gray-500 block mb-1 font-medium">
+                        チャネルアクセストークン {editingId ? <span className="text-gray-400">（変更時のみ入力）</span> : <span className="text-red-500">*</span>}
+                      </label>
+                      <input
+                        type="password"
+                        value={form.channel_access_token}
+                        onChange={(e) => setForm({ ...form, channel_access_token: e.target.value })}
+                        placeholder={editingId ? "空欄なら既存値を維持" : "発行済みトークン"}
+                        className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                      />
+                    </div>
+                    <div className="md:col-span-2">
+                      <label className="text-xs text-gray-500 block mb-1 font-medium">所属案件</label>
+                      <select
+                        value={form.project_id}
+                        onChange={(e) => setForm({ ...form, project_id: e.target.value })}
+                        className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                      >
+                        <option value="">（未設定 / 案件から外す）</option>
+                        {allProjects.map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.name}
+                          </option>
+                        ))}
+                      </select>
+                      <p className="text-[10px] text-gray-400 mt-1">誤って別案件に紐付けた場合はここで変更できます</p>
+                    </div>
+                    <div className="md:col-span-2">
+                      <label className="text-xs text-gray-500 block mb-1 font-medium">役割</label>
+                      <div className="flex gap-2">
+                        <label className={`flex-1 flex items-center gap-2 px-4 py-2.5 rounded-lg border-2 cursor-pointer transition ${
+                          form.role === "main" ? "border-green-500 bg-green-50" : "border-gray-200 bg-white hover:bg-gray-50"
+                        }`}>
+                          <input
+                            type="radio"
+                            name="account-role"
+                            checked={form.role === "main"}
+                            onChange={() => setForm({ ...form, role: "main" })}
+                            className="accent-green-600"
+                          />
+                          <div>
+                            <div className="text-sm font-bold text-gray-800">本番</div>
+                            <div className="text-[10px] text-gray-500">通常運用で使う</div>
+                          </div>
+                        </label>
+                        <label className={`flex-1 flex items-center gap-2 px-4 py-2.5 rounded-lg border-2 cursor-pointer transition ${
+                          form.role === "standby" ? "border-blue-500 bg-blue-50" : "border-gray-200 bg-white hover:bg-gray-50"
+                        }`}>
+                          <input
+                            type="radio"
+                            name="account-role"
+                            checked={form.role === "standby"}
+                            onChange={() => setForm({ ...form, role: "standby" })}
+                            className="accent-blue-600"
+                          />
+                          <div>
+                            <div className="text-sm font-bold text-gray-800">サブ（待機）</div>
+                            <div className="text-[10px] text-gray-500">BAN時に自動昇格</div>
+                          </div>
+                        </label>
+                      </div>
+                      <p className="text-[10px] text-gray-400 mt-1">本番がBAN検知されるとサブが自動で本番に昇格します</p>
+                    </div>
+                    <div className="md:col-span-2">
+                      <label className="text-xs text-gray-500 block mb-1 font-medium">
+                        挨拶メッセージ（友だち追加時の自動返信）
+                      </label>
+                      <textarea
+                        value={form.greeting_message}
+                        onChange={(e) => setForm({ ...form, greeting_message: e.target.value })}
+                        rows={4}
+                        placeholder="例: {display_name}さん、友だち追加ありがとうございます！..."
+                        className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm resize-none focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                      />
+                      <p className="text-[10px] text-gray-400 mt-1">
+                        LINE Official Account Manager側の挨拶メッセージをOFFにしてください。`{"{display_name}"}`で友だち名に置換されます。
+                      </p>
                     </div>
                   </div>
                   {saveMsg && (
@@ -1848,7 +4016,7 @@ export default function LineDashboard() {
 
                 {/* 登録済みアカウント */}
                 {accounts.length > 0 && (
-                  <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+                  <div className="bg-white rounded-lg border border-gray-200 overflow-hidden overflow-x-auto">
                     <div className="px-5 py-3 bg-gray-50 border-b border-gray-200">
                       <h3 className="text-sm font-bold text-gray-700">登録済みアカウント</h3>
                     </div>
@@ -1856,9 +4024,10 @@ export default function LineDashboard() {
                       <thead>
                         <tr className="border-b border-gray-200 text-gray-500 text-left bg-gray-50/50">
                           <th className="px-5 py-3 font-medium">アカウント名</th>
-                          <th className="px-5 py-3 font-medium">グループ</th>
-                          <th className="px-5 py-3 font-medium">チャネルID</th>
-                          <th className="px-5 py-3 font-medium">Basic ID</th>
+                          <th className="px-5 py-3 font-medium">役割</th>
+                          <th className="px-5 py-3 font-medium hidden md:table-cell">グループ</th>
+                          <th className="px-5 py-3 font-medium hidden md:table-cell">チャネルID</th>
+                          <th className="px-5 py-3 font-medium hidden md:table-cell">Basic ID</th>
                           <th className="px-5 py-3 font-medium">状態</th>
                           <th className="px-5 py-3 font-medium">操作</th>
                         </tr>
@@ -1874,16 +4043,72 @@ export default function LineDashboard() {
                                 <span className="font-medium text-gray-800">{acc.account_name ?? "未設定"}</span>
                               </div>
                             </td>
-                            <td className="px-5 py-3 text-gray-500">{acc.group_name ?? "—"}</td>
-                            <td className="px-5 py-3 font-mono text-gray-500">{acc.channel_id}</td>
-                            <td className="px-5 py-3 text-gray-500">{acc.basic_id ? `@${acc.basic_id}` : "未設定"}</td>
+                            <td className="px-5 py-3">
+                              <button
+                                onClick={() => toggleAccountRole(acc)}
+                                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold transition hover:opacity-80 ${
+                                  acc.role === "main"
+                                    ? "bg-green-100 text-green-700 border border-green-300"
+                                    : acc.role === "standby"
+                                      ? "bg-blue-100 text-blue-700 border border-blue-300"
+                                      : acc.role === "banned"
+                                        ? "bg-red-100 text-red-700 border border-red-300"
+                                        : "bg-gray-100 text-gray-500 border border-gray-200"
+                                }`}
+                                title="クリックで本番⇔サブ切替"
+                              >
+                                {acc.role === "main" && "● 本番"}
+                                {acc.role === "standby" && "◌ サブ"}
+                                {acc.role === "banned" && "✕ BAN"}
+                                {!acc.role && "未設定"}
+                              </button>
+                            </td>
+                            <td className="px-5 py-3 text-gray-500 hidden md:table-cell">{acc.group_name ?? "—"}</td>
+                            <td className="px-5 py-3 font-mono text-gray-500 hidden md:table-cell">{acc.channel_id}</td>
+                            <td className="px-5 py-3 text-gray-500 hidden md:table-cell">{acc.basic_id ? `@${acc.basic_id}` : "未設定"}</td>
                             <td className="px-5 py-3">
                               <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${acc.is_active ? "bg-green-100 text-green-600" : "bg-gray-100 text-gray-400"}`}>
                                 {acc.is_active ? "有効" : "無効"}
                               </span>
                             </td>
                             <td className="px-5 py-3">
-                              <button onClick={() => startEdit(acc)} className="text-blue-600 hover:text-blue-800 text-xs font-medium">編集</button>
+                              <div className="flex items-center gap-2">
+                                <button onClick={() => startEdit(acc)} className="text-blue-600 hover:text-blue-800 text-xs font-medium">編集</button>
+                                <button
+                                  onClick={async () => {
+                                    try {
+                                      const res = await fetch("/api/line/health-check", {
+                                        method: "POST",
+                                        headers: { "Content-Type": "application/json" },
+                                        body: JSON.stringify({ account_id: acc.id }),
+                                      });
+                                      const data = await res.json();
+                                      if (data.ok) {
+                                        alert(`✓ 接続OK\nBot名: ${data.displayName ?? "-"}\nBasic ID: ${data.basicId ?? "-"}`);
+                                      } else {
+                                        alert(`✕ 接続失敗 (HTTP ${data.status})\n${data.detail ?? ""}\n\n${data.hint ?? ""}`);
+                                      }
+                                    } catch (e) {
+                                      alert(`接続テストエラー: ${(e as Error).message}`);
+                                    }
+                                  }}
+                                  className="text-purple-600 hover:text-purple-800 text-xs font-medium"
+                                >
+                                  接続テスト
+                                </button>
+                                <button
+                                  onClick={() => detachAccountFromProject(acc)}
+                                  className="text-orange-600 hover:text-orange-800 text-xs font-medium"
+                                >
+                                  案件から外す
+                                </button>
+                                <button
+                                  onClick={() => deleteAccountHard(acc)}
+                                  className="text-red-500 hover:text-red-700 text-xs font-medium"
+                                >
+                                  削除
+                                </button>
+                              </div>
                             </td>
                           </tr>
                         ))}
@@ -1896,6 +4121,142 @@ export default function LineDashboard() {
           </>
         )}
       </div>
+
+      {/* ユーザー詳細モーダル */}
+      {showUserDetail && userDetailTarget && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
+              <h3 className="font-bold text-gray-800">ユーザー情報</h3>
+              <button onClick={() => setShowUserDetail(false)} className="text-gray-400 hover:text-gray-600">{Icons.close}</button>
+            </div>
+            <div className="p-5 space-y-4">
+              {/* プロフィール */}
+              <div className="flex items-center gap-3">
+                {userDetailTarget.picture_url ? (
+                  <img src={userDetailTarget.picture_url} alt="" className="w-16 h-16 rounded-full object-cover" />
+                ) : (
+                  <div className="w-16 h-16 rounded-full bg-gray-200 flex items-center justify-center text-gray-400">{Icons.user}</div>
+                )}
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-bold text-gray-800 truncate">{userDetailTarget.display_name ?? "名前なし"}</div>
+                  <div className="text-[10px] text-gray-400 font-mono truncate">{userDetailTarget.line_user_id}</div>
+                  <div className="mt-1"><StatusBadge status={userDetailTarget.status} /></div>
+                </div>
+              </div>
+              {/* 表示名編集 */}
+              <div>
+                <label className="text-xs text-gray-500 block mb-1 font-medium">表示名</label>
+                <input
+                  type="text"
+                  value={userDetailForm.display_name}
+                  onChange={(e) => setUserDetailForm({ ...userDetailForm, display_name: e.target.value })}
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:border-blue-400 focus:outline-none"
+                />
+              </div>
+              {/* メモ */}
+              <div>
+                <label className="text-xs text-gray-500 block mb-1 font-medium">メモ</label>
+                <textarea
+                  value={userDetailForm.memo}
+                  onChange={(e) => setUserDetailForm({ ...userDetailForm, memo: e.target.value })}
+                  rows={3}
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm resize-none focus:border-blue-400 focus:outline-none"
+                />
+              </div>
+              {/* テストアカウント */}
+              <div className="bg-purple-50 border border-purple-200 rounded-lg p-3">
+                <label className="flex items-start gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={userDetailForm.is_test}
+                    onChange={(e) => setUserDetailForm({ ...userDetailForm, is_test: e.target.checked })}
+                    className="mt-0.5 accent-purple-600 w-4 h-4"
+                  />
+                  <div className="flex-1">
+                    <div className="text-sm font-medium text-purple-800">テストアカウントに追加</div>
+                    <div className="text-[11px] text-purple-600 mt-0.5">配信時にテスト送信先として選択できるようになります</div>
+                  </div>
+                </label>
+              </div>
+              {/* 友だち追加日 */}
+              <div className="text-xs text-gray-500">
+                友だち追加日: {fmtShort(userDetailTarget.followed_at)}
+              </div>
+              {/* ラベル */}
+              {labels.length > 0 && (
+                <div>
+                  <label className="text-xs text-gray-500 block mb-1 font-medium">ラベル</label>
+                  <div className="flex flex-wrap gap-1.5">
+                    {labels.map((l) => {
+                      const assigned = l.assigned_users.includes(userDetailTarget.line_user_id);
+                      return (
+                        <button
+                          key={l.id}
+                          type="button"
+                          onClick={() => toggleLabelUser(l.id, userDetailTarget.line_user_id)}
+                          className={`px-2 py-1 text-xs rounded-full border transition ${
+                            assigned ? "text-white border-transparent" : "text-gray-600 border-gray-200 hover:bg-gray-50"
+                          }`}
+                          style={assigned ? { backgroundColor: l.color } : {}}
+                        >
+                          {l.name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+            <div className="flex justify-between gap-2 px-5 py-4 border-t border-gray-200">
+              <button
+                onClick={() => { setAccountSubView("chat"); openChat(userDetailTarget); setShowUserDetail(false); }}
+                className="px-4 py-2 text-sm text-[#06C755] border border-[#06C755] rounded-lg hover:bg-green-50 transition"
+              >
+                チャットを開く
+              </button>
+              <div className="flex gap-2">
+                <button onClick={() => setShowUserDetail(false)} className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition">キャンセル</button>
+                <button
+                  onClick={async () => {
+                    try {
+                      const res = await fetch("/api/line/followers", {
+                        method: "PATCH",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                          id: userDetailTarget.id,
+                          display_name: userDetailForm.display_name.trim() || null,
+                          memo: userDetailForm.memo,
+                          is_test: userDetailForm.is_test,
+                        }),
+                      });
+                      if (res.ok) {
+                        setFollowers((prev) =>
+                          prev.map((f) =>
+                            f.id === userDetailTarget.id
+                              ? { ...f, display_name: userDetailForm.display_name.trim() || null, memo: userDetailForm.memo, is_test: userDetailForm.is_test }
+                              : f,
+                          ),
+                        );
+                        await fetchTestFollowers();
+                        setShowUserDetail(false);
+                      } else {
+                        const data = await res.json().catch(() => ({}));
+                        alert(`保存失敗: ${data.error ?? res.status}`);
+                      }
+                    } catch (e) {
+                      alert(`保存エラー: ${(e as Error).message}`);
+                    }
+                  }}
+                  className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition"
+                >
+                  保存
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

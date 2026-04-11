@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase-browser";
 
@@ -12,9 +12,24 @@ interface Project {
   sort_order: number;
 }
 
+interface ProjectForm {
+  name: string;
+  description: string;
+  color: string;
+  sort_order: number;
+}
+
 const DEFAULT_COLORS = [
   "#06C755", "#3B82F6", "#EF4444", "#F59E0B", "#8B5CF6", "#EC4899",
+  "#14B8A6", "#F97316", "#6366F1", "#84CC16",
 ];
+
+const emptyProjectForm: ProjectForm = {
+  name: "",
+  description: "",
+  color: "#06C755",
+  sort_order: 0,
+};
 
 export default function LineProjects() {
   const router = useRouter();
@@ -22,15 +37,31 @@ export default function LineProjects() {
   const [loading, setLoading] = useState(true);
   const [userName, setUserName] = useState("");
 
+  // 案件管理モーダル
+  const [showProjectModal, setShowProjectModal] = useState(false);
+  const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
+  const [projectForm, setProjectForm] = useState<ProjectForm>(emptyProjectForm);
+  const [projectSaving, setProjectSaving] = useState(false);
+  const [projectMsg, setProjectMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  // 管理モード（編集/削除ボタンの表示）
+  const [manageMode, setManageMode] = useState(false);
+
+  const fetchProjects = useCallback(async () => {
+    try {
+      const res = await fetch("/api/line/projects");
+      if (res.ok) setProjects(await res.json());
+    } catch { /* */ }
+  }, []);
+
   useEffect(() => {
     const init = async () => {
       const supabase = createClient();
 
-      // 認証チェック（ログインしてなくてもOK）
       const { data: { user } } = await supabase.auth.getUser();
       setUserName(user?.email ?? "ゲスト");
 
-      // 権限フィルタ付き案件一覧を取得
+      // 権限フィルタ付きで閲覧可能案件を取得
       const url = user?.id
         ? `/api/line/user-projects?user_id=${user.id}`
         : `/api/line/user-projects`;
@@ -50,9 +81,85 @@ export default function LineProjects() {
   };
 
   const selectProject = (project: Project) => {
-    // sessionStorageに選択した案件を保存
     sessionStorage.setItem("line_project", JSON.stringify(project));
     router.push("/line/dashboard");
+  };
+
+  const openCreateProject = () => {
+    setEditingProjectId(null);
+    setProjectForm({
+      ...emptyProjectForm,
+      sort_order: projects.length > 0 ? Math.max(...projects.map((p) => p.sort_order)) + 10 : 10,
+    });
+    setProjectMsg(null);
+    setShowProjectModal(true);
+  };
+
+  const openEditProject = (p: Project) => {
+    setEditingProjectId(p.id);
+    setProjectForm({
+      name: p.name,
+      description: p.description ?? "",
+      color: p.color,
+      sort_order: p.sort_order,
+    });
+    setProjectMsg(null);
+    setShowProjectModal(true);
+  };
+
+  const saveProject = async () => {
+    if (!projectForm.name.trim()) {
+      setProjectMsg({ ok: false, text: "案件名を入力してください" });
+      return;
+    }
+    setProjectSaving(true);
+    setProjectMsg(null);
+    try {
+      if (editingProjectId) {
+        const res = await fetch("/api/line/projects", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: editingProjectId, ...projectForm }),
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          setProjectMsg({ ok: false, text: data.error ?? "更新失敗" });
+          return;
+        }
+      } else {
+        const res = await fetch("/api/line/projects", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(projectForm),
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          setProjectMsg({ ok: false, text: data.error ?? "作成失敗" });
+          return;
+        }
+      }
+      await fetchProjects();
+      setShowProjectModal(false);
+    } catch (e) {
+      setProjectMsg({ ok: false, text: (e as Error).message });
+    } finally {
+      setProjectSaving(false);
+    }
+  };
+
+  const deleteProject = async (p: Project) => {
+    if (!confirm(`案件「${p.name}」を削除しますか？\n※紐付くユーザー権限も削除されます。LINEアカウント・フォロワー等は残ります。`)) return;
+    const res = await fetch("/api/line/projects", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: p.id }),
+    });
+    if (res.ok) {
+      fetchProjects();
+    } else {
+      const data = await res.json().catch(() => ({}));
+      alert(`削除失敗: ${data.error ?? res.status}`);
+    }
   };
 
   if (loading) {
@@ -65,7 +172,6 @@ export default function LineProjects() {
 
   return (
     <div className="min-h-screen bg-[#1e2744]">
-      {/* ヘッダー */}
       <header className="border-b border-white/10 px-6 py-4 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 rounded-lg bg-[#06C755] flex items-center justify-center">
@@ -76,8 +182,30 @@ export default function LineProjects() {
             <p className="text-xs text-white/40">案件を選択してください</p>
           </div>
         </div>
-        <div className="flex items-center gap-4">
-          <span className="text-xs text-white/50">{userName}</span>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={openCreateProject}
+            className="px-3 py-1.5 text-xs bg-[#06C755] hover:bg-[#05a648] text-white rounded-md transition font-medium"
+          >
+            + 新規案件
+          </button>
+          <button
+            onClick={() => setManageMode((m) => !m)}
+            className={`px-3 py-1.5 text-xs rounded-md transition border ${
+              manageMode
+                ? "bg-white/15 text-white border-white/30"
+                : "text-white/70 hover:text-white hover:bg-white/10 border-white/10"
+            }`}
+          >
+            {manageMode ? "管理モード終了" : "管理モード"}
+          </button>
+          <button
+            onClick={() => router.push("/line/users")}
+            className="px-3 py-1.5 text-xs text-white/80 hover:text-white bg-white/5 hover:bg-white/10 border border-white/10 rounded-md transition"
+          >
+            ユーザー管理
+          </button>
+          <span className="text-xs text-white/50 ml-2">{userName}</span>
           <button
             onClick={handleLogout}
             className="px-3 py-1.5 text-xs text-white/60 hover:text-white hover:bg-white/10 rounded-md transition"
@@ -87,43 +215,173 @@ export default function LineProjects() {
         </div>
       </header>
 
-      {/* 案件カード */}
       <main className="max-w-4xl mx-auto px-6 py-10">
         <h2 className="text-white text-lg font-bold mb-6">案件一覧</h2>
 
         {projects.length === 0 ? (
           <div className="bg-white/5 rounded-xl border border-white/10 p-12 text-center">
             <p className="text-white/50 text-sm mb-2">案件が登録されていません</p>
-            <p className="text-white/30 text-xs">管理者に案件の登録を依頼してください</p>
+            <p className="text-white/30 text-xs">右上の「+ 新規案件」から追加してください</p>
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {projects.map((project, i) => (
-              <button
+              <div
                 key={project.id}
-                onClick={() => selectProject(project)}
-                className="group bg-white/5 hover:bg-white/10 border border-white/10 hover:border-white/20 rounded-xl p-5 text-left transition-all hover:shadow-lg hover:shadow-black/20 hover:-translate-y-0.5"
+                className="group relative bg-white/5 hover:bg-white/10 border border-white/10 hover:border-white/20 rounded-xl p-5 transition-all hover:shadow-lg hover:shadow-black/20 hover:-translate-y-0.5"
               >
-                {/* アイコン */}
-                <div
-                  className="w-12 h-12 rounded-xl flex items-center justify-center mb-4 text-xl"
-                  style={{ backgroundColor: project.color || DEFAULT_COLORS[i % DEFAULT_COLORS.length] }}
+                <button
+                  onClick={() => selectProject(project)}
+                  className="text-left w-full"
                 >
-                  <span className="text-white font-bold">
-                    {project.name.charAt(0)}
-                  </span>
-                </div>
-                <h3 className="text-white font-bold text-base mb-1 group-hover:text-[#06C755] transition-colors">
-                  {project.name}
-                </h3>
-                {project.description && (
-                  <p className="text-white/40 text-xs leading-relaxed">{project.description}</p>
+                  <div
+                    className="w-12 h-12 rounded-xl flex items-center justify-center mb-4 text-xl"
+                    style={{ backgroundColor: project.color || DEFAULT_COLORS[i % DEFAULT_COLORS.length] }}
+                  >
+                    <span className="text-white font-bold">
+                      {project.name.charAt(0)}
+                    </span>
+                  </div>
+                  <h3 className="text-white font-bold text-base mb-1 group-hover:text-[#06C755] transition-colors">
+                    {project.name}
+                  </h3>
+                  {project.description && (
+                    <p className="text-white/40 text-xs leading-relaxed">{project.description}</p>
+                  )}
+                  <p className="text-white/20 text-[10px] mt-2">順序: {project.sort_order}</p>
+                </button>
+                {manageMode && (
+                  <div className="absolute top-3 right-3 flex gap-1 opacity-100">
+                    <button
+                      onClick={(e) => { e.stopPropagation(); openEditProject(project); }}
+                      className="px-2 py-1 text-[10px] bg-blue-500/80 hover:bg-blue-500 text-white rounded"
+                    >
+                      編集
+                    </button>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); deleteProject(project); }}
+                      className="px-2 py-1 text-[10px] bg-red-500/80 hover:bg-red-500 text-white rounded"
+                    >
+                      削除
+                    </button>
+                  </div>
                 )}
-              </button>
+              </div>
             ))}
           </div>
         )}
       </main>
+
+      {/* 案件作成/編集モーダル */}
+      {showProjectModal && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
+              <h3 className="font-bold text-gray-800">
+                {editingProjectId ? "案件編集" : "新規案件作成"}
+              </h3>
+              <button
+                onClick={() => setShowProjectModal(false)}
+                className="text-gray-400 hover:text-gray-600"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <div className="p-5 space-y-4">
+              <div>
+                <label className="text-xs text-gray-500 block mb-1 font-medium">
+                  案件名 <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={projectForm.name}
+                  onChange={(e) => setProjectForm({ ...projectForm, name: e.target.value })}
+                  placeholder="例: MARI"
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-gray-500 block mb-1 font-medium">説明</label>
+                <textarea
+                  value={projectForm.description}
+                  onChange={(e) => setProjectForm({ ...projectForm, description: e.target.value })}
+                  rows={2}
+                  placeholder="例: MARI案件"
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm resize-none focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-gray-500 block mb-2 font-medium">カラー</label>
+                <div className="flex flex-wrap gap-2 mb-2">
+                  {DEFAULT_COLORS.map((c) => (
+                    <button
+                      key={c}
+                      type="button"
+                      onClick={() => setProjectForm({ ...projectForm, color: c })}
+                      className={`w-8 h-8 rounded-full border-2 transition ${
+                        projectForm.color === c ? "border-gray-800 scale-110" : "border-transparent"
+                      }`}
+                      style={{ backgroundColor: c }}
+                    />
+                  ))}
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] text-gray-400">カスタム:</span>
+                  <input
+                    type="color"
+                    value={projectForm.color}
+                    onChange={(e) => setProjectForm({ ...projectForm, color: e.target.value })}
+                    className="w-10 h-8 rounded cursor-pointer border border-gray-200"
+                  />
+                  <input
+                    type="text"
+                    value={projectForm.color}
+                    onChange={(e) => setProjectForm({ ...projectForm, color: e.target.value })}
+                    className="w-24 border border-gray-200 rounded px-2 py-1 text-xs font-mono"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="text-xs text-gray-500 block mb-1 font-medium">並び順</label>
+                <input
+                  type="number"
+                  value={projectForm.sort_order}
+                  onChange={(e) => setProjectForm({ ...projectForm, sort_order: Number(e.target.value) })}
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                />
+                <p className="text-[10px] text-gray-400 mt-1">小さい順に並びます（例: 10, 20, 30...）</p>
+              </div>
+
+              {projectMsg && (
+                <div className={`px-3 py-2 rounded-md text-xs ${
+                  projectMsg.ok
+                    ? "bg-green-50 text-green-700 border border-green-200"
+                    : "bg-red-50 text-red-700 border border-red-200"
+                }`}>
+                  {projectMsg.text}
+                </div>
+              )}
+            </div>
+            <div className="flex justify-end gap-2 px-5 py-4 border-t border-gray-200">
+              <button
+                onClick={() => setShowProjectModal(false)}
+                className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition"
+              >
+                キャンセル
+              </button>
+              <button
+                onClick={saveProject}
+                disabled={projectSaving || !projectForm.name.trim()}
+                className="px-5 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition"
+              >
+                {projectSaving ? "保存中..." : editingProjectId ? "更新" : "作成"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

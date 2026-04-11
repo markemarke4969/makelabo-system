@@ -9,18 +9,20 @@ async function notifyChatwork(message: string) {
   const roomId = process.env.CHATWORK_ROOM_ID_PERSONAL;
   if (!token || !roomId) return { ok: false, reason: "CHATWORK credentials not set" };
 
-  const body = `[toall]\n${message}`;
+  const bodyText = `[toall]\n${message}`;
 
   try {
+    const form = new URLSearchParams();
+    form.set("body", bodyText);
+    form.set("self_unread", "1");
     const res = await fetch(
       `https://api.chatwork.com/v2/rooms/${roomId}/messages`,
       {
         method: "POST",
         headers: {
           "X-ChatWorkToken": token,
-          "Content-Type": "application/x-www-form-urlencoded",
         },
-        body: new URLSearchParams({ body, self_unread: "1" }),
+        body: form,
       }
     );
     return { ok: res.ok, status: res.status };

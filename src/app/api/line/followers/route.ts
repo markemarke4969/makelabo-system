@@ -1,17 +1,86 @@
 import { NextRequest } from "next/server";
 import { supabase } from "@/lib/supabase";
 
-export async function GET() {
-  const { data, error } = await supabase
-    .from("line_followers")
-    .select("*")
-    .order("followed_at", { ascending: false });
+export async function GET(request: NextRequest) {
+  const testOnly = request.nextUrl.searchParams.get("test_only") === "1";
+  const accountId = request.nextUrl.searchParams.get("account_id");
+  const projectId = request.nextUrl.searchParams.get("project_id");
+
+  // project_id 指定時: line_accounts からその project に属する account_id を全取得し .in() で絞る
+  let accountIdsFromProject: string[] | null = null;
+  if (projectId && !accountId) {
+    const { data: accs, error: accErr } = await supabase
+      .from("line_accounts")
+      .select("id")
+      .eq("project_id", projectId);
+    if (accErr) {
+      return Response.json({ error: accErr.message }, { status: 500 });
+    }
+    accountIdsFromProject = (accs ?? []).map((a) => a.id);
+    // その案件にアカウントが0件なら即空配列を返す
+    if (accountIdsFromProject.length === 0) {
+      return Response.json([]);
+    }
+  }
+
+  const buildQuery = (withTestFilter: boolean) => {
+    let q = supabase
+      .from("line_followers")
+      .select("*")
+      .order("followed_at", { ascending: false });
+    if (accountId) q = q.eq("line_account_id", accountId);
+    else if (accountIdsFromProject) q = q.in("line_account_id", accountIdsFromProject);
+    if (withTestFilter) q = q.eq("is_test", true);
+    return q;
+  };
+
+  let { data, error } = await buildQuery(testOnly);
+
+  // is_test カラム未作成時の fallback
+  if (error && testOnly && /is_test/.test(error.message)) {
+    ({ data, error } = await buildQuery(false));
+  }
 
   if (error) {
     return Response.json({ error: error.message }, { status: 500 });
   }
 
   return Response.json(data);
+}
+
+export async function PATCH(request: NextRequest) {
+  const body = await request.json();
+  const { id, display_name, memo, is_test } = body;
+
+  if (!id) {
+    return Response.json({ error: "id is required" }, { status: 400 });
+  }
+
+  const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
+  if (display_name !== undefined) updates.display_name = display_name;
+  if (memo !== undefined) updates.memo = memo;
+  if (is_test !== undefined) updates.is_test = is_test;
+
+  let { error } = await supabase
+    .from("line_followers")
+    .update(updates)
+    .eq("id", id);
+
+  // is_test カラム未作成の環境では fallback
+  if (error && is_test !== undefined && /is_test/.test(error.message)) {
+    const { is_test: _omit, ...rest } = updates as Record<string, unknown>;
+    void _omit;
+    ({ error } = await supabase
+      .from("line_followers")
+      .update(rest)
+      .eq("id", id));
+  }
+
+  if (error) {
+    return Response.json({ error: error.message }, { status: 500 });
+  }
+
+  return Response.json({ ok: true });
 }
 
 export async function DELETE(request: NextRequest) {

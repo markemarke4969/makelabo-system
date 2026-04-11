@@ -1,96 +1,138 @@
 import { NextRequest } from "next/server";
 import { supabase } from "@/lib/supabase";
-import { getLineConfig, verifySignature, getProfile } from "@/lib/line";
+import { verifySignature, getProfile } from "@/lib/line";
+
+interface LineAccountRow {
+  id: string;
+  channel_id: string | null;
+  channel_secret: string | null;
+  channel_access_token: string | null;
+  greeting_message: string | null;
+}
+
+interface LineEvent {
+  type: string;
+  source: { userId: string };
+  replyToken?: string;
+  timestamp: number;
+  message?: { id: string; type: string; text?: string };
+}
+
+async function logWebhookAttempt(
+  body: string,
+  signature: string,
+  matched: { id: string; channel_id: string | null } | null,
+  verifyResult: string,
+  eventTypes: string[],
+) {
+  try {
+    await supabase.from("line_webhook_logs").insert({
+      received_at: new Date().toISOString(),
+      signature_header: signature ? signature.slice(0, 16) + "..." : null,
+      body_preview: body.slice(0, 1000),
+      matched_account_id: matched?.id ?? null,
+      matched_channel_id: matched?.channel_id ?? null,
+      verify_result: verifyResult,
+      event_types: eventTypes,
+    });
+  } catch (e) {
+    console.error("[LINE Webhook] webhook log insert failed:", e);
+  }
+}
 
 export async function POST(request: NextRequest) {
-  let channelSecret: string;
-  let channelAccessToken: string;
-  try {
-    ({ channelSecret, channelAccessToken } = getLineConfig());
-  } catch (e) {
-    console.error("[LINE Webhook] 環境変数エラー:", e);
-    return Response.json({ error: "Server config error" }, { status: 500 });
-  }
-
-  // リクエストボディを取得
   const body = await request.text();
   const signature = request.headers.get("x-line-signature") ?? "";
 
   console.log("[LINE Webhook] body length:", body.length);
-  console.log("[LINE Webhook] signature:", signature ? "あり" : "なし");
-  console.log("[LINE Webhook] secret prefix:", channelSecret.slice(0, 6) + "...");
-  console.log("[LINE Webhook] secret length:", channelSecret.length);
 
-  // 署名検証
-  if (!verifySignature(body, signature, channelSecret)) {
-    console.error("[LINE Webhook] 署名検証失敗");
-    console.error("[LINE Webhook] body:", body.slice(0, 200));
+  // 登録されている全アカウントを取得 → 署名が一致する secret を持つアカウントを特定
+  let accounts: LineAccountRow[] = [];
+  {
+    // greeting_message カラム未作成環境への fallback
+    let res = await supabase
+      .from("line_accounts")
+      .select("id, channel_id, channel_secret, channel_access_token, greeting_message");
+    if (res.error && /greeting_message/.test(res.error.message)) {
+      const fb = await supabase
+        .from("line_accounts")
+        .select("id, channel_id, channel_secret, channel_access_token");
+      if (fb.error) {
+        console.error("[LINE Webhook] accounts fetch error:", fb.error.message);
+        return Response.json({ error: "DB error" }, { status: 500 });
+      }
+      accounts = (fb.data ?? []).map((a) => ({ ...a, greeting_message: null }));
+    } else if (res.error) {
+      console.error("[LINE Webhook] accounts fetch error:", res.error.message);
+      return Response.json({ error: "DB error" }, { status: 500 });
+    } else {
+      accounts = (res.data ?? []) as LineAccountRow[];
+    }
+  }
+
+  // 署名一致するアカウントを探す
+  let matchedAccount: LineAccountRow | null = null;
+  for (const acc of accounts) {
+    if (!acc.channel_secret) continue;
+    if (verifySignature(body, signature, acc.channel_secret)) {
+      matchedAccount = acc;
+      break;
+    }
+  }
+
+  if (!matchedAccount) {
+    console.error(
+      "[LINE Webhook] 署名検証失敗 - 登録済み",
+      accounts.length,
+      "アカウントどれも一致せず",
+    );
+    await logWebhookAttempt(body, signature, null, "no_account_matched", []);
     return Response.json({ error: "Invalid signature" }, { status: 403 });
   }
 
-  const payload = JSON.parse(body);
-  console.log("[LINE Webhook 受信]", JSON.stringify(payload, null, 2));
+  console.log("[LINE Webhook] 署名一致:", matchedAccount.id, matchedAccount.channel_id);
 
-  // LINE Developers検証リクエスト（events空）は即200返却
+  let payload: { events?: LineEvent[]; destination?: string };
+  try {
+    payload = JSON.parse(body);
+  } catch {
+    await logWebhookAttempt(body, signature, matchedAccount, "invalid_json", []);
+    return Response.json({ error: "Invalid JSON" }, { status: 400 });
+  }
+
+  const eventTypes = (payload.events ?? []).map((e) => e.type);
+  await logWebhookAttempt(body, signature, matchedAccount, "verified", eventTypes);
+
+  // LINE Developers 検証リクエスト（events 空）
   if (!payload.events || payload.events.length === 0) {
     console.log("[LINE Webhook] 検証リクエスト - OK");
     return Response.json({ ok: true });
   }
 
-  // line_accountsからアカウント取得（初回は自動作成）
-  let { data: account } = await supabase
-    .from("line_accounts")
-    .select("id")
-    .eq("channel_secret", channelSecret)
-    .single();
-
-  if (!account) {
-    const { data: created } = await supabase
-      .from("line_accounts")
-      .insert({
-        channel_id: payload.destination ?? "unknown",
-        channel_secret: channelSecret,
-        channel_access_token: channelAccessToken,
-        account_name: "LINE公式アカウント",
-      })
-      .select("id")
-      .single();
-    account = created;
-  }
-
-  if (!account) {
-    console.error("[LINE Webhook] アカウント取得/作成失敗");
-    return Response.json({ error: "Account error" }, { status: 500 });
-  }
-
-  // イベント処理
-  for (const event of payload.events ?? []) {
+  for (const event of payload.events) {
     console.log(`[LINE Webhook] event.type=${event.type}, userId=${event.source?.userId}`);
 
-    // 全イベントをline_messagesに保存
-    await saveEvent(event, account.id);
+    await saveEvent(event, matchedAccount.id);
 
     if (event.type === "follow") {
-      await handleFollow(event, account.id, channelAccessToken);
+      await handleFollow(event, matchedAccount);
     } else if (event.type === "unfollow") {
-      await handleUnfollow(event, account.id);
+      await handleUnfollow(event, matchedAccount.id);
     } else if (event.type === "block") {
-      await handleBlock(event, account.id);
+      await handleBlock(event, matchedAccount.id);
     }
   }
 
   return Response.json({ ok: true });
 }
 
-async function handleFollow(
-  event: { source: { userId: string } },
-  accountId: string,
-  accessToken: string,
-) {
+async function handleFollow(event: LineEvent, account: LineAccountRow) {
   const userId = event.source.userId;
 
   // プロフィール取得
-  const profile = await getProfile(userId, accessToken);
+  const profile = account.channel_access_token
+    ? await getProfile(userId, account.channel_access_token)
+    : null;
   console.log("[LINE Webhook] follow profile:", profile);
 
   // upsert（再フォロー対応）
@@ -98,7 +140,7 @@ async function handleFollow(
     .from("line_followers")
     .upsert(
       {
-        line_account_id: accountId,
+        line_account_id: account.id,
         line_user_id: userId,
         display_name: profile?.displayName ?? null,
         picture_url: profile?.pictureUrl ?? null,
@@ -113,12 +155,36 @@ async function handleFollow(
   if (error) {
     console.error("[LINE Webhook] follower upsert失敗:", error.message);
   }
+
+  // カスタム挨拶メッセージを送信（設定されていれば）
+  if (account.greeting_message && account.channel_access_token && event.replyToken) {
+    const text = account.greeting_message.replace(
+      /\{display_name\}/g,
+      profile?.displayName ?? "ゲスト",
+    );
+    try {
+      const res = await fetch("https://api.line.me/v2/bot/message/reply", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${account.channel_access_token}`,
+        },
+        body: JSON.stringify({
+          replyToken: event.replyToken,
+          messages: [{ type: "text", text }],
+        }),
+      });
+      if (!res.ok) {
+        const errText = await res.text();
+        console.error("[LINE Webhook] 挨拶送信失敗:", res.status, errText);
+      }
+    } catch (e) {
+      console.error("[LINE Webhook] 挨拶送信例外:", e);
+    }
+  }
 }
 
-async function handleUnfollow(
-  event: { source: { userId: string } },
-  accountId: string,
-) {
+async function handleUnfollow(event: LineEvent, accountId: string) {
   const { error } = await supabase
     .from("line_followers")
     .update({
@@ -134,10 +200,7 @@ async function handleUnfollow(
   }
 }
 
-async function saveEvent(
-  event: { type: string; message?: { id: string; type: string; text?: string }; source: { userId: string }; replyToken?: string; timestamp: number },
-  accountId: string,
-) {
+async function saveEvent(event: LineEvent, accountId: string) {
   const { error } = await supabase
     .from("line_messages")
     .insert({
@@ -157,10 +220,7 @@ async function saveEvent(
   }
 }
 
-async function handleBlock(
-  event: { source: { userId: string } },
-  accountId: string,
-) {
+async function handleBlock(event: LineEvent, accountId: string) {
   const { error } = await supabase
     .from("line_followers")
     .update({
