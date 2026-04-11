@@ -31,6 +31,7 @@ export interface DemoProfile {
   mbti?: string;
   animal_type?: string;
   deposit_hint?: number;
+  current_assets?: number;
 }
 
 export function getDemoProfile(): DemoProfile | null {

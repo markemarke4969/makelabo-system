@@ -9,6 +9,7 @@ import {
   formatJPY,
   formatJPYPlain,
   DEPOSIT_OPTIONS,
+  LINE_URL,
 } from "@/lib/fiana-config";
 import {
   generateAllTrades,
@@ -712,6 +713,39 @@ export default function BacktestPage() {
                   </div>
                 ))}
               </div>
+            </div>
+
+            {/* 個別相談CTA */}
+            <div
+              className="rounded-2xl p-5 border"
+              style={{
+                background:
+                  "linear-gradient(135deg, rgba(99,102,241,0.18), rgba(139,92,246,0.1))",
+                borderColor: "rgba(139,92,246,0.35)",
+                boxShadow: "0 0 30px rgba(99,102,241,0.2)",
+              }}
+            >
+              <div className="text-center mb-4">
+                <div className="text-3xl mb-2">💬</div>
+                <h3 className="fiana-heading text-base font-bold text-white mb-2">
+                  あなたの{formatJPYPlain(deposit)}で検証した結果、{formatJPY(finalStats.totalProfit)}
+                </h3>
+                <p className="text-xs text-gray-300 leading-relaxed">
+                  この結果をもとに、あなた専用の運用プランを資産運用アドバイザーが無料で個別に作成します。
+                </p>
+              </div>
+              <a
+                href={LINE_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="block w-full text-center py-3.5 text-sm font-bold rounded-xl text-white"
+                style={{ background: "linear-gradient(135deg, #6366f1, #8b5cf6)" }}
+              >
+                無料で個別相談を予約する
+              </a>
+              <p className="text-center text-[10px] text-gray-500 mt-2">
+                LINEで相談日時を調整します
+              </p>
             </div>
 
             <div className="grid grid-cols-2 gap-3">

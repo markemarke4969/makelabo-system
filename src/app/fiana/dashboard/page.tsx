@@ -1,133 +1,64 @@
 "use client";
 
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase-browser";
-import { isDemoMode, getDemoProfile, disableDemoMode } from "@/lib/fiana-demo";
-import { EA_SYSTEMS, LINE_URL, TRIAL_DAYS, formatJPY, formatJPYPlain } from "@/lib/fiana-config";
+import { isDemoMode, getDemoProfile, saveDemoProfile } from "@/lib/fiana-demo";
+import { LINE_URL, formatJPY, formatJPYPlain } from "@/lib/fiana-config";
+import { ANIMAL_TYPES } from "@/lib/fiana-diagnosis";
 import {
-  generateAllTrades,
-  getCurrentMarketSession,
-  isMarketOpen,
-  daysBetween,
-  formatDate,
-  type VirtualTrade,
-} from "@/lib/fiana-trade-engine";
-import {
-  POINT_ACTIONS,
-  SYSTEM_UNLOCK_COSTS,
-  FIA_LEVELS,
-  pointsToNextLevel,
-  formatFia,
-  isEarlyBird,
-  getDemoPoints,
-  getDemoTotalEarned,
-  getDemoLedger,
-  getDemoCheckins,
-  addDemoPoints,
-  type LedgerEntry,
-} from "@/lib/fia-points";
-import {
-  LineChart,
-  Line,
-  XAxis,
-  YAxis,
-  Tooltip,
-  ResponsiveContainer,
-  Area,
-  AreaChart,
-  CartesianGrid,
-} from "recharts";
+  HAPPINESS_DAILY_STATS,
+  HAPPINESS_RECENT_TRADES,
+  scaleByCapital,
+  scaleLot,
+} from "@/lib/fiana-happiness-data";
 
 // ========================================
-// 型定義
+// 型
 // ========================================
-interface UserProfile {
+interface Profile {
   user_id: string;
-  diagnosis_type: string;
-  diagnosis_label: string;
   virtual_deposit: number;
   lot_size: number;
   trial_start_date: string;
+  animal_type?: string;
+  current_assets?: number;
 }
 
-// チャート共通設定
-const CHART_COLORS = {
-  grid: "rgba(255,255,255,0.06)",
-  axis: "#64748b",
-  line1: "#6366f1",
-  line2: "#f59e0b",
-  area: "#6366f1",
-  green: "#22c55e",
-};
+type TabKey = "trial" | "backtest" | "economy";
 
-const TOOLTIP_STYLE = {
-  contentStyle: {
-    background: "#1a1a2e",
-    border: "1px solid rgba(100,100,255,0.2)",
-    borderRadius: "0.75rem",
-    color: "#e2e8f0",
-    fontSize: "0.75rem",
-  },
-};
+const TRIAL_DAYS_FREE = 14;
 
 // ========================================
 // メインダッシュボード
 // ========================================
 export default function FianaDashboard() {
   const router = useRouter();
-  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<"portfolio" | "trades" | "inflation" | "fia">("portfolio");
-  const [activeSystem, setActiveSystem] = useState("happiness-plus");
-  const [now, setNow] = useState(new Date());
+  const [tab, setTab] = useState<TabKey>("trial");
 
-  // インフレ体感用（項目別固定費）
-  const [expenses, setExpenses] = useState({
-    rent: "",
-    utilities: "",
-    telecom: "",
-    insurance: "",
-    food: "",
-    other: "",
-  });
-  const [inflationResult, setInflationResult] = useState<{
-    totalMonthly: number;
-    yearlyDiff: number;
-    yearlyTotal: number;
-    projections: {
-      year: number;
-      noAction: number; // 何もしない場合の累計支出増
-      withInvest: number; // 運用した場合の資産
-      diff: number; // 差額
-    }[];
-  } | null>(null);
-
-  // fiaポイント
-  const [fiaPoints, setFiaPoints] = useState(0);
-  const [fiaTotalEarned, setFiaTotalEarned] = useState(0);
-  const [fiaLedger, setFiaLedger] = useState<LedgerEntry[]>([]);
-  const [fiaTodayCheckins, setFiaTodayCheckins] = useState<string[]>([]);
-  const [fiaEarnAnim, setFiaEarnAnim] = useState<{ amount: number; label: string } | null>(null);
-  const [fiaUnlocks, setFiaUnlocks] = useState<{ system_id: string; expires_at: string }[]>([]);
-  const [unlockConfirm, setUnlockConfirm] = useState<string | null>(null); // systemId to confirm
-
-  // 時刻更新（1分ごと）
-  useEffect(() => {
-    const timer = setInterval(() => setNow(new Date()), 60000);
-    return () => clearInterval(timer);
-  }, []);
-
-  // プロフィール読込
   useEffect(() => {
     const load = async () => {
       if (isDemoMode()) {
         const demo = getDemoProfile();
         if (!demo?.virtual_deposit) {
-          router.replace("/fiana/setup");
+          router.replace("/fiana/shindan");
           return;
         }
-        setProfile(demo as UserProfile);
+        if (!demo.trial_start_date) {
+          const today = new Date().toISOString().split("T")[0];
+          saveDemoProfile({ trial_start_date: today });
+          demo.trial_start_date = today;
+        }
+        setProfile({
+          user_id: demo.user_id,
+          virtual_deposit: demo.virtual_deposit,
+          lot_size: demo.lot_size || 0.03,
+          trial_start_date: demo.trial_start_date,
+          animal_type: demo.animal_type,
+          current_assets: demo.current_assets,
+        });
         setLoading(false);
         return;
       }
@@ -136,7 +67,6 @@ export default function FianaDashboard() {
       const {
         data: { session },
       } = await supabase.auth.getSession();
-
       if (!session) {
         router.replace("/fiana/register");
         return;
@@ -149,1331 +79,696 @@ export default function FianaDashboard() {
         .single();
 
       if (!data?.virtual_deposit) {
-        router.replace("/fiana/setup");
+        router.replace("/fiana/shindan");
         return;
       }
 
-      setProfile(data as UserProfile);
+      if (!data.trial_start_date) {
+        const today = new Date().toISOString().split("T")[0];
+        await supabase
+          .from("fiana_profiles")
+          .update({ trial_start_date: today })
+          .eq("user_id", session.user.id);
+        data.trial_start_date = today;
+      }
+
+      setProfile({
+        user_id: data.user_id,
+        virtual_deposit: data.virtual_deposit,
+        lot_size: data.lot_size || 0.03,
+        trial_start_date: data.trial_start_date,
+        animal_type: data.animal_type,
+        current_assets: data.current_assets,
+      });
       setLoading(false);
     };
     load();
   }, [router]);
 
-  // fiaポイント読み込み
-  useEffect(() => {
-    if (!profile) return;
-    const loadPoints = async () => {
-      if (isDemoMode()) {
-        const today = new Date().toISOString().split("T")[0];
-        setFiaPoints(getDemoPoints());
-        setFiaTotalEarned(getDemoTotalEarned());
-        setFiaLedger(getDemoLedger().slice(0, 50));
-        setFiaTodayCheckins(getDemoCheckins(today));
-        return;
-      }
-      try {
-        const res = await fetch("/api/fiana/points");
-        if (res.ok) {
-          const data = await res.json();
-          setFiaPoints(data.points);
-          setFiaTotalEarned(data.totalEarned);
-          setFiaLedger(data.ledger);
-          setFiaTodayCheckins(data.todayCheckins);
-          setFiaUnlocks(data.activeUnlocks || []);
-        }
-      } catch {
-        // ポイント取得失敗は無視
-      }
-    };
-    loadPoints();
-  }, [profile]);
-
-  // デイリーログインポイント自動付与
-  useEffect(() => {
-    if (!profile) return;
-    const claimLogin = async () => {
-      const today = new Date().toISOString().split("T")[0];
-      if (isDemoMode()) {
-        const checkins = getDemoCheckins(today);
-        if (!checkins.includes("daily_login")) {
-          const result = addDemoPoints("daily_login", 10, "デイリーログイン");
-          if (result.success) {
-            setFiaPoints(result.newBalance);
-            setFiaTotalEarned(getDemoTotalEarned());
-            setFiaTodayCheckins(getDemoCheckins(today));
-            if (result.entry) setFiaLedger((prev) => [result.entry!, ...prev]);
-            showEarnAnimation(10, "デイリーログイン");
-          }
-        }
-        // 早起きボーナス
-        if (isEarlyBird() && !checkins.includes("early_bird")) {
-          const result = addDemoPoints("early_bird", 10, "早起きチェックイン");
-          if (result.success) {
-            setFiaPoints(result.newBalance);
-            setFiaTotalEarned(getDemoTotalEarned());
-            setFiaTodayCheckins(getDemoCheckins(today));
-            if (result.entry) setFiaLedger((prev) => [result.entry!, ...prev]);
-            setTimeout(() => showEarnAnimation(10, "早起きボーナス"), 2000);
-          }
-        }
-        return;
-      }
-      try {
-        const res = await fetch("/api/fiana/points", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action: "daily_login" }),
-        });
-        if (res.ok) {
-          const data = await res.json();
-          setFiaPoints(data.points);
-          setFiaTotalEarned(data.totalEarned);
-          showEarnAnimation(data.earned, "デイリーログイン");
-        }
-        // 早起きボーナス
-        if (isEarlyBird()) {
-          const earlyRes = await fetch("/api/fiana/points", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ action: "early_bird" }),
-          });
-          if (earlyRes.ok) {
-            const data = await earlyRes.json();
-            setFiaPoints(data.points);
-            setFiaTotalEarned(data.totalEarned);
-            setTimeout(() => showEarnAnimation(data.earned, "早起きボーナス"), 2000);
-          }
-        }
-      } catch {
-        // ログインポイント付与失敗は無視
-      }
-    };
-    claimLogin();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [profile]);
-
-  const showEarnAnimation = useCallback((amount: number, label: string) => {
-    setFiaEarnAnim({ amount, label });
-    setTimeout(() => setFiaEarnAnim(null), 3000);
-  }, []);
-
-  const claimFiaAction = useCallback(
-    async (action: string) => {
-      const actionDef = POINT_ACTIONS.find((a) => a.action === action);
-      if (!actionDef) return;
-
-      if (isDemoMode()) {
-        const result = addDemoPoints(action, actionDef.points, actionDef.label);
-        if (result.success) {
-          const today = new Date().toISOString().split("T")[0];
-          setFiaPoints(result.newBalance);
-          setFiaTotalEarned(getDemoTotalEarned());
-          setFiaTodayCheckins(getDemoCheckins(today));
-          if (result.entry) setFiaLedger((prev) => [result.entry!, ...prev]);
-          showEarnAnimation(actionDef.points, actionDef.label);
-        }
-        return;
-      }
-
-      try {
-        const res = await fetch("/api/fiana/points", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action }),
-        });
-        if (res.ok) {
-          const data = await res.json();
-          setFiaPoints(data.points);
-          setFiaTotalEarned(data.totalEarned);
-          showEarnAnimation(data.earned, actionDef.label);
-          // チェックイン更新
-          setFiaTodayCheckins((prev) => [...prev, action]);
-        }
-      } catch {
-        // 失敗は無視
-      }
-    },
-    [showEarnAnimation]
+  const animal = useMemo(
+    () => ANIMAL_TYPES.find((a) => a.id === profile?.animal_type) ?? null,
+    [profile?.animal_type],
   );
 
-  const unlockSystem = useCallback(
-    async (systemId: string) => {
-      const cost = SYSTEM_UNLOCK_COSTS.find((c) => c.systemId === systemId);
-      if (!cost) return;
-
-      if (isDemoMode()) {
-        const result = addDemoPoints(
-          "system_unlock",
-          -cost.fiaCost,
-          `${systemId} 体験開放`
-        );
-        if (result.success) {
-          const today = new Date().toISOString().split("T")[0];
-          setFiaPoints(result.newBalance);
-          setFiaTotalEarned(getDemoTotalEarned());
-          setFiaTodayCheckins(getDemoCheckins(today));
-          if (result.entry) setFiaLedger((prev) => [result.entry!, ...prev]);
-          const expiresAt = new Date(
-            Date.now() + cost.durationHours * 60 * 60 * 1000
-          ).toISOString();
-          setFiaUnlocks((prev) => [
-            ...prev,
-            { system_id: systemId, expires_at: expiresAt },
-          ]);
-        }
-        setUnlockConfirm(null);
-        return;
-      }
-
-      try {
-        const res = await fetch("/api/fiana/points", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action: "system_unlock", systemId }),
-        });
-        if (res.ok) {
-          const data = await res.json();
-          setFiaPoints(data.points);
-          setFiaUnlocks((prev) => [
-            ...prev,
-            { system_id: systemId, expires_at: data.expires_at },
-          ]);
-        }
-      } catch {
-        // 失敗は無視
-      }
-      setUnlockConfirm(null);
-    },
-    [showEarnAnimation]
-  );
-
-  const isSystemUnlocked = useCallback(
-    (systemId: string) => {
-      return fiaUnlocks.some(
-        (u) =>
-          u.system_id === systemId &&
-          new Date(u.expires_at) > new Date()
-      );
-    },
-    [fiaUnlocks]
-  );
-
-  const fiaLevelInfo = useMemo(() => pointsToNextLevel(fiaTotalEarned), [fiaTotalEarned]);
-
-  const today = useMemo(() => now.toISOString().split("T")[0], [now]);
-
-  const trialInfo = useMemo(() => {
-    if (!profile) return null;
-    const elapsed = daysBetween(profile.trial_start_date, today);
-    const remaining = Math.max(0, TRIAL_DAYS - elapsed);
-    const isExpired = remaining <= 0;
-    return { elapsed, remaining, isExpired };
-  }, [profile, today]);
-
-  const systemData = useMemo(() => {
-    if (!profile) return null;
-
-    const endDate = trialInfo?.isExpired
-      ? (() => {
-          const d = new Date(profile.trial_start_date);
-          d.setDate(d.getDate() + TRIAL_DAYS);
-          return d.toISOString().split("T")[0];
-        })()
-      : today;
-
-    const unlockedIds = fiaUnlocks
-      .filter((u) => new Date(u.expires_at) > new Date())
-      .map((u) => u.system_id);
-
-    return EA_SYSTEMS.filter((s) => s.fullAccess || unlockedIds.includes(s.id)).map((sys) => {
-      const { trades, snapshots } = generateAllTrades(
-        profile.user_id,
-        sys.id,
-        sys.name,
-        profile.lot_size,
-        profile.virtual_deposit,
-        profile.trial_start_date,
-        endDate
-      );
-      return { system: sys, trades, snapshots };
-    });
-  }, [profile, today, trialInfo, fiaUnlocks]);
-
-  const currentSystemData = useMemo(() => {
-    if (!systemData) return null;
-    return systemData.find((s) => s.system.id === activeSystem) || systemData[0];
-  }, [systemData, activeSystem]);
-
-  const marketSession = getCurrentMarketSession(now.getHours());
-  const marketOpen = isMarketOpen(now.getHours(), now.getDay());
-
-  const handleLogout = useCallback(async () => {
-    if (isDemoMode()) {
-      disableDemoMode();
-      router.push("/fiana/register");
-      return;
-    }
-    const supabase = createClient();
-    await supabase.auth.signOut();
-    router.push("/fiana/register");
-  }, [router]);
-
-  const calcInflation = useCallback(() => {
-    const vals = Object.values(expenses).map((v) => parseInt(v, 10) || 0);
-    const totalMonthly = vals.reduce((a, b) => a + b, 0);
-    if (totalMonthly <= 0) return;
-
-    const inflationRate = 0.03;
-    const yearlyTotal = totalMonthly * 12;
-    const yearlyDiff = Math.round(yearlyTotal * inflationRate);
-    const monthlyInvestReturn = 0.015; // 月利1.5%（年利約20%）
-
-    const projections: {
-      year: number;
-      noAction: number;
-      withInvest: number;
-      diff: number;
-    }[] = [];
-
-    for (const targetYear of [1, 3, 5, 10]) {
-      // インフレで増える累計支出（複利）
-      let cumulativeInflation = 0;
-      for (let y = 1; y <= targetYear; y++) {
-        cumulativeInflation += yearlyTotal * (Math.pow(1 + inflationRate, y) - 1);
-      }
-      cumulativeInflation = Math.round(cumulativeInflation);
-
-      // インフレ差額を月々運用に回した場合の資産
-      let invested = 0;
-      const monthlyExtra = yearlyDiff / 12;
-      for (let m = 0; m < targetYear * 12; m++) {
-        invested += monthlyExtra;
-        invested *= 1 + monthlyInvestReturn;
-      }
-      invested = Math.round(invested);
-
-      projections.push({
-        year: targetYear,
-        noAction: cumulativeInflation,
-        withInvest: invested,
-        diff: invested + cumulativeInflation,
-      });
-    }
-
-    setInflationResult({
-      totalMonthly,
-      yearlyDiff,
-      yearlyTotal,
-      projections,
-    });
-  }, [expenses]);
-
-  // ========================================
-  // ローディング
-  // ========================================
-  if (loading || !profile || !systemData || !currentSystemData || !trialInfo) {
+  if (loading || !profile) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="text-center">
-          <h1 className="fiana-heading text-2xl font-bold fiana-text-glow mb-4">FIANA</h1>
+          <h1 className="fiana-heading text-2xl font-bold fiana-text-glow mb-4">
+            FIANA
+          </h1>
           <div className="w-8 h-8 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
-          <p className="text-gray-400 text-lg">ダッシュボード読み込み中...</p>
+          <p className="text-gray-400">読み込み中...</p>
         </div>
       </div>
     );
   }
-
-  // ========================================
-  // 30日ロック画面
-  // ========================================
-  if (trialInfo.isExpired) {
-    const lastSnapshot =
-      currentSystemData.snapshots[currentSystemData.snapshots.length - 1];
-    const totalProfit = lastSnapshot ? lastSnapshot.cumulativePnl : 0;
-
-    return (
-      <div className="min-h-screen px-4 py-8">
-        <div className="max-w-lg mx-auto fiana-slide-up">
-          <div className="fiana-card p-8 text-center">
-            <div className="text-5xl mb-4">🔒</div>
-            <h1 className="text-xl font-bold text-white mb-3">
-              30日間の体験が終了しました
-            </h1>
-
-            <div className="rounded-xl p-6 mb-6 bg-green-500/10 border border-green-500/20">
-              <p className="text-sm text-green-400 mb-1">
-                あなたの仮想資産はこれだけ育ちました
-              </p>
-              <p className="text-3xl font-bold text-green-300 fiana-amount fiana-text-glow-green">
-                {formatJPY(totalProfit)}
-              </p>
-              <p className="text-sm text-green-500/70 mt-1 fiana-amount">
-                元本 {formatJPYPlain(profile.virtual_deposit)} →{" "}
-                {formatJPYPlain(profile.virtual_deposit + totalProfit)}
-              </p>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3 mb-6">
-              <div className="bg-white/5 rounded-xl p-3">
-                <p className="text-xs text-gray-500">総取引回数</p>
-                <p className="text-xl font-bold text-white">
-                  {currentSystemData.trades.length}回
-                </p>
-              </div>
-              <div className="bg-white/5 rounded-xl p-3">
-                <p className="text-xs text-gray-500">運用日数</p>
-                <p className="text-xl font-bold text-white">
-                  {TRIAL_DAYS}日
-                </p>
-              </div>
-            </div>
-
-            <div className="bg-white/5 rounded-xl p-4 mb-6">
-              <p className="text-sm text-gray-400 mb-2">30日間の資産推移</p>
-              <div className="h-40">
-                <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={currentSystemData.snapshots}>
-                    <defs>
-                      <linearGradient id="lockGrad" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor={CHART_COLORS.green} stopOpacity={0.3} />
-                        <stop offset="95%" stopColor={CHART_COLORS.green} stopOpacity={0} />
-                      </linearGradient>
-                    </defs>
-                    <Area
-                      type="monotone"
-                      dataKey="totalAsset"
-                      stroke={CHART_COLORS.green}
-                      fill="url(#lockGrad)"
-                      strokeWidth={2}
-                    />
-                    <XAxis
-                      dataKey="date"
-                      tickFormatter={formatDate}
-                      tick={{ fontSize: 10, fill: CHART_COLORS.axis }}
-                      interval="preserveStartEnd"
-                    />
-                  </AreaChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-
-            <p className="text-gray-400 text-base mb-6 leading-relaxed">
-              続きは無料の音声相談でご確認ください。
-              <br />
-              専属アドバイザーがあなたに合ったプランをご提案します。
-            </p>
-
-            <a
-              href={LINE_URL}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="block w-full py-4 text-white font-bold text-lg rounded-xl text-center"
-              style={{ background: "linear-gradient(135deg, #06c755, #05a648)" }}
-            >
-              LINEで無料相談する
-            </a>
-
-            <button
-              onClick={handleLogout}
-              className="mt-4 text-sm text-gray-500 hover:text-gray-300 transition-colors"
-            >
-              ログアウト
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // ========================================
-  // 通常ダッシュボード
-  // ========================================
-  const lastSnapshot =
-    currentSystemData.snapshots[currentSystemData.snapshots.length - 1];
-  const prevSnapshot =
-    currentSystemData.snapshots.length >= 2
-      ? currentSystemData.snapshots[currentSystemData.snapshots.length - 2]
-      : null;
-
-  const totalAsset = lastSnapshot
-    ? lastSnapshot.totalAsset
-    : profile.virtual_deposit;
-  const cumulativePnl = lastSnapshot ? lastSnapshot.cumulativePnl : 0;
-  const todayPnl = lastSnapshot ? lastSnapshot.dailyPnl : 0;
-  const pnlPercent =
-    profile.virtual_deposit > 0
-      ? ((cumulativePnl / profile.virtual_deposit) * 100).toFixed(2)
-      : "0.00";
-  const todayPnlPercent =
-    prevSnapshot && prevSnapshot.totalAsset > 0
-      ? ((todayPnl / prevSnapshot.totalAsset) * 100).toFixed(2)
-      : "0.00";
-
-  const recentTrades = [...currentSystemData.trades].reverse().slice(0, 20);
-
-  const chartData = currentSystemData.snapshots.map((s) => ({
-    date: s.date,
-    asset: s.totalAsset,
-  }));
 
   return (
     <div className="min-h-screen pb-28">
       {/* ヘッダー */}
-      <div
-        className="sticky top-0 z-20 px-4 py-3 border-b"
+      <header
+        className="sticky top-0 z-20 px-4 py-3 border-b backdrop-blur-md"
         style={{
-          background: "rgba(10, 10, 15, 0.9)",
-          backdropFilter: "blur(8px)",
+          background: "rgba(10,10,15,0.85)",
           borderColor: "var(--fiana-border)",
         }}
       >
         <div className="max-w-lg mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <h1 className="fiana-heading font-bold text-white text-lg tracking-wider">FIANA</h1>
-          </div>
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => setActiveTab("fia")}
-              className="flex items-center gap-1 bg-amber-500/20 px-2.5 py-1 rounded-lg border border-amber-500/30 hover:bg-amber-500/30 transition-colors"
-            >
-              <span className="text-xs">{fiaLevelInfo.current.icon}</span>
-              <span className="text-xs font-bold text-amber-300 fiana-amount">{fiaPoints.toLocaleString()}</span>
-              <span className="text-[10px] text-amber-400/70 fiana-label">fia</span>
-            </button>
-            <div className="flex items-center gap-1.5">
-              <span
-                className={`w-2 h-2 rounded-full ${marketOpen ? "bg-green-400 animate-pulse" : "bg-gray-600"}`}
-              />
-              <span className="text-xs text-gray-400">{marketSession}</span>
-            </div>
-            <div className="bg-indigo-500/20 px-2.5 py-1 rounded-lg border border-indigo-500/30">
-              <span className="text-xs font-medium text-indigo-300">
-                残{trialInfo.remaining}日
-              </span>
-            </div>
-            <button
-              onClick={handleLogout}
-              className="text-xs text-gray-500 hover:text-gray-300 transition-colors"
-            >
-              ログアウト
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* タブ切り替え（画面下部に固定） */}
-      <div
-        className="fixed bottom-0 left-0 right-0 z-30 px-4 pb-[env(safe-area-inset-bottom)] border-t"
-        style={{
-          background: "rgba(10, 10, 15, 0.97)",
-          backdropFilter: "blur(12px)",
-          borderColor: "rgba(255,255,255,0.08)",
-        }}
-      >
-        <div className="max-w-lg mx-auto flex pt-2 pb-2">
-          {[
-            { key: "portfolio" as const, icon: "📈", label: "運用" },
-            { key: "trades" as const, icon: "📋", label: "取引ログ" },
-            { key: "fia" as const, icon: "🔥", label: "fia" },
-            { key: "inflation" as const, icon: "💡", label: "家計" },
-          ].map((tab) => (
-            <button
-              key={tab.key}
-              onClick={() => setActiveTab(tab.key)}
-              className={`flex-1 flex flex-col items-center gap-0.5 py-2 rounded-xl transition-all ${
-                activeTab === tab.key
-                  ? "text-indigo-400"
-                  : "text-gray-600"
-              }`}
-            >
-              <span className="text-xl leading-none">{tab.icon}</span>
-              <span className={`text-[10px] font-medium ${
-                activeTab === tab.key ? "text-indigo-300" : "text-gray-600"
-              }`}>{tab.label}</span>
-              {activeTab === tab.key && (
-                <span className="w-4 h-0.5 rounded-full bg-indigo-500 mt-0.5" />
-              )}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div className="max-w-lg mx-auto px-4 py-4">
-
-        {/* チャートタブ */}
-        {activeTab === "portfolio" && (
-          <div className="space-y-4">
-            {/* システム切り替え */}
-            <div className="flex gap-2 overflow-x-auto pb-1">
-              {EA_SYSTEMS.filter((s) => s.fullAccess).map((sys) => (
-                <button
-                  key={sys.id}
-                  onClick={() => setActiveSystem(sys.id)}
-                  className={`flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap transition-all ${
-                    activeSystem === sys.id
-                      ? "bg-indigo-500 text-white shadow-lg shadow-indigo-500/30"
-                      : "bg-white/5 text-gray-400 border border-white/10 hover:border-white/20"
-                  }`}
-                >
-                  <span>{sys.icon}</span>
-                  <span>{sys.name}</span>
-                </button>
-              ))}
-              {EA_SYSTEMS.filter((s) => !s.fullAccess).map((sys) => {
-                const unlocked = isSystemUnlocked(sys.id);
-                const cost = SYSTEM_UNLOCK_COSTS.find((c) => c.systemId === sys.id);
-                if (unlocked) {
-                  return (
-                    <button
-                      key={sys.id}
-                      onClick={() => setActiveSystem(sys.id)}
-                      className={`flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap transition-all ${
-                        activeSystem === sys.id
-                          ? "bg-amber-500 text-black shadow-lg shadow-amber-500/30"
-                          : "bg-amber-500/10 text-amber-300 border border-amber-500/30 hover:border-amber-500/50"
-                      }`}
-                    >
-                      <span>{sys.icon}</span>
-                      <span>{sys.name}</span>
-                      <span className="text-[10px]">体験中</span>
-                    </button>
-                  );
-                }
-                return (
-                  <button
-                    key={sys.id}
-                    onClick={() => setUnlockConfirm(sys.id)}
-                    className="flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap bg-white/5 text-gray-500 border border-white/10 hover:border-amber-500/30 hover:text-amber-400 transition-all cursor-pointer"
-                  >
-                    <span>{sys.icon}</span>
-                    <span>{sys.name}</span>
-                    <span className="text-[10px] text-amber-500/60">{cost?.fiaCost}fia</span>
-                  </button>
-                );
-              })}
-            </div>
-
-            {/* ポートフォリオサマリー */}
-            <div
-              className="rounded-2xl p-5 text-white"
-              style={{ background: "linear-gradient(135deg, #0f0c29, #302b63, #24243e)" }}
-            >
-              <div className="flex items-center justify-between mb-3">
-                <div className="flex items-center gap-2">
-                  <span className="text-xl">
-                    {EA_SYSTEMS.find((s) => s.id === activeSystem)?.icon}
-                  </span>
-                  <span className="text-sm opacity-80">
-                    {EA_SYSTEMS.find((s) => s.id === activeSystem)?.name}
-                  </span>
-                </div>
-                <span className="text-xs opacity-60">
-                  最終更新: {now.getHours()}:{now.getMinutes().toString().padStart(2, "0")}
-                </span>
-              </div>
-
-              <p className="fiana-label mb-1">Total Assets</p>
-              <p className="text-3xl font-bold mb-3 fiana-amount fiana-text-glow">
-                {formatJPYPlain(totalAsset)}
-              </p>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div className="bg-white/10 rounded-xl p-3">
-                  <p className="fiana-label">Today P&L</p>
-                  <p className={`text-lg fiana-amount ${todayPnl >= 0 ? "text-green-300 fiana-text-glow-green" : "text-red-300"}`}>
-                    {formatJPY(todayPnl)}
-                  </p>
-                  <p className="text-xs opacity-50 fiana-amount">
-                    {todayPnl >= 0 ? "+" : ""}{todayPnlPercent}%
-                  </p>
-                </div>
-                <div className="bg-white/10 rounded-xl p-3">
-                  <p className="fiana-label">Total P&L</p>
-                  <p className={`text-lg fiana-amount ${cumulativePnl >= 0 ? "text-green-300 fiana-text-glow-green" : "text-red-300"}`}>
-                    {formatJPY(cumulativePnl)}
-                  </p>
-                  <p className="text-xs opacity-50 fiana-amount">
-                    {cumulativePnl >= 0 ? "+" : ""}{pnlPercent}%
-                  </p>
-                </div>
-              </div>
-
-              <div className="flex items-center justify-between mt-3 text-xs opacity-50">
-                <span>元本: {formatJPYPlain(profile.virtual_deposit)}</span>
-                <span>運用開始: {trialInfo.elapsed}日目</span>
-              </div>
-            </div>
-
-            <div className="fiana-card p-4">
-              <h3 className="text-sm font-bold text-gray-300 mb-3">資産推移</h3>
-              <div className="h-52">
-                <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={chartData}>
-                    <defs>
-                      <linearGradient id="assetGrad" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor={CHART_COLORS.area} stopOpacity={0.3} />
-                        <stop offset="95%" stopColor={CHART_COLORS.area} stopOpacity={0} />
-                      </linearGradient>
-                    </defs>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={CHART_COLORS.grid} />
-                    <XAxis
-                      dataKey="date"
-                      tickFormatter={formatDate}
-                      tick={{ fontSize: 11, fill: CHART_COLORS.axis }}
-                      interval="preserveStartEnd"
-                    />
-                    <YAxis
-                      tick={{ fontSize: 11, fill: CHART_COLORS.axis }}
-                      tickFormatter={(v: number) =>
-                        v >= 10000 ? `${(v / 10000).toFixed(0)}万` : `${v}`
-                      }
-                      domain={["dataMin - 1000", "dataMax + 1000"]}
-                    />
-                    <Tooltip
-                      {...TOOLTIP_STYLE}
-                      formatter={(value) => [formatJPYPlain(Number(value)), "資産"]}
-                      labelFormatter={(label) => String(label)}
-                    />
-                    <Area
-                      type="monotone"
-                      dataKey="asset"
-                      stroke={CHART_COLORS.area}
-                      fill="url(#assetGrad)"
-                      strokeWidth={2}
-                    />
-                  </AreaChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-
-            {systemData.length > 1 && (
-              <div className="fiana-card p-4">
-                <h3 className="text-sm font-bold text-gray-300 mb-3">システム比較</h3>
-                <div className="h-44">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <LineChart>
-                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={CHART_COLORS.grid} />
-                      <XAxis
-                        dataKey="date"
-                        tickFormatter={formatDate}
-                        tick={{ fontSize: 11, fill: CHART_COLORS.axis }}
-                        interval="preserveStartEnd"
-                        allowDuplicatedCategory={false}
-                      />
-                      <YAxis
-                        tick={{ fontSize: 11, fill: CHART_COLORS.axis }}
-                        tickFormatter={(v: number) =>
-                          v >= 10000 ? `${(v / 10000).toFixed(0)}万` : `${v}`
-                        }
-                      />
-                      <Tooltip
-                        {...TOOLTIP_STYLE}
-                        formatter={(value, name) => [formatJPYPlain(Number(value)), String(name)]}
-                      />
-                      {systemData.map((sd, i) => (
-                        <Line
-                          key={sd.system.id}
-                          data={sd.snapshots.map((s) => ({
-                            date: s.date,
-                            [sd.system.name]: s.totalAsset,
-                          }))}
-                          type="monotone"
-                          dataKey={sd.system.name}
-                          stroke={i === 0 ? CHART_COLORS.line1 : CHART_COLORS.line2}
-                          strokeWidth={2}
-                          dot={false}
-                        />
-                      ))}
-                    </LineChart>
-                  </ResponsiveContainer>
-                </div>
-                <div className="flex gap-4 mt-2 justify-center">
-                  {systemData.map((sd, i) => (
-                    <div key={sd.system.id} className="flex items-center gap-1.5 text-xs">
-                      <span
-                        className="w-3 h-1 rounded-full"
-                        style={{ background: i === 0 ? CHART_COLORS.line1 : CHART_COLORS.line2 }}
-                      />
-                      <span className="text-gray-400">
-                        {sd.system.icon} {sd.system.name}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            <div className="fiana-card p-4">
-              <h3 className="text-sm font-bold text-gray-300 mb-3">パフォーマンス</h3>
-              <div className="grid grid-cols-3 gap-3">
-                <div className="text-center">
-                  <p className="text-xs text-gray-500">取引回数</p>
-                  <p className="text-lg font-bold text-white">{currentSystemData.trades.length}</p>
-                </div>
-                <div className="text-center">
-                  <p className="text-xs text-gray-500">勝率</p>
-                  <p className="text-lg font-bold text-white">
-                    {currentSystemData.trades.length > 0
-                      ? ((currentSystemData.trades.filter((t) => t.pips > 0).length / currentSystemData.trades.length) * 100).toFixed(1)
-                      : "0"}%
-                  </p>
-                </div>
-                <div className="text-center">
-                  <p className="text-xs text-gray-500">累計損益</p>
-                  <p className={`text-lg font-bold ${cumulativePnl >= 0 ? "text-green-400" : "text-red-400"}`}>
-                    {formatJPY(cumulativePnl)}
-                  </p>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* 取引ログタブ */}
-        {activeTab === "trades" && (
-          <div className="space-y-2">
-            {/* 取引ログ閲覧でポイント付与ボタン */}
-            {!fiaTodayCheckins.includes("view_trade_log") && (
-              <button
-                onClick={() => claimFiaAction("view_trade_log")}
-                className="w-full py-2 bg-amber-500/20 border border-amber-500/30 rounded-xl text-amber-300 text-sm font-medium hover:bg-amber-500/30 transition-colors"
-              >
-                取引ログを確認して +5 fia 獲得
-              </button>
-            )}
-            <div className="fiana-card p-4">
-              <h3 className="text-sm font-bold text-gray-300 mb-3">
-                取引履歴（{EA_SYSTEMS.find((s) => s.id === activeSystem)?.name}）
-              </h3>
-              {recentTrades.length === 0 ? (
-                <p className="text-gray-500 text-center py-8">まだ取引がありません</p>
-              ) : (
-                <div className="space-y-2">
-                  {recentTrades.map((trade) => (
-                    <TradeLogRow key={trade.id} trade={trade} />
-                  ))}
-                </div>
-              )}
-            </div>
-            <p className="text-center text-xs text-gray-600 mt-2">
-              ※これはシミュレーションです。実際の取引結果とは異なります。
+          <div>
+            <h1 className="fiana-heading text-lg font-bold text-white fiana-text-glow">
+              FIANA
+            </h1>
+            <p className="text-[11px] text-gray-500">
+              {animal ? `${animal.headline}` : "投資体験アプリ"}
             </p>
           </div>
-        )}
-
-        {/* fiaポイントタブ */}
-        {activeTab === "fia" && (
-          <div className="space-y-4">
-            {/* ポイント獲得アニメーション */}
-            {fiaEarnAnim && (
-              <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 animate-bounce">
-                <div className="bg-amber-500 text-black font-bold px-6 py-3 rounded-2xl shadow-lg shadow-amber-500/40 text-center">
-                  <p className="text-lg">+{fiaEarnAnim.amount} fia</p>
-                  <p className="text-xs opacity-80">{fiaEarnAnim.label}</p>
-                </div>
-              </div>
-            )}
-
-            {/* ナメクジ育成カード */}
-            <div
-              className="rounded-2xl p-6 text-white relative overflow-hidden"
-              style={{ background: "linear-gradient(135deg, #1a0a2e, #2d1b69, #1a2a4a)" }}
-            >
-              <div className="absolute top-0 right-0 w-32 h-32 bg-purple-500/10 rounded-full blur-3xl" />
-              <div className="relative">
-                <div className="flex items-center justify-between mb-4">
-                  <div>
-                    <p className="text-xs text-purple-300/70 mb-1">育成キャラクター</p>
-                    <div className="flex items-center gap-2">
-                      <span className="text-4xl">{fiaLevelInfo.current.icon}</span>
-                      <div>
-                        <p className="text-lg font-bold">{fiaLevelInfo.current.name}</p>
-                        <p className="text-xs text-purple-300/60">Lv.{fiaLevelInfo.current.level}</p>
-                      </div>
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <p className="fiana-label text-amber-300/70 mb-1">fia balance</p>
-                    <p className="text-2xl font-bold text-amber-300 fiana-amount fiana-text-glow-amber">{fiaPoints.toLocaleString()}</p>
-                  </div>
-                </div>
-
-                <p className="text-sm text-purple-200/80 mb-3">{fiaLevelInfo.current.description}</p>
-
-                {/* レベルアップ進捗バー */}
-                {fiaLevelInfo.next ? (
-                  <div>
-                    <div className="flex justify-between text-xs mb-1">
-                      <span className="text-purple-300/60">
-                        次のレベル: {fiaLevelInfo.next.icon} {fiaLevelInfo.next.name}
-                      </span>
-                      <span className="text-purple-300/60">
-                        あと {fiaLevelInfo.remaining.toLocaleString()} fia
-                      </span>
-                    </div>
-                    <div className="w-full h-3 bg-white/10 rounded-full overflow-hidden">
-                      <div
-                        className="h-full rounded-full transition-all duration-1000"
-                        style={{
-                          width: `${fiaLevelInfo.progress}%`,
-                          background: "linear-gradient(90deg, #f59e0b, #ef4444, #8b5cf6)",
-                        }}
-                      />
-                    </div>
-                    <p className="text-[10px] text-purple-400/50 mt-1 text-right">
-                      {fiaLevelInfo.progress}% 完了
-                    </p>
-                  </div>
-                ) : (
-                  <div className="text-center py-2">
-                    <p className="text-sm text-amber-300 font-bold">MAX LEVEL</p>
-                  </div>
-                )}
-
-                {/* 全レベル表示 */}
-                <div className="flex justify-between mt-4 px-2">
-                  {FIA_LEVELS.map((lv) => (
-                    <div
-                      key={lv.level}
-                      className={`text-center ${lv.level <= fiaLevelInfo.current.level ? "opacity-100" : "opacity-30"}`}
-                    >
-                      <span className="text-lg">{lv.icon}</span>
-                      <p className="text-[10px] text-gray-400 mt-0.5">Lv.{lv.level}</p>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-
-            {/* デイリーミッション */}
-            <div className="fiana-card p-4">
-              <h3 className="text-sm font-bold text-gray-300 mb-3">デイリーミッション</h3>
-              <div className="space-y-2">
-                {POINT_ACTIONS.filter((a) => a.daily).map((action) => {
-                  const claimed = fiaTodayCheckins.includes(action.action);
-                  return (
-                    <div
-                      key={action.action}
-                      className={`flex items-center justify-between p-3 rounded-xl border transition-all ${
-                        claimed
-                          ? "border-green-500/20 bg-green-500/5"
-                          : "border-white/10 bg-white/5 hover:border-amber-500/30"
-                      }`}
-                    >
-                      <div className="flex-1">
-                        <p className={`text-sm font-medium ${claimed ? "text-green-400" : "text-white"}`}>
-                          {action.label}
-                        </p>
-                        <p className="text-xs text-gray-500 mt-0.5">{action.description}</p>
-                      </div>
-                      <div className="flex items-center gap-2 ml-3">
-                        <span className="text-xs font-bold text-amber-400">+{action.points}</span>
-                        {claimed ? (
-                          <span className="text-xs text-green-500 font-bold px-2 py-1 bg-green-500/10 rounded-lg">
-                            済
-                          </span>
-                        ) : (
-                          <button
-                            onClick={() => claimFiaAction(action.action)}
-                            className="text-xs font-bold px-3 py-1.5 bg-amber-500 text-black rounded-lg hover:bg-amber-400 transition-colors"
-                          >
-                            獲得
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* 特別ボーナス */}
-            <div className="fiana-card p-4">
-              <h3 className="text-sm font-bold text-gray-300 mb-3">特別ボーナス</h3>
-              <div className="space-y-2">
-                {POINT_ACTIONS.filter((a) => !a.daily).map((action) => (
-                  <div
-                    key={action.action}
-                    className="flex items-center justify-between p-3 rounded-xl border border-amber-500/20 bg-amber-500/5"
-                  >
-                    <div className="flex-1">
-                      <p className="text-sm font-medium text-white">{action.label}</p>
-                      <p className="text-xs text-gray-500 mt-0.5">{action.description}</p>
-                    </div>
-                    <span className="text-sm font-bold text-amber-400 ml-3">
-                      +{action.points.toLocaleString()} fia
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* ポイント履歴 */}
-            <div className="fiana-card p-4">
-              <h3 className="text-sm font-bold text-gray-300 mb-3">ポイント履歴</h3>
-              {fiaLedger.length === 0 ? (
-                <p className="text-gray-500 text-center py-6 text-sm">まだ履歴がありません</p>
-              ) : (
-                <div className="space-y-1.5 max-h-64 overflow-y-auto">
-                  {fiaLedger.slice(0, 30).map((entry) => (
-                    <div
-                      key={entry.id}
-                      className="flex items-center justify-between py-2 px-2 rounded-lg hover:bg-white/5"
-                    >
-                      <div>
-                        <p className="text-sm text-gray-300">{entry.description}</p>
-                        <p className="text-[10px] text-gray-600">
-                          {new Date(entry.created_at).toLocaleString("ja-JP", {
-                            month: "short",
-                            day: "numeric",
-                            hour: "2-digit",
-                            minute: "2-digit",
-                          })}
-                        </p>
-                      </div>
-                      <span
-                        className={`text-sm font-bold ${
-                          entry.amount >= 0 ? "text-green-400" : "text-red-400"
-                        }`}
-                      >
-                        {entry.amount >= 0 ? "+" : ""}{entry.amount} fia
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* インフレ体感タブ */}
-        {activeTab === "inflation" && (
-          <div className="space-y-4">
-            {/* 固定費入力 */}
-            <div className="fiana-card p-4">
-              <h3 className="text-sm font-bold text-gray-300 mb-1">
-                家計シミュレーター
-              </h3>
-              <p className="text-xs text-gray-500 mb-4">
-                月々の固定費を入力して、インフレの影響と資産運用の効果を体感しましょう
-              </p>
-
-              <div className="space-y-3 mb-4">
-                {[
-                  { key: "rent" as const, label: "家賃・住宅ローン", placeholder: "80000" },
-                  { key: "utilities" as const, label: "光熱費", placeholder: "20000" },
-                  { key: "telecom" as const, label: "通信費", placeholder: "10000" },
-                  { key: "insurance" as const, label: "保険料", placeholder: "15000" },
-                  { key: "food" as const, label: "食費", placeholder: "50000" },
-                  { key: "other" as const, label: "その他", placeholder: "30000" },
-                ].map((item) => (
-                  <div key={item.key} className="flex items-center gap-3">
-                    <span className="text-sm text-gray-400 w-28 shrink-0">{item.label}</span>
-                    <div className="flex-1 flex items-center gap-1">
-                      <span className="text-gray-600 text-sm">¥</span>
-                      <input
-                        type="number"
-                        value={expenses[item.key]}
-                        onChange={(e) =>
-                          setExpenses((prev) => ({ ...prev, [item.key]: e.target.value }))
-                        }
-                        placeholder={item.placeholder}
-                        className="fiana-input w-full"
-                      />
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              {/* 合計と計算ボタン */}
-              <div className="flex items-center justify-between bg-white/5 rounded-xl p-3 mb-4">
-                <span className="text-sm text-gray-300 font-medium">月額合計</span>
-                <span className="text-lg font-bold text-white">
-                  ¥{Object.values(expenses)
-                    .reduce((s, v) => s + (parseInt(v, 10) || 0), 0)
-                    .toLocaleString()}
-                </span>
-              </div>
-
-              <button
-                onClick={() => {
-                  calcInflation();
-                  if (!fiaTodayCheckins.includes("inflation_check")) {
-                    claimFiaAction("inflation_check");
-                  }
-                }}
-                className="w-full py-3 bg-indigo-500 text-white font-bold text-sm rounded-xl hover:bg-indigo-400 transition-colors"
-              >
-                インフレ影響を計算する
-              </button>
-            </div>
-
-            {/* 結果表示 */}
-            {inflationResult && (
-              <>
-                {/* インフレ影響サマリー */}
-                <div className="fiana-card p-4">
-                  <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-4 mb-3">
-                    <p className="text-sm text-red-400 font-medium mb-1">
-                      インフレによる年間影響（年率3%想定）
-                    </p>
-                    <p className="text-2xl font-bold text-red-300">
-                      年間 -¥{inflationResult.yearlyDiff.toLocaleString()}
-                    </p>
-                    <p className="text-xs text-red-500/70 mt-1">
-                      月額{inflationResult.totalMonthly.toLocaleString()}円 ×
-                      12ヶ月 × 3% = 年間{inflationResult.yearlyDiff.toLocaleString()}円の目減り
-                    </p>
-                  </div>
-
-                  <p className="text-xs text-gray-500 text-center">
-                    何もしなくても、あなたのお金は毎年これだけ価値を失っています
-                  </p>
-                </div>
-
-                {/* 5年後/10年後比較 */}
-                <div className="fiana-card p-4">
-                  <h3 className="text-sm font-bold text-gray-300 mb-3">
-                    何もしない vs 資産運用した場合
-                  </h3>
-                  <div className="space-y-3">
-                    {inflationResult.projections.map((p) => (
-                      <div key={p.year} className="rounded-xl border border-white/10 p-4">
-                        <div className="flex items-center justify-between mb-3">
-                          <span className="text-sm font-bold text-white">{p.year}年後</span>
-                          <span
-                            className={`text-xs font-medium px-2 py-0.5 rounded-full ${
-                              p.year <= 3
-                                ? "bg-yellow-500/20 text-yellow-400"
-                                : "bg-green-500/20 text-green-400"
-                            }`}
-                          >
-                            {p.year <= 3 ? "短期" : "長期"}
-                          </span>
-                        </div>
-                        <div className="grid grid-cols-2 gap-3">
-                          <div className="bg-red-500/5 rounded-lg p-3">
-                            <p className="text-[10px] text-red-400/70 mb-0.5">何もしない場合</p>
-                            <p className="text-sm font-bold text-red-400">
-                              -¥{p.noAction.toLocaleString()}
-                            </p>
-                            <p className="text-[10px] text-red-500/50">
-                              インフレで失う額
-                            </p>
-                          </div>
-                          <div className="bg-green-500/5 rounded-lg p-3">
-                            <p className="text-[10px] text-green-400/70 mb-0.5">差額を運用した場合</p>
-                            <p className="text-sm font-bold text-green-400">
-                              +¥{p.withInvest.toLocaleString()}
-                            </p>
-                            <p className="text-[10px] text-green-500/50">
-                              月利1.5%で運用
-                            </p>
-                          </div>
-                        </div>
-                        <div className="mt-2 bg-indigo-500/10 rounded-lg p-2 text-center">
-                          <span className="text-xs text-indigo-300">
-                            差額: <span className="font-bold">¥{(p.withInvest + p.noAction).toLocaleString()}</span>
-                          </span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                {/* 気づきメッセージ */}
-                <div
-                  className="rounded-2xl p-5 text-center"
-                  style={{
-                    background: "linear-gradient(135deg, #1e1b4b, #312e81)",
-                    boxShadow: "0 8px 32px rgba(99,102,241,0.15)",
-                  }}
-                >
-                  <p className="text-lg font-bold text-white mb-2">
-                    資産を「守る」だけでは足りない時代
-                  </p>
-                  <p className="text-sm text-indigo-200/80 leading-relaxed mb-4">
-                    インフレは見えないコスト。<br />
-                    10年後、あなたの{inflationResult.totalMonthly.toLocaleString()}円は<br />
-                    実質{Math.round(inflationResult.totalMonthly * Math.pow(0.97, 10)).toLocaleString()}円の価値になります。
-                  </p>
-                  <p className="text-sm text-indigo-300/70">
-                    小さな一歩が、大きな差になります。
-                  </p>
-                </div>
-              </>
-            )}
-          </div>
-        )}
-
-        {/* バックテスト誘導 */}
-        <div className="mt-6">
-          <button
-            onClick={() => {
-              if (!fiaTodayCheckins.includes("run_backtest")) {
-                claimFiaAction("run_backtest");
-              }
-              router.push("/fiana/backtest");
-            }}
-            className="w-full fiana-card p-4 flex items-center justify-between hover:border-indigo-500/30 transition-all group"
-          >
-            <div className="flex items-center gap-3">
-              <span className="text-2xl">🔬</span>
-              <div className="text-left">
-                <p className="text-sm font-bold text-white group-hover:text-indigo-300 transition-colors">
-                  バックテスト検証
-                </p>
-                <p className="text-xs text-gray-500">過去のデータでシステムの成績を検証</p>
-              </div>
-            </div>
-            <div className="flex items-center gap-2">
-              {!fiaTodayCheckins.includes("run_backtest") && (
-                <span className="text-[10px] text-amber-400 bg-amber-500/20 px-2 py-0.5 rounded-full">
-                  +20 fia
-                </span>
-              )}
-              <span className="text-gray-600 group-hover:text-indigo-400 transition-colors">→</span>
-            </div>
-          </button>
-        </div>
-
-        {/* LINE誘導 */}
-        <div className="mt-4 fiana-card p-4 text-center">
-          <p className="text-sm text-gray-400 mb-3">
-            気になることがあれば、いつでもご相談ください
-          </p>
           <a
             href={LINE_URL}
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-block px-6 py-3 text-white font-bold text-sm rounded-xl"
-            style={{ background: "linear-gradient(135deg, #06c755, #05a648)" }}
+            className="text-xs font-bold px-3 py-1.5 rounded-full text-white"
+            style={{ background: "linear-gradient(135deg,#6366f1,#8b5cf6)" }}
           >
-            LINEで無料相談する
+            個別相談
           </a>
         </div>
+      </header>
 
-        <p className="text-center text-xs text-gray-600 mt-4 mb-8">
-          ※これはシミュレーションです。実際の取引結果とは異なります。
-        </p>
-      </div>
-
-      {/* fiaポイント獲得アニメーション（全タブ共通） */}
-      {fiaEarnAnim && activeTab !== "fia" && (
-        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 animate-bounce">
-          <div className="bg-amber-500 text-black font-bold px-6 py-3 rounded-2xl shadow-lg shadow-amber-500/40 text-center">
-            <p className="text-lg">+{fiaEarnAnim.amount} fia</p>
-            <p className="text-xs opacity-80">{fiaEarnAnim.label}</p>
-          </div>
-        </div>
-      )}
-
-      {/* システム体験開放確認モーダル */}
-      {unlockConfirm && (() => {
-        const sys = EA_SYSTEMS.find((s) => s.id === unlockConfirm);
-        const cost = SYSTEM_UNLOCK_COSTS.find((c) => c.systemId === unlockConfirm);
-        if (!sys || !cost) return null;
-        const canAfford = fiaPoints >= cost.fiaCost;
-        return (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm px-4">
-            <div className="fiana-card p-6 max-w-sm w-full fiana-slide-up">
-              <div className="text-center mb-4">
-                <span className="text-4xl">{sys.icon}</span>
-                <h3 className="text-lg font-bold text-white mt-2">{sys.name}</h3>
-                <p className="text-sm text-gray-400 mt-1">{sys.description}</p>
-              </div>
-
-              <div className="bg-white/5 rounded-xl p-4 mb-4">
-                <div className="flex justify-between mb-2">
-                  <span className="text-sm text-gray-400">体験コスト</span>
-                  <span className="text-sm font-bold text-amber-400">{cost.fiaCost} fia</span>
-                </div>
-                <div className="flex justify-between mb-2">
-                  <span className="text-sm text-gray-400">体験期間</span>
-                  <span className="text-sm text-white">{cost.durationHours}時間</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-sm text-gray-400">保有fia</span>
-                  <span className={`text-sm font-bold ${canAfford ? "text-green-400" : "text-red-400"}`}>
-                    {fiaPoints.toLocaleString()} fia
-                  </span>
-                </div>
-              </div>
-
-              {canAfford ? (
-                <button
-                  onClick={() => unlockSystem(unlockConfirm)}
-                  className="w-full py-3 bg-amber-500 text-black font-bold rounded-xl hover:bg-amber-400 transition-colors mb-2"
-                >
-                  {cost.fiaCost} fia で体験開放する
-                </button>
-              ) : (
-                <div className="text-center py-3 bg-red-500/10 border border-red-500/20 rounded-xl mb-2">
-                  <p className="text-sm text-red-400">ポイントが足りません</p>
-                  <p className="text-xs text-red-500/60 mt-1">
-                    あと {(cost.fiaCost - fiaPoints).toLocaleString()} fia 必要です
-                  </p>
-                </div>
-              )}
-
+      {/* タブ切替 */}
+      <nav className="sticky top-[57px] z-10 px-4 py-3 border-b backdrop-blur-md"
+        style={{
+          background: "rgba(10,10,15,0.8)",
+          borderColor: "var(--fiana-border)",
+        }}
+      >
+        <div className="max-w-lg mx-auto grid grid-cols-3 gap-2">
+          {[
+            { key: "trial" as const, label: "体験版", icon: "📺" },
+            { key: "backtest" as const, label: "バックテスト", icon: "📊" },
+            { key: "economy" as const, label: "経済指標", icon: "📅" },
+          ].map((t) => {
+            const active = tab === t.key;
+            return (
               <button
-                onClick={() => setUnlockConfirm(null)}
-                className="w-full py-2 text-sm text-gray-500 hover:text-gray-300 transition-colors"
+                key={t.key}
+                onClick={() => setTab(t.key)}
+                className={`py-2.5 rounded-xl text-xs font-bold transition-all border ${
+                  active
+                    ? "text-white border-indigo-500/60"
+                    : "text-gray-400 border-white/10 hover:border-white/20"
+                }`}
+                style={
+                  active
+                    ? {
+                        background:
+                          "linear-gradient(135deg, rgba(99,102,241,0.25), rgba(139,92,246,0.2))",
+                      }
+                    : {}
+                }
               >
-                キャンセル
+                <span className="mr-1">{t.icon}</span>
+                {t.label}
               </button>
-            </div>
-          </div>
-        );
-      })()}
+            );
+          })}
+        </div>
+      </nav>
+
+      {/* コンテンツ */}
+      <div className="max-w-lg mx-auto px-4 py-5">
+        {tab === "trial" && <TrialTab profile={profile} />}
+        {tab === "backtest" && <BacktestTab profile={profile} />}
+        {tab === "economy" && <EconomyTab profile={profile} />}
+      </div>
     </div>
   );
 }
 
 // ========================================
-// 取引ログ行
+// システム体験版タブ（ハピネスプラス実績データ）
 // ========================================
-function TradeLogRow({ trade }: { trade: VirtualTrade }) {
-  const isProfit = trade.pips > 0;
+function TrialTab({ profile }: { profile: Profile }) {
+  const daysElapsed = useMemo(() => {
+    const start = new Date(profile.trial_start_date).getTime();
+    const now = Date.now();
+    return Math.max(0, Math.floor((now - start) / (1000 * 60 * 60 * 24)));
+  }, [profile.trial_start_date]);
+
+  const daysLeft = Math.max(0, TRIAL_DAYS_FREE - daysElapsed);
+  const expired = daysLeft <= 0;
+  const deposit = profile.virtual_deposit;
+
+  // 口座番号（決定論的に生成）
+  const accountNo = useMemo(() => {
+    const seed = deposit + profile.lot_size * 1000;
+    return `FIA-${Math.floor(seed * 7 + 100000).toString().slice(0, 7)}`;
+  }, [deposit, profile.lot_size]);
+
+  // ハピネスプラスの実績データをユーザー資金にスケーリング
+  const scaled = useMemo(() => {
+    const dailyStats = HAPPINESS_DAILY_STATS.map((d) => ({
+      ...d,
+      profit: scaleByCapital(d.profitAtBase, deposit),
+    }));
+
+    // 累積損益を算出して資産推移を作る
+    let running = 0;
+    const equityCurve = dailyStats.map((d) => {
+      running += d.profit;
+      return {
+        date: d.date,
+        profit: d.profit,
+        equity: deposit + running,
+      };
+    });
+
+    const totalProfit = running;
+    const totalTrades = dailyStats.reduce((s, d) => s + d.trades, 0);
+    const totalWins = dailyStats.reduce((s, d) => s + d.wins, 0);
+    const totalLosses = dailyStats.reduce((s, d) => s + d.losses, 0);
+    const winRate = totalTrades > 0 ? (totalWins / totalTrades) * 100 : 0;
+    const returnRate = (totalProfit / deposit) * 100;
+
+    const trades = HAPPINESS_RECENT_TRADES.map((t) => ({
+      ...t,
+      lot: scaleLot(t.lotAtBase, deposit),
+      profit: scaleByCapital(t.profitAtBase, deposit),
+    }));
+
+    return {
+      dailyStats,
+      equityCurve,
+      totalProfit,
+      totalTrades,
+      totalWins,
+      totalLosses,
+      winRate,
+      returnRate,
+      trades,
+    };
+  }, [deposit]);
+
+  const equity = deposit + scaled.totalProfit;
+
+  return (
+    <div className="space-y-4">
+      {/* トライアル状態 */}
+      <div
+        className="rounded-2xl p-5 border"
+        style={{
+          background: expired
+            ? "linear-gradient(135deg, rgba(239,68,68,0.15), rgba(234,88,12,0.1))"
+            : "linear-gradient(135deg, rgba(34,197,94,0.12), rgba(16,185,129,0.08))",
+          borderColor: expired
+            ? "rgba(239,68,68,0.35)"
+            : "rgba(34,197,94,0.3)",
+        }}
+      >
+        <div className="flex items-center justify-between mb-3">
+          <div>
+            <p className="text-[11px] text-gray-400 mb-0.5">
+              ハピネスプラス 体験版（2週間無料）
+            </p>
+            <p
+              className={`text-2xl font-bold ${
+                expired ? "text-red-300" : "text-green-300"
+              }`}
+            >
+              {expired ? "期間終了" : `残り ${daysLeft} 日`}
+            </p>
+          </div>
+          <div className="text-4xl">{expired ? "🔒" : "🟢"}</div>
+        </div>
+        <div className="h-2 bg-white/10 rounded-full overflow-hidden">
+          <div
+            className="h-full rounded-full transition-all"
+            style={{
+              width: `${Math.min(100, (daysElapsed / TRIAL_DAYS_FREE) * 100)}%`,
+              background: expired
+                ? "linear-gradient(90deg,#ef4444,#f97316)"
+                : "linear-gradient(90deg,#22c55e,#10b981)",
+            }}
+          />
+        </div>
+      </div>
+
+      {/* MT4風アカウント情報 */}
+      <div className="fiana-card p-5">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-sm font-bold text-gray-300 flex items-center gap-2">
+            <span className="text-lg">📈</span>FIANA Trading Terminal
+          </h2>
+          <span className="text-[10px] font-mono bg-green-500/20 text-green-400 px-2 py-0.5 rounded">
+            LIVE
+          </span>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3 mb-4">
+          <div className="bg-white/5 rounded-lg p-3 border border-white/10">
+            <p className="text-[10px] text-gray-500 mb-1">口座番号</p>
+            <p className="text-sm font-mono text-white">{accountNo}</p>
+          </div>
+          <div className="bg-white/5 rounded-lg p-3 border border-white/10">
+            <p className="text-[10px] text-gray-500 mb-1">稼働システム</p>
+            <p className="text-sm text-white">ハピネスプラス EA</p>
+          </div>
+          <div className="bg-white/5 rounded-lg p-3 border border-white/10">
+            <p className="text-[10px] text-gray-500 mb-1">残高</p>
+            <p className="text-sm font-mono text-white">
+              {formatJPYPlain(deposit)}
+            </p>
+          </div>
+          <div className="bg-white/5 rounded-lg p-3 border border-white/10">
+            <p className="text-[10px] text-gray-500 mb-1">有効証拠金</p>
+            <p className="text-sm font-mono text-green-400">
+              {formatJPYPlain(equity)}
+            </p>
+          </div>
+        </div>
+
+        <div
+          className="rounded-xl p-4 text-center"
+          style={{
+            background:
+              "linear-gradient(135deg, rgba(16,185,129,0.15), rgba(5,150,105,0.08))",
+            border: "1px solid rgba(16,185,129,0.3)",
+          }}
+        >
+          <p className="text-[11px] text-emerald-200/70 mb-1">
+            運用開始からの累計損益
+          </p>
+          <p className="text-3xl font-bold text-emerald-300 mb-1">
+            {formatJPY(scaled.totalProfit)}
+          </p>
+          <p className="text-[11px] text-emerald-200/60">
+            収益率 +{scaled.returnRate.toFixed(2)}% ／ 勝率{" "}
+            {scaled.winRate.toFixed(0)}% ／ {scaled.totalTrades}取引
+          </p>
+        </div>
+      </div>
+
+      {/* 日次パフォーマンスサマリー */}
+      <div className="fiana-card p-5">
+        <h3 className="text-sm font-bold text-gray-300 mb-3 flex items-center gap-2">
+          <span className="text-lg">📆</span>直近の日次パフォーマンス
+        </h3>
+        <div className="space-y-1">
+          {[...scaled.dailyStats]
+            .slice(-10)
+            .reverse()
+            .map((d) => (
+              <div
+                key={d.date}
+                className="flex items-center justify-between py-2 border-b border-white/5 text-[12px]"
+              >
+                <span className="text-gray-400 font-mono">
+                  {d.date.slice(5)}
+                </span>
+                <span className="text-gray-500 font-mono">
+                  {d.wins}勝{d.losses}敗
+                </span>
+                <span
+                  className={`font-bold font-mono ${
+                    d.profit >= 0 ? "text-green-400" : "text-red-400"
+                  }`}
+                >
+                  {formatJPY(d.profit)}
+                </span>
+              </div>
+            ))}
+        </div>
+      </div>
+
+      {/* 取引ログ（MT4風） */}
+      <div className="fiana-card p-4">
+        <h3 className="text-xs font-bold text-gray-400 mb-3">
+          ▼ 直近の取引履歴
+        </h3>
+        <div className="space-y-1 font-mono text-[10px]">
+          <div className="grid grid-cols-6 gap-1 pb-1 border-b border-white/10 text-gray-600">
+            <span>日時</span>
+            <span>通貨</span>
+            <span>方向</span>
+            <span className="text-right">Lot</span>
+            <span className="text-right">pips</span>
+            <span className="text-right">損益</span>
+          </div>
+          {scaled.trades.map((t) => (
+            <div
+              key={t.id}
+              className="grid grid-cols-6 gap-1 py-1.5 border-b border-white/5 text-gray-300"
+            >
+              <span>{t.date.slice(5)}</span>
+              <span>{t.pair}</span>
+              <span
+                className={
+                  t.direction === "BUY" ? "text-indigo-400" : "text-orange-400"
+                }
+              >
+                {t.direction}
+              </span>
+              <span className="text-right">{t.lot.toFixed(2)}</span>
+              <span
+                className={`text-right ${
+                  t.pips >= 0 ? "text-green-400" : "text-red-400"
+                }`}
+              >
+                {t.pips > 0 ? "+" : ""}
+                {t.pips.toFixed(1)}
+              </span>
+              <span
+                className={`text-right ${
+                  t.profit >= 0 ? "text-green-400" : "text-red-400"
+                }`}
+              >
+                {formatJPY(t.profit)}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* 相談CTA */}
+      <ConsultCTA
+        headline={
+          expired
+            ? "体験期間が終了しました"
+            : `あなたの${formatJPYPlain(deposit)}で実運用に切り替える前に`
+        }
+        body={
+          expired
+            ? "実際の運用に切り替えるかどうか、資産運用アドバイザーと個別に相談できます。"
+            : `体験中の実績（${formatJPY(scaled.totalProfit)} / 収益率 +${scaled.returnRate.toFixed(1)}%）をもとに、あなた専用の運用プランを無料で作成します。`
+        }
+      />
+    </div>
+  );
+}
+
+// ========================================
+// バックテストタブ
+// ========================================
+function BacktestTab({ profile }: { profile: Profile }) {
+  const router = useRouter();
+
+  // 決定論的な結果を初期資金から生成
+  const result = useMemo(() => {
+    const deposit = profile.virtual_deposit;
+    // 月利8.3% ± depositによる微調整
+    const rate = 0.083 + ((deposit % 7) / 1000);
+    const profit = Math.round(deposit * rate);
+    const trades = 42 + (deposit % 11);
+    const wins = Math.round(trades * 0.69);
+    return {
+      deposit,
+      profit,
+      finalBalance: deposit + profit,
+      rate: (rate * 100).toFixed(1),
+      trades,
+      wins,
+      losses: trades - wins,
+      winRate: ((wins / trades) * 100).toFixed(0),
+    };
+  }, [profile.virtual_deposit]);
+
+  return (
+    <div className="space-y-4">
+      <div className="fiana-card p-5 text-center">
+        <p className="text-[11px] text-indigo-400 mb-2 tracking-wide">
+          バックテスト検証結果
+        </p>
+        <p className="text-xs text-gray-500 mb-3">
+          検証期間：2026-01-01 〜 2026-01-31（1ヶ月）
+        </p>
+        <div
+          className="rounded-2xl p-6 mb-4"
+          style={{
+            background:
+              "linear-gradient(135deg, rgba(16,185,129,0.2), rgba(5,150,105,0.1))",
+            border: "1px solid rgba(16,185,129,0.35)",
+          }}
+        >
+          <p className="text-[11px] text-emerald-200/70 mb-1">
+            あなたの {formatJPYPlain(result.deposit)} で検証した結果
+          </p>
+          <p className="text-4xl font-bold text-emerald-300 mb-2">
+            {formatJPY(result.profit)}
+          </p>
+          <p className="text-[13px] text-emerald-200/80">
+            収益率 +{result.rate}% ／ 最終残高{" "}
+            {formatJPYPlain(result.finalBalance)}
+          </p>
+        </div>
+
+        <div className="grid grid-cols-3 gap-2">
+          <div className="bg-white/5 rounded-lg p-3">
+            <p className="text-[10px] text-gray-500">取引回数</p>
+            <p className="text-base font-bold text-white">{result.trades}回</p>
+          </div>
+          <div className="bg-white/5 rounded-lg p-3">
+            <p className="text-[10px] text-gray-500">勝率</p>
+            <p className="text-base font-bold text-green-400">
+              {result.winRate}%
+            </p>
+          </div>
+          <div className="bg-white/5 rounded-lg p-3">
+            <p className="text-[10px] text-gray-500">勝ち/負け</p>
+            <p className="text-base font-bold text-white">
+              {result.wins}/{result.losses}
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* 詳細シミュレーションへ */}
+      <button
+        onClick={() => router.push("/fiana/backtest")}
+        className="w-full py-4 rounded-xl border border-white/15 text-gray-200 font-medium hover:bg-white/5 transition-all"
+      >
+        詳細バックテスト（期間・システム指定）→
+      </button>
+
+      {/* 相談CTA */}
+      <ConsultCTA
+        headline="この結果をもとに、あなた専用の運用プランを作ります"
+        body={`${formatJPYPlain(result.deposit)}の運用で狙える現実的な目標設定・リスク管理まで、資産運用アドバイザーが無料で個別にご提案します。`}
+      />
+
+      <p className="text-center text-[10px] text-gray-600">
+        ※シミュレーションに基づく過去検証です。将来の利益を保証するものではありません。
+      </p>
+    </div>
+  );
+}
+
+// ========================================
+// 経済指標タブ
+// ========================================
+function EconomyTab({ profile }: { profile: Profile }) {
+  const assets = profile.current_assets ?? 0;
+
+  // ダミーの経済指標データ
+  const events = [
+    {
+      date: "04/12",
+      time: "21:30",
+      country: "🇺🇸",
+      name: "米 消費者物価指数 (CPI)",
+      impact: "high",
+    },
+    {
+      date: "04/13",
+      time: "03:00",
+      country: "🇺🇸",
+      name: "FOMC議事要旨公表",
+      impact: "high",
+    },
+    {
+      date: "04/14",
+      time: "08:50",
+      country: "🇯🇵",
+      name: "日銀 企業物価指数",
+      impact: "mid",
+    },
+    {
+      date: "04/15",
+      time: "21:30",
+      country: "🇺🇸",
+      name: "米 小売売上高",
+      impact: "high",
+    },
+    {
+      date: "04/16",
+      time: "15:00",
+      country: "🇪🇺",
+      name: "欧 ECB政策金利発表",
+      impact: "high",
+    },
+  ];
+
+  const news = [
+    {
+      tag: "為替",
+      title: "ドル円、トランプ発言で一時1円超の円安進行",
+      summary: "関税に関する発言を受け、ドル円相場が急伸。",
+    },
+    {
+      tag: "株式",
+      title: "日経平均、半導体株主導で反発",
+      summary: "米ハイテク株高を受けて買い優勢の展開。",
+    },
+    {
+      tag: "金利",
+      title: "米10年債利回り、4.6%台に上昇",
+      summary: "インフレ再燃懸念から長期金利が上昇基調。",
+    },
+  ];
+
+  // 今週の変動影響額（ダミー試算: 資産の0.4%程度動いた想定）
+  const weeklyImpact = assets ? Math.round(assets * -0.004) : null;
+
+  return (
+    <div className="space-y-4">
+      {/* 今週のポートフォリオ影響 */}
+      {weeklyImpact !== null && (
+        <div
+          className="rounded-2xl p-5 border"
+          style={{
+            background:
+              "linear-gradient(135deg, rgba(239,68,68,0.12), rgba(249,115,22,0.08))",
+            borderColor: "rgba(239,68,68,0.3)",
+          }}
+        >
+          <p className="text-[11px] text-orange-300 mb-2 tracking-wide">
+            ⚠️ 今週のあなたのポートフォリオ影響
+          </p>
+          <p className="text-xs text-gray-300 mb-3 leading-relaxed">
+            ドル円が1円超の円安進行。保有資産{formatJPYPlain(assets)}の方は
+            概算で以下の影響が出ています：
+          </p>
+          <p className="text-3xl font-bold text-red-300">
+            {formatJPY(weeklyImpact)}
+          </p>
+          <div className="mt-4 pt-4 border-t border-white/10">
+            <p className="text-xs text-gray-400 mb-2">
+              値幅が大きい週は、分散の見直しが有効です
+            </p>
+            <a
+              href={LINE_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="block w-full text-center py-2.5 text-sm font-bold rounded-xl"
+              style={{
+                background: "linear-gradient(135deg,#6366f1,#8b5cf6)",
+                color: "white",
+              }}
+            >
+              ポートフォリオ分散を相談する
+            </a>
+          </div>
+        </div>
+      )}
+
+      {/* 経済指標カレンダー */}
+      <div className="fiana-card p-5">
+        <h2 className="text-sm font-bold text-gray-300 mb-4 flex items-center gap-2">
+          <span className="text-lg">📅</span>今週の経済指標カレンダー
+        </h2>
+        <div className="space-y-2">
+          {events.map((e, i) => (
+            <div
+              key={i}
+              className="flex items-center gap-3 py-2.5 border-b border-white/5"
+            >
+              <div className="text-center w-12 shrink-0">
+                <p className="text-xs font-bold text-white">{e.date}</p>
+                <p className="text-[10px] text-gray-500">{e.time}</p>
+              </div>
+              <span className="text-lg">{e.country}</span>
+              <p className="flex-1 text-xs text-gray-200">{e.name}</p>
+              <span
+                className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                  e.impact === "high"
+                    ? "bg-red-500/20 text-red-300"
+                    : "bg-yellow-500/20 text-yellow-300"
+                }`}
+              >
+                {e.impact === "high" ? "高" : "中"}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* ニュース一覧 */}
+      <div className="fiana-card p-5">
+        <h2 className="text-sm font-bold text-gray-300 mb-4 flex items-center gap-2">
+          <span className="text-lg">📰</span>注目ニュース
+        </h2>
+        <div className="space-y-3">
+          {news.map((n, i) => (
+            <div key={i} className="pb-3 border-b border-white/5 last:border-0">
+              <div className="flex items-center gap-2 mb-1">
+                <span className="text-[10px] font-bold bg-indigo-500/20 text-indigo-300 px-2 py-0.5 rounded">
+                  {n.tag}
+                </span>
+              </div>
+              <p className="text-sm font-bold text-white mb-1">{n.title}</p>
+              <p className="text-xs text-gray-400 leading-relaxed">
+                {n.summary}
+              </p>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <ConsultCTA
+        headline="相場の流れに合った運用戦略を知りたい方へ"
+        body="経済指標の動きに合わせて、あなたの資産をどう守り、どう攻めるか——専門アドバイザーが一緒に整理します。"
+      />
+    </div>
+  );
+}
+
+// ========================================
+// 共通: 個別相談CTA
+// ========================================
+function ConsultCTA({
+  headline,
+  body,
+}: {
+  headline: string;
+  body: string;
+}) {
   return (
     <div
-      className={`rounded-xl p-3 border ${
-        isProfit
-          ? "border-green-500/20 bg-green-500/5"
-          : "border-red-500/20 bg-red-500/5"
-      }`}
+      className="rounded-2xl p-5 border"
+      style={{
+        background:
+          "linear-gradient(135deg, rgba(99,102,241,0.18), rgba(139,92,246,0.1))",
+        borderColor: "rgba(139,92,246,0.35)",
+        boxShadow: "0 0 30px rgba(99,102,241,0.2)",
+      }}
     >
-      <div className="flex items-center justify-between mb-1">
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-gray-500">
-            {trade.tradeDate.slice(5)} {trade.tradeTime}
-          </span>
-          <span
-            className={`text-xs font-bold px-1.5 py-0.5 rounded ${
-              trade.direction === "BUY"
-                ? "bg-indigo-500/20 text-indigo-300"
-                : "bg-orange-500/20 text-orange-300"
-            }`}
-          >
-            {trade.direction}
-          </span>
-        </div>
-        <span className="text-xs text-gray-500">{trade.lot}lot</span>
+      <div className="text-center mb-4">
+        <div className="text-3xl mb-2">💬</div>
+        <h3 className="fiana-heading text-base font-bold text-white mb-2 leading-snug">
+          {headline}
+        </h3>
+        <p className="text-xs text-gray-300 leading-relaxed">{body}</p>
       </div>
-      <div className="flex items-center justify-between">
-        <div className="text-sm text-gray-400">
-          <span className="font-mono">USD/JPY</span>{" "}
-          <span className="font-mono text-gray-300">{trade.entryPrice.toFixed(3)}</span>
-          <span className="text-gray-600 mx-1">→</span>
-          <span className="font-mono text-gray-300">{trade.exitPrice.toFixed(3)}</span>
-          <span className="text-gray-500 mx-1.5">
-            {isProfit ? "+" : ""}{trade.pips}pips
-          </span>
-        </div>
-        <span className={`font-bold text-sm ${isProfit ? "text-green-400" : "text-red-400"}`}>
-          {trade.profitJpy >= 0 ? "+" : ""}¥{Math.abs(trade.profitJpy).toLocaleString()}
-        </span>
-      </div>
+      <a
+        href={LINE_URL}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="block w-full fiana-btn text-center py-3.5 text-sm font-bold"
+      >
+        無料で個別相談を予約する
+      </a>
+      <p className="text-center text-[10px] text-gray-500 mt-2">
+        LINEで相談日時を調整します
+      </p>
     </div>
   );
 }

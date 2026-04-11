@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase-browser";
 import { isDemoMode, getDemoProfile } from "@/lib/fiana-demo";
 import { calculateDiagnosis, type DiagnosisResult } from "@/lib/fiana-diagnosis";
+import { LINE_URL } from "@/lib/fiana-config";
 
 export default function FianaResult() {
   const router = useRouter();
@@ -13,7 +14,6 @@ export default function FianaResult() {
 
   useEffect(() => {
     const load = async () => {
-      // デモモード
       if (isDemoMode()) {
         const demo = getDemoProfile();
         if (demo?.diagnosis_answers?.length) {
@@ -38,16 +38,16 @@ export default function FianaResult() {
 
       const { data: profile } = await supabase
         .from("fiana_profiles")
-        .select("diagnosis_type, diagnosis_label, diagnosis_answers")
+        .select("diagnosis_answers")
         .eq("user_id", session.user.id)
         .single();
 
       if (profile?.diagnosis_answers) {
         setResult(calculateDiagnosis(profile.diagnosis_answers));
       } else {
-        const stored = localStorage.getItem("fiana_diagnosis");
+        const stored = localStorage.getItem("fiana_diagnosis_answers");
         if (stored) {
-          setResult(JSON.parse(stored));
+          setResult(calculateDiagnosis(JSON.parse(stored)));
         } else {
           router.replace("/fiana/shindan");
           return;
@@ -70,22 +70,21 @@ export default function FianaResult() {
     );
   }
 
+  const paragraphs = result.longDescription.split("\n\n");
+
   return (
     <div className="min-h-screen px-4 py-6">
       <div className="max-w-lg mx-auto">
         {/* 動物タイプヘッダー */}
         <div className="fiana-card p-8 mb-6 text-center fiana-slide-up">
-          <div className="text-7xl mb-4 fiana-float">{result.animal.emoji}</div>
-          <p className="text-indigo-400 text-sm font-medium mb-2">
-            あなたの投資タイプ
+          <p className="text-indigo-400 text-sm font-medium mb-3 tracking-wide">
+            あなたの投資タイプ診断結果
           </p>
-          <h1 className="fiana-heading text-2xl font-bold text-white fiana-text-glow mb-2">
-            {result.animal.name}派
+          <div className="text-8xl mb-5 fiana-float">{result.animal.emoji}</div>
+          <h1 className="fiana-heading text-3xl font-bold text-white fiana-text-glow mb-3 leading-tight">
+            {result.headline}
           </h1>
-          <p className="text-gray-400 text-sm mb-4">{result.animal.investorType}</p>
-
-          {/* 性格特性バッジ */}
-          <div className="flex justify-center gap-2 mb-4">
+          <div className="flex justify-center gap-2 mb-2">
             {result.animal.traits.map((trait) => (
               <span
                 key={trait}
@@ -95,116 +94,76 @@ export default function FianaResult() {
               </span>
             ))}
           </div>
+        </div>
 
-          <p className="text-gray-300 text-sm leading-relaxed">
-            {result.description}
+        {/* 記述式の本文 */}
+        <div className="fiana-card p-6 md:p-8 mb-6">
+          <h2 className="text-base font-bold text-indigo-400 mb-4 flex items-center gap-2">
+            <span className="text-lg">📖</span>
+            <span>あなたの投資性格について</span>
+          </h2>
+          <div className="space-y-5">
+            {paragraphs.map((p, i) => (
+              <p
+                key={i}
+                className="text-gray-200 text-[15px] leading-[1.95] tracking-wide"
+              >
+                {p}
+              </p>
+            ))}
+          </div>
+        </div>
+
+        {/* 一発目の個別相談CTA */}
+        <div
+          className="rounded-2xl p-6 mb-6 border"
+          style={{
+            background:
+              "linear-gradient(135deg, rgba(99,102,241,0.18), rgba(139,92,246,0.12))",
+            borderColor: "rgba(139,92,246,0.35)",
+            boxShadow: "0 0 40px rgba(99,102,241,0.25)",
+          }}
+        >
+          <div className="text-center mb-5">
+            <div className="text-3xl mb-3">💬</div>
+            <h3 className="fiana-heading text-xl font-bold text-white mb-2">
+              もっと詳しく知りたい方へ
+            </h3>
+            <p className="text-gray-300 text-sm leading-relaxed">
+              {result.animal.name}のあなたに
+              <br className="md:hidden" />
+              本当に合う運用スタイルを、
+              <br />
+              <span className="text-indigo-300 font-medium">
+                資産運用アドバイザー
+              </span>
+              が個別にご提案します。
+            </p>
+          </div>
+
+          <a
+            href={LINE_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="block w-full fiana-btn text-center py-4 text-base font-bold"
+          >
+            無料で個別相談を予約する
+          </a>
+          <p className="text-center text-xs text-gray-500 mt-3">
+            LINEで相談日時を調整します
           </p>
         </div>
 
-        {/* おすすめシステムランキング */}
-        <div className="mb-4">
-          <h2 className="text-lg font-bold text-white mb-3">
-            あなたにおすすめのシステム
-          </h2>
-        </div>
-
-        <div className="space-y-3">
-          {result.rankedSystems.map((system) => {
-            const isTop2 = system.rank <= 2;
-            const isFirst = system.rank === 1;
-
-            return (
-              <div
-                key={system.id}
-                className={`relative fiana-card p-4 transition-all ${
-                  isFirst
-                    ? "border-yellow-500/50 fiana-glow-pulse"
-                    : isTop2
-                      ? "border-indigo-500/50"
-                      : ""
-                }`}
-              >
-                <div className="flex items-start gap-3">
-                  <div
-                    className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold shrink-0 ${
-                      isFirst
-                        ? "bg-yellow-500 text-black"
-                        : isTop2
-                          ? "bg-indigo-500 text-white"
-                          : "bg-white/10 text-gray-400"
-                    }`}
-                  >
-                    {system.rank}
-                  </div>
-
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className="text-2xl">{system.icon}</span>
-                      <div>
-                        <h3 className="font-bold text-white text-base">
-                          {system.name}
-                        </h3>
-                        <span
-                          className={`text-xs font-medium px-2 py-0.5 rounded-full ${
-                            isFirst
-                              ? "bg-yellow-500/20 text-yellow-300"
-                              : isTop2
-                                ? "bg-indigo-500/20 text-indigo-300"
-                                : "bg-white/5 text-gray-500"
-                          }`}
-                        >
-                          {system.matchLabel}
-                        </span>
-                      </div>
-                    </div>
-
-                    <p className="text-sm text-gray-400 mt-1">
-                      {system.description}
-                    </p>
-
-                    {system.fullAccess ? (
-                      <div className="mt-2 flex items-center gap-1.5">
-                        <span className="w-2 h-2 bg-green-400 rounded-full" />
-                        <span className="text-xs text-green-400 font-medium">
-                          フル機能体験OK
-                        </span>
-                      </div>
-                    ) : (
-                      <div className="mt-2 flex items-center gap-1.5">
-                        <span className="w-2 h-2 bg-gray-600 rounded-full" />
-                        <span className="text-xs text-gray-500">
-                          ポイントで開放可能
-                        </span>
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                {isFirst && (
-                  <div className="absolute -top-3 right-4 bg-yellow-500 text-black text-xs font-bold px-3 py-1 rounded-full">
-                    BEST MATCH
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-
-        {/* 次へボタン */}
-        <div className="mt-8 mb-4">
+        {/* ダッシュボードへの導線 */}
+        <div className="mb-6">
           <button
-            onClick={() => {
-              const params = result.depositHint
-                ? `?suggested=${result.depositHint}`
-                : "";
-              router.push(`/fiana/setup${params}`);
-            }}
-            className="w-full fiana-btn py-4 text-lg font-bold"
+            onClick={() => router.push("/fiana/dashboard")}
+            className="w-full py-4 rounded-xl border border-white/15 text-gray-300 text-base font-medium hover:bg-white/5 transition-all"
           >
-            シミュレーションを始める →
+            診断結果をもとにアプリを体験する →
           </button>
           <p className="text-center text-xs text-gray-500 mt-2">
-            上位2つのシステムで30日間の無料体験ができます
+            システム体験版・バックテスト・経済指標が見られます
           </p>
         </div>
       </div>
