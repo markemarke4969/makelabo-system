@@ -123,6 +123,16 @@ export async function POST(request: NextRequest) {
         { status: 400 },
       );
     }
+    if (pgCode === "23502") {
+      return Response.json(
+        {
+          error:
+            "DB スキーマが古いままです。account_id を nullable 化する SQL (supabase-schema-line-inflow-account-nullable.sql) を Supabase で実行してください。",
+          detail: error.message,
+        },
+        { status: 500 },
+      );
+    }
     if (pgCode === "42P01") {
       return Response.json(
         { error: "line_inflow_routes テーブルが存在しません。" },
