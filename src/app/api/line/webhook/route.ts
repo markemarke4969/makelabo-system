@@ -182,6 +182,60 @@ async function handleFollow(event: LineEvent, account: LineAccountRow) {
       console.error("[LINE Webhook] 挨拶送信例外:", e);
     }
   }
+
+  // ステップ配信: 「登録直後 (delay_minutes = 0)」の step_messages を push
+  if (account.channel_access_token) {
+    try {
+      const { data: sequences } = await supabase
+        .from("line_step_sequences")
+        .select("id")
+        .eq("account_id", account.id)
+        .eq("status", "active");
+
+      const sequenceIds = (sequences ?? []).map((s) => s.id as string);
+      if (sequenceIds.length > 0) {
+        const { data: msgs } = await supabase
+          .from("line_step_messages")
+          .select("id, body, step_order, sequence_id, delay_minutes")
+          .in("sequence_id", sequenceIds)
+          .eq("delay_minutes", 0)
+          .order("step_order", { ascending: true });
+
+        for (const msg of msgs ?? []) {
+          if (!msg.body) continue;
+          const text = String(msg.body).replace(
+            /\{display_name\}/g,
+            profile?.displayName ?? "ゲスト",
+          );
+          try {
+            const res = await fetch("https://api.line.me/v2/bot/message/push", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${account.channel_access_token}`,
+              },
+              body: JSON.stringify({
+                to: userId,
+                messages: [{ type: "text", text }],
+              }),
+            });
+            if (!res.ok) {
+              const errText = await res.text();
+              console.error(
+                "[LINE Webhook] 登録直後ステップ送信失敗:",
+                res.status,
+                errText,
+              );
+            }
+          } catch (e) {
+            console.error("[LINE Webhook] 登録直後ステップ送信例外:", e);
+          }
+        }
+      }
+    } catch (e) {
+      console.error("[LINE Webhook] ステップ配信起動失敗:", e);
+    }
+  }
 }
 
 async function handleUnfollow(event: LineEvent, accountId: string) {
