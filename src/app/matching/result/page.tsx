@@ -12,7 +12,6 @@ import {
 } from "@/lib/doubutsu-uranai";
 import {
   getDoubutsuProfile,
-  buildMatchingCrossReading,
   type DoubutsuProfile,
 } from "@/lib/doubutsu-profile";
 
@@ -142,8 +141,9 @@ export default function MatchingResult() {
   const [doubutsu, setDoubutsu] = useState<{
     result: DoubutsuResult;
     profile: DoubutsuProfile;
-    paragraphs: string[];
   } | null>(null);
+  const [animalReading, setAnimalReading] = useState<string>("");
+  const [animalReadingLoading, setAnimalReadingLoading] = useState(false);
 
   // 初期資金（Q6の回答から推定）
   const [initialFund, setInitialFund] = useState(300000);
@@ -208,8 +208,26 @@ export default function MatchingResult() {
       const dResult = diagnoseDoubutsuFromISO(data.birthday);
       if (dResult) {
         const profile = getDoubutsuProfile(dResult.animal);
-        const paragraphs = buildMatchingCrossReading(profile, res.type.id);
-        setDoubutsu({ result: dResult, profile, paragraphs });
+        setDoubutsu({ result: dResult, profile });
+
+        // Claude APIで動物占い × 副業タイプのクロスリーディングを生成
+        setAnimalReadingLoading(true);
+        fetch("/api/matching/animal-reading", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            animal: dResult.animal,
+            animalTraits: profile.traits.join("・"),
+            matchingTypeName: res.type.name,
+            matchingTypeId: res.type.id,
+          }),
+        })
+          .then((r) => r.json())
+          .then((json) => {
+            if (json.text) setAnimalReading(json.text);
+          })
+          .catch(() => {})
+          .finally(() => setAnimalReadingLoading(false));
       }
     }
 
@@ -305,7 +323,7 @@ export default function MatchingResult() {
           </div>
         </div>
 
-        {/* 動物占い × 副業スタイル */}
+        {/* 動物占い × 副業スタイル（Claude API生成） */}
         {doubutsu && (
           <div className="rounded-2xl bg-white/5 border border-white/10 p-6 mb-6">
             <h2 className="text-base font-bold text-blue-400 mb-4 flex items-center gap-2">
@@ -314,16 +332,25 @@ export default function MatchingResult() {
                 {doubutsu.result.animal}タイプのあなたへ
               </span>
             </h2>
-            <div className="space-y-4">
-              {doubutsu.paragraphs.map((p, i) => (
-                <p
-                  key={i}
-                  className="text-gray-200 text-[15px] leading-[1.9] tracking-wide"
-                >
-                  {p}
+            {animalReadingLoading ? (
+              <div className="flex items-center gap-3 py-4">
+                <div className="w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+                <p className="text-sm text-gray-400">
+                  AIがあなた専用の分析を作成中...
                 </p>
-              ))}
-            </div>
+              </div>
+            ) : animalReading ? (
+              <div className="space-y-4">
+                {animalReading.split("\n\n").map((p, i) => (
+                  <p
+                    key={i}
+                    className="text-gray-200 text-[15px] leading-[1.9] tracking-wide"
+                  >
+                    {p}
+                  </p>
+                ))}
+              </div>
+            ) : null}
           </div>
         )}
 
