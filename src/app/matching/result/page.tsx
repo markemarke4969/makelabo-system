@@ -12,7 +12,7 @@ import {
 } from "@/lib/doubutsu-uranai";
 import {
   getDoubutsuProfile,
-  buildCrossReading,
+  buildMatchingCrossReading,
   type DoubutsuProfile,
 } from "@/lib/doubutsu-profile";
 
@@ -208,7 +208,7 @@ export default function MatchingResult() {
       const dResult = diagnoseDoubutsuFromISO(data.birthday);
       if (dResult) {
         const profile = getDoubutsuProfile(dResult.animal);
-        const paragraphs = buildCrossReading(profile, res.type.name);
+        const paragraphs = buildMatchingCrossReading(profile, res.type.id);
         setDoubutsu({ result: dResult, profile, paragraphs });
       }
     }
