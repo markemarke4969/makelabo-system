@@ -18,8 +18,6 @@ export default function MatchingResult() {
 
   // DB保存
   const [diagnosisId, setDiagnosisId] = useState<string | null>(null);
-  const [saveError, setSaveError] = useState(false);
-
   // 面談予約フォーム
   const [showBooking, setShowBooking] = useState(false);
   const [bookingDate, setBookingDate] = useState("");
@@ -64,8 +62,10 @@ export default function MatchingResult() {
       setResult(res);
       setLoading(false);
 
-      // DB保存（まだ保存していなければ）
-      if (!data.savedId) {
+      // DB保存（savedIdがなければ保存を試みる。失敗時もリロードで再試行可能）
+      if (data.savedId) {
+        setDiagnosisId(data.savedId);
+      } else {
         try {
           const resp = await fetch("/api/matching/diagnoses", {
             method: "POST",
@@ -82,17 +82,12 @@ export default function MatchingResult() {
           if (resp.ok) {
             const { id } = await resp.json();
             setDiagnosisId(id);
-            // savedIdをlocalStorageに書き戻して二重保存を防ぐ
             data.savedId = id;
             localStorage.setItem("matching_diagnosis", JSON.stringify(data));
-          } else {
-            setSaveError(true);
           }
         } catch {
-          setSaveError(true);
+          // 保存失敗しても画面表示は続行。次回リロードで再試行される
         }
-      } else {
-        setDiagnosisId(data.savedId);
       }
     };
     init();
@@ -332,7 +327,7 @@ export default function MatchingResult() {
               <>
                 <button
                   onClick={() => setShowBooking(true)}
-                  disabled={!diagnosisId && !saveError}
+                  disabled={!diagnosisId}
                   className="w-full py-4 rounded-xl font-bold text-white text-base bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 transition-all shadow-lg shadow-blue-500/25 active:scale-[0.98] disabled:opacity-50"
                 >
                   無料の個別相談を予約する
