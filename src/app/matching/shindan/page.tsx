@@ -37,10 +37,33 @@ export default function MatchingShindan() {
     "💻", "📦", "🎯", "👤", "⚠️", "🚀",
   ];
 
-  const finalize = (allAnswers: string[]) => {
+  const finalize = async (allAnswers: string[]) => {
     setSaving(true);
     const result = calculateMatching(allAnswers);
     const birthday = `${birthYear}-${String(birthMonth).padStart(2, "0")}-${String(birthDay).padStart(2, "0")}`;
+
+    // DB保存を先に行う
+    let savedId: string | null = null;
+    try {
+      const resp = await fetch("/api/matching/diagnoses", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: name || null,
+          birthday: birthday || null,
+          answers: allAnswers,
+          typeId: result.type.id,
+          scores: result.scores,
+          topProducts: result.topProducts.map((p) => p.id),
+        }),
+      });
+      if (resp.ok) {
+        const json = await resp.json();
+        savedId = json.id;
+      }
+    } catch {
+      // DB保存失敗しても結果ページには進む
+    }
 
     // ローカルストレージに保存して結果ページへ
     const data = {
@@ -51,6 +74,7 @@ export default function MatchingShindan() {
         typeId: result.type.id,
         scores: result.scores,
       },
+      savedId,
       createdAt: new Date().toISOString(),
     };
     localStorage.setItem("matching_diagnosis", JSON.stringify(data));
