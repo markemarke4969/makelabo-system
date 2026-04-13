@@ -1,17 +1,21 @@
 import { NextRequest } from "next/server";
 import { supabase } from "@/lib/supabase";
+import { buildLineMessage, pushLineMessages } from "@/lib/line";
 
 export async function POST(request: NextRequest) {
   const body = await request.json();
-  const { line_user_id, message, type, packageId, stickerId, account_id } = body;
+  const { line_user_id, message, type, packageId, stickerId, account_id, messages: richMessages } = body;
 
   if (!line_user_id) {
     return Response.json({ error: "line_user_id is required" }, { status: 400 });
   }
 
-  // テキスト or スタンプの判定
+  // リッチメッセージ配列が渡された場合（ボタン/カルーセル等）
+  const hasRichMessages = Array.isArray(richMessages) && richMessages.length > 0;
+
+  // テキスト or スタンプ or リッチメッセージの判定
   const isSticker = type === "sticker" && packageId && stickerId;
-  if (!isSticker && !message) {
+  if (!isSticker && !message && !hasRichMessages) {
     return Response.json({ error: "message or sticker info is required" }, { status: 400 });
   }
 
@@ -68,7 +72,49 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // LINE Push Message API
+  // フォロワー名を取得（変数置換用）
+  let displayName = "ゲスト";
+  {
+    const { data: follower } = await supabase
+      .from("line_followers")
+      .select("display_name")
+      .eq("line_user_id", line_user_id)
+      .maybeSingle();
+    if (follower?.display_name) displayName = follower.display_name;
+  }
+
+  // リッチメッセージモード
+  if (hasRichMessages) {
+    const builtMessages: Array<Record<string, unknown>> = [];
+    for (const rm of richMessages) {
+      const built = buildLineMessage(rm, displayName);
+      if (built) builtMessages.push(built);
+    }
+    if (builtMessages.length === 0) {
+      return Response.json({ error: "送信可能なメッセージがありません（URLやテキストが未入力の可能性）" }, { status: 400 });
+    }
+    const result = await pushLineMessages(account.channel_access_token, line_user_id, builtMessages);
+    if (!result.ok) {
+      const hint =
+        result.status === 401
+          ? "（401: チャネルアクセストークンが無効です）"
+          : result.status === 403
+            ? "（403: このユーザーが友だち追加していない可能性があります）"
+            : "";
+      return Response.json({ error: `LINE API error ${result.status}: ${result.error} ${hint}` }, { status: 500 });
+    }
+    await supabase.from("line_messages").insert({
+      line_account_id: account.id,
+      line_user_id,
+      direction: "outgoing",
+      message_type: "rich",
+      message_text: `[リッチメッセージ ${builtMessages.length}通]`,
+      sent_at: new Date().toISOString(),
+    });
+    return Response.json({ ok: true });
+  }
+
+  // LINE Push Message API（テキスト/スタンプ）
   const lineMessage = isSticker
     ? { type: "sticker", packageId: String(packageId), stickerId: String(stickerId) }
     : { type: "text", text: message };

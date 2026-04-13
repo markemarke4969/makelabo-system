@@ -2664,17 +2664,18 @@ export default function LineDashboard() {
               </select>
               <button
                 type="button"
-                disabled={!form.testTargetId || !form.messages[0]?.body.trim()}
+                disabled={!form.testTargetId}
                 onClick={async () => {
                   try {
+                    const firstMsg = form.messages[0];
+                    const isTextOnly = firstMsg?.msgType === "text";
+                    const payload = isTextOnly
+                      ? { line_user_id: form.testTargetId, account_id: selectedAccount?.id, message: firstMsg?.body ?? "" }
+                      : { line_user_id: form.testTargetId, account_id: selectedAccount?.id, messages: form.messages };
                     const res = await fetch("/api/line/send", {
                       method: "POST",
                       headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({
-                        line_user_id: form.testTargetId,
-                        account_id: selectedAccount?.id,
-                        message: form.messages[0]?.body ?? "",
-                      }),
+                      body: JSON.stringify(payload),
                     });
                     if (res.ok) {
                       alert("テスト送信しました");
