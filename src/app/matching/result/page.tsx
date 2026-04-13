@@ -62,36 +62,40 @@ export default function MatchingResult() {
       setResult(res);
       setLoading(false);
 
-      // DB保存（savedIdがなければ保存を試みる。失敗時もリロードで再試行可能）
+      // DB保存
       if (data.savedId) {
         setDiagnosisId(data.savedId);
       } else {
+        const payload = {
+          name: data.name || null,
+          birthday: data.birthday || null,
+          answers: data.answers,
+          typeId: res.type.id,
+          scores: res.scores,
+          topProducts: res.topProducts.map((p) => p.id),
+        };
         try {
           const resp = await fetch("/api/matching/diagnoses", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              name: data.name || null,
-              birthday: data.birthday || null,
-              answers: data.answers,
-              typeId: res.type.id,
-              scores: res.scores,
-              topProducts: res.topProducts.map((p) => p.id),
-            }),
+            body: JSON.stringify(payload),
           });
-          if (resp.ok) {
-            const { id } = await resp.json();
-            setDiagnosisId(id);
-            data.savedId = id;
+          const json = await resp.json();
+          if (resp.ok && json.id) {
+            setDiagnosisId(json.id);
+            data.savedId = json.id;
             localStorage.setItem("matching_diagnosis", JSON.stringify(data));
+          } else {
+            console.error("DB保存エラー:", json);
           }
-        } catch {
-          // 保存失敗しても画面表示は続行。次回リロードで再試行される
+        } catch (err) {
+          console.error("DB保存例外:", err);
         }
       }
     };
     init();
-  }, [router]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleAiGenerate = () => {
     setAiGenerating(true);
