@@ -157,7 +157,7 @@ export default function MatchingShindan() {
             {/* 氏名 */}
             <div>
               <label className="block text-sm font-medium text-gray-300 mb-2">
-                お名前
+                お名前 <span className="text-red-400">*</span>
               </label>
               <input
                 type="text"
@@ -166,6 +166,9 @@ export default function MatchingShindan() {
                 placeholder="山田 太郎"
                 className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/15 text-white placeholder-gray-500 focus:outline-none focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/25 transition-all"
               />
+              {name.trim() === "" && (
+                <p className="text-xs text-red-400 mt-1">お名前を入力してください</p>
+              )}
             </div>
 
             {/* 生年月日 */}
@@ -225,7 +228,8 @@ export default function MatchingShindan() {
             </button>
             <button
               onClick={() => setPhase("questions")}
-              className="flex-1 py-3.5 rounded-xl font-bold text-white text-base bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 transition-all shadow-lg shadow-blue-500/25 active:scale-[0.98]"
+              disabled={name.trim() === ""}
+              className="flex-1 py-3.5 rounded-xl font-bold text-white text-base bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 transition-all shadow-lg shadow-blue-500/25 active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed"
             >
               次へ進む
             </button>

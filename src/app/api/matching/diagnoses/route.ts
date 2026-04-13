@@ -10,6 +10,16 @@ const supabase = createClient(
 export async function POST(request: NextRequest) {
   const body = await request.json();
 
+  // 削除
+  if (body._action === "delete") {
+    const { error } = await supabase
+      .from("matching_diagnoses")
+      .delete()
+      .eq("id", body.diagnosisId);
+    if (error) return Response.json({ error: error.message }, { status: 500 });
+    return Response.json({ ok: true });
+  }
+
   // ダッシュボードからのクローザー割り当て
   if (body._action === "assign_closer") {
     const { error } = await supabase
