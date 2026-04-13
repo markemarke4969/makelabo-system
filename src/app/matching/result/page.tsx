@@ -3,21 +3,154 @@
 import { useState, useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import {
-  PRODUCTS,
   calculateMatching,
   type MatchingResult,
 } from "@/lib/matching-diagnosis";
+import {
+  diagnoseDoubutsuFromISO,
+  type DoubutsuResult,
+} from "@/lib/doubutsu-uranai";
+import {
+  getDoubutsuProfile,
+  buildCrossReading,
+  type DoubutsuProfile,
+} from "@/lib/doubutsu-profile";
 
+// ========================================
+// 簡易グラフコンポーネント（SVG）
+// ========================================
+function FutureGraph({ initialFund }: { initialFund: number }) {
+  const months = [0, 3, 6, 9, 12];
+  // 副業あり：初期資金が月10%ずつ成長
+  const withSide = months.map((m) => Math.round(initialFund * Math.pow(1.1, m)));
+  // 副業なし：インフレで年3%目減り（月0.25%）
+  const withoutSide = months.map((m) =>
+    Math.round(initialFund * Math.pow(0.9975, m)),
+  );
+  const maxVal = Math.max(...withSide, initialFund * 1.2);
+  const w = 320;
+  const h = 180;
+  const pad = { top: 20, right: 20, bottom: 30, left: 10 };
+  const chartW = w - pad.left - pad.right;
+  const chartH = h - pad.top - pad.bottom;
+
+  const toX = (i: number) => pad.left + (i / (months.length - 1)) * chartW;
+  const toY = (val: number) =>
+    pad.top + chartH - (val / maxVal) * chartH;
+
+  const pathWith = months
+    .map((_, i) => `${i === 0 ? "M" : "L"}${toX(i)},${toY(withSide[i])}`)
+    .join(" ");
+  const pathWithout = months
+    .map((_, i) => `${i === 0 ? "M" : "L"}${toX(i)},${toY(withoutSide[i])}`)
+    .join(" ");
+
+  const formatMoney = (n: number) =>
+    n >= 10000
+      ? `${Math.round(n / 10000)}万`
+      : `${n.toLocaleString()}円`;
+
+  return (
+    <div className="w-full overflow-hidden">
+      <svg viewBox={`0 0 ${w} ${h}`} className="w-full" style={{ maxWidth: 400 }}>
+        {/* Grid lines */}
+        {[0, 1, 2, 3].map((i) => (
+          <line
+            key={i}
+            x1={pad.left}
+            y1={pad.top + (chartH / 3) * i}
+            x2={w - pad.right}
+            y2={pad.top + (chartH / 3) * i}
+            stroke="rgba(255,255,255,0.08)"
+          />
+        ))}
+        {/* Without line */}
+        <path d={pathWithout} fill="none" stroke="#ef4444" strokeWidth="2" strokeDasharray="4 4" />
+        {/* With line */}
+        <path d={pathWith} fill="none" stroke="#22c55e" strokeWidth="2.5" />
+        {/* Dots & labels - with */}
+        {months.map((m, i) => (
+          <g key={`w-${m}`}>
+            <circle cx={toX(i)} cy={toY(withSide[i])} r="3" fill="#22c55e" />
+            {i === months.length - 1 && (
+              <text
+                x={toX(i) - 5}
+                y={toY(withSide[i]) - 10}
+                fill="#22c55e"
+                fontSize="10"
+                textAnchor="end"
+                fontWeight="bold"
+              >
+                {formatMoney(withSide[i])}
+              </text>
+            )}
+          </g>
+        ))}
+        {/* Dots & labels - without */}
+        {months.map((m, i) => (
+          <g key={`wo-${m}`}>
+            <circle cx={toX(i)} cy={toY(withoutSide[i])} r="3" fill="#ef4444" />
+            {i === months.length - 1 && (
+              <text
+                x={toX(i) - 5}
+                y={toY(withoutSide[i]) + 15}
+                fill="#ef4444"
+                fontSize="10"
+                textAnchor="end"
+              >
+                {formatMoney(withoutSide[i])}
+              </text>
+            )}
+          </g>
+        ))}
+        {/* X axis labels */}
+        {months.map((m, i) => (
+          <text
+            key={`x-${m}`}
+            x={toX(i)}
+            y={h - 5}
+            fill="#94a3b8"
+            fontSize="10"
+            textAnchor="middle"
+          >
+            {m === 0 ? "今" : `${m}ヶ月後`}
+          </text>
+        ))}
+      </svg>
+      <div className="flex justify-center gap-6 mt-2">
+        <div className="flex items-center gap-1.5">
+          <div className="w-3 h-0.5 bg-green-500 rounded" />
+          <span className="text-xs text-gray-400">副業を始めた場合</span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <div className="w-3 h-0.5 bg-red-500 rounded border-dashed" />
+          <span className="text-xs text-gray-400">何もしない場合</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ========================================
+// メインコンポーネント
+// ========================================
 export default function MatchingResult() {
   const router = useRouter();
   const [result, setResult] = useState<MatchingResult | null>(null);
   const [userName, setUserName] = useState("");
   const [loading, setLoading] = useState(true);
-  const [showAi, setShowAi] = useState(false);
-  const [aiGenerating, setAiGenerating] = useState(false);
+  const [doubutsu, setDoubutsu] = useState<{
+    result: DoubutsuResult;
+    profile: DoubutsuProfile;
+    paragraphs: string[];
+  } | null>(null);
+
+  // 初期資金（Q6の回答から推定）
+  const [initialFund, setInitialFund] = useState(300000);
 
   // DB保存
   const [diagnosisId, setDiagnosisId] = useState<string | null>(null);
+
   // 面談予約フォーム
   const [showBooking, setShowBooking] = useState(false);
   const [bookingDate, setBookingDate] = useState("");
@@ -26,7 +159,6 @@ export default function MatchingResult() {
   const [bookingSubmitting, setBookingSubmitting] = useState(false);
   const [bookingDone, setBookingDone] = useState(false);
 
-  // 予約可能日（明日から14日間）
   const availableDates = useMemo(() => {
     const dates: string[] = [];
     const now = new Date();
@@ -48,62 +180,42 @@ export default function MatchingResult() {
     return `${d.getMonth() + 1}/${d.getDate()}（${weekdays[d.getDay()]}）`;
   };
 
-  // 初期化：結果計算 + DB保存
   useEffect(() => {
-    const init = async () => {
-      const stored = localStorage.getItem("matching_diagnosis");
-      if (!stored) {
-        router.replace("/matching/shindan");
-        return;
-      }
-      const data = JSON.parse(stored);
-      setUserName(data.name || "");
-      const res = calculateMatching(data.answers);
-      setResult(res);
-      setLoading(false);
+    const stored = localStorage.getItem("matching_diagnosis");
+    if (!stored) {
+      router.replace("/matching/shindan");
+      return;
+    }
+    const data = JSON.parse(stored);
+    setUserName(data.name || "");
+    if (data.savedId) setDiagnosisId(data.savedId);
 
-      // DB保存
-      if (data.savedId) {
-        setDiagnosisId(data.savedId);
-      } else {
-        const payload = {
-          name: data.name || null,
-          birthday: data.birthday || null,
-          answers: data.answers,
-          typeId: res.type.id,
-          scores: res.scores,
-          topProducts: res.topProducts.map((p) => p.id),
-        };
-        try {
-          const resp = await fetch("/api/matching/diagnoses", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload),
-          });
-          const json = await resp.json();
-          if (resp.ok && json.id) {
-            setDiagnosisId(json.id);
-            data.savedId = json.id;
-            localStorage.setItem("matching_diagnosis", JSON.stringify(data));
-          } else {
-            console.error("DB保存エラー:", json);
-          }
-        } catch (err) {
-          console.error("DB保存例外:", err);
-        }
-      }
+    const res = calculateMatching(data.answers);
+    setResult(res);
+
+    // 初期資金をQ6の回答から推定
+    const q6Answer = data.answers[5];
+    const fundMap: Record<string, number> = {
+      a: 50000,
+      b: 200000,
+      c: 500000,
+      d: 300000,
     };
-    init();
+    setInitialFund(fundMap[q6Answer] || 300000);
+
+    // 動物占い
+    if (data.birthday) {
+      const dResult = diagnoseDoubutsuFromISO(data.birthday);
+      if (dResult) {
+        const profile = getDoubutsuProfile(dResult.animal);
+        const paragraphs = buildCrossReading(profile, res.type.name);
+        setDoubutsu({ result: dResult, profile, paragraphs });
+      }
+    }
+
+    setLoading(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  const handleAiGenerate = () => {
-    setAiGenerating(true);
-    setTimeout(() => {
-      setAiGenerating(false);
-      setShowAi(true);
-    }, 1500);
-  };
 
   const handleBooking = async () => {
     if (!diagnosisId || !bookingDate || !bookingTime) return;
@@ -119,9 +231,7 @@ export default function MatchingResult() {
           contactMethod,
         }),
       });
-      if (resp.ok) {
-        setBookingDone(true);
-      }
+      if (resp.ok) setBookingDone(true);
     } catch {
       // エラーでも画面は維持
     } finally {
@@ -140,8 +250,11 @@ export default function MatchingResult() {
     );
   }
 
-  const { type, topProducts, allProductScores } = result;
-  const maxScore = allProductScores[0]?.score || 1;
+  const { type } = result;
+  const heroEmoji = doubutsu?.profile.emoji ?? type.emoji;
+  const heroHeadline = doubutsu
+    ? `${type.name}の${doubutsu.result.animal}タイプ`
+    : type.headline;
 
   return (
     <div className="min-h-screen px-4 py-6">
@@ -151,12 +264,18 @@ export default function MatchingResult() {
           <p className="text-blue-400 text-sm font-medium mb-3 tracking-wide">
             {userName ? `${userName}さんの` : "あなたの"}副業適性タイプ
           </p>
-          <div className="text-7xl mb-5">{type.emoji}</div>
+          <div className="text-7xl mb-5">{heroEmoji}</div>
           <h1 className="text-3xl font-bold text-white mb-3 leading-tight">
-            {type.headline}
+            {heroHeadline}
           </h1>
+          {doubutsu && (
+            <p className="text-xs text-gray-500 tracking-wide mb-3">
+              {doubutsu.profile.groupLabel} ／ {doubutsu.result.color} ／ 運命数
+              {doubutsu.result.destinyNumber}
+            </p>
+          )}
           <div className="flex justify-center gap-2 mb-4 flex-wrap">
-            {type.traits.map((trait) => (
+            {(doubutsu?.profile.traits ?? type.traits).map((trait) => (
               <span
                 key={trait}
                 className="px-3 py-1 rounded-full text-xs font-medium bg-blue-500/15 text-blue-300 border border-blue-500/30"
@@ -168,11 +287,11 @@ export default function MatchingResult() {
           <p className="text-gray-400 text-sm">{type.description}</p>
         </div>
 
-        {/* 詳細説明 */}
+        {/* 性格診断・副業適性について */}
         <div className="rounded-2xl bg-white/5 border border-white/10 p-6 mb-6">
           <h2 className="text-base font-bold text-blue-400 mb-4 flex items-center gap-2">
             <span className="text-lg">📖</span>
-            <span>あなたの副業適性について</span>
+            <span>あなたの性格タイプについて</span>
           </h2>
           <div className="space-y-4">
             {type.longDescription.split("\n\n").map((p, i) => (
@@ -186,119 +305,63 @@ export default function MatchingResult() {
           </div>
         </div>
 
-        {/* おすすめ商材 */}
-        <div className="rounded-2xl bg-white/5 border border-white/10 p-6 mb-6">
-          <h2 className="text-base font-bold text-blue-400 mb-4 flex items-center gap-2">
-            <span className="text-lg">🎯</span>
-            <span>あなたにおすすめの副業</span>
-          </h2>
-          <div className="space-y-3">
-            {topProducts.map((product, i) => (
-              <div
-                key={product.id}
-                className="flex items-start gap-3 p-4 rounded-xl bg-gradient-to-r from-blue-500/10 to-cyan-500/5 border border-blue-500/20"
-              >
-                <div className="flex-shrink-0 w-8 h-8 rounded-full bg-blue-500/20 flex items-center justify-center text-blue-400 font-bold text-sm">
-                  {i + 1}
-                </div>
-                <div>
-                  <p className="font-bold text-white text-sm">{product.name}</p>
-                  <p className="text-gray-400 text-xs mt-0.5">
-                    {product.category} / {product.shortDescription}
-                  </p>
-                </div>
-              </div>
-            ))}
+        {/* 動物占い × 副業スタイル */}
+        {doubutsu && (
+          <div className="rounded-2xl bg-white/5 border border-white/10 p-6 mb-6">
+            <h2 className="text-base font-bold text-blue-400 mb-4 flex items-center gap-2">
+              <span className="text-lg">🔮</span>
+              <span>
+                {doubutsu.result.animal}タイプのあなたへ
+              </span>
+            </h2>
+            <div className="space-y-4">
+              {doubutsu.paragraphs.map((p, i) => (
+                <p
+                  key={i}
+                  className="text-gray-200 text-[15px] leading-[1.9] tracking-wide"
+                >
+                  {p}
+                </p>
+              ))}
+            </div>
           </div>
-        </div>
+        )}
 
-        {/* 適性スコアバー */}
-        <div className="rounded-2xl bg-white/5 border border-white/10 p-6 mb-6">
-          <h2 className="text-base font-bold text-blue-400 mb-4 flex items-center gap-2">
-            <span className="text-lg">📊</span>
-            <span>全商材との適性スコア</span>
-          </h2>
-          <div className="space-y-3">
-            {allProductScores.map(({ product, score }) => (
-              <div key={product.id}>
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-sm text-gray-300">{product.name}</span>
-                  <span className="text-xs text-gray-500">
-                    {Math.round((score / maxScore) * 100)}%
-                  </span>
-                </div>
-                <div className="w-full h-2 bg-white/10 rounded-full overflow-hidden">
-                  <div
-                    className="h-full rounded-full bg-gradient-to-r from-blue-500 to-cyan-500 transition-all duration-700"
-                    style={{
-                      width: `${Math.max((score / maxScore) * 100, 5)}%`,
-                    }}
-                  />
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
+        {/* AI未来予測（ボタンなしで最初から表示） */}
+        <div className="rounded-2xl bg-gradient-to-br from-blue-500/10 to-purple-500/10 border border-blue-500/20 p-6 mb-6">
+          <h3 className="text-base font-bold text-blue-400 mb-4 flex items-center gap-2">
+            <span className="text-lg">🤖</span>
+            <span>AIによる未来予測</span>
+          </h3>
 
-        {/* AI未来診断 */}
-        {!showAi && (
-          <div className="rounded-2xl bg-gradient-to-br from-blue-500/10 to-purple-500/10 border border-blue-500/20 p-6 mb-6 text-center">
-            <div className="text-3xl mb-3">🤖</div>
-            <h3 className="text-lg font-bold text-white mb-2">
-              AIであなたの未来を診断
-            </h3>
-            <p className="text-gray-400 text-sm mb-5 leading-relaxed">
-              診断データを基に、今の延長線上の未来と
-              <br />
-              適性を活かした場合の未来を比較します
+          {/* グラフ */}
+          <div className="mb-5 p-4 rounded-xl bg-white/5">
+            <p className="text-xs text-gray-400 mb-3 text-center">
+              初期資金 {initialFund.toLocaleString()}円 での資産推移シミュレーション
             </p>
-            <button
-              onClick={handleAiGenerate}
-              disabled={aiGenerating}
-              className="w-full py-3.5 rounded-xl font-bold text-white text-sm bg-gradient-to-r from-blue-500 to-purple-500 hover:from-blue-600 hover:to-purple-600 transition-all shadow-lg shadow-blue-500/25 active:scale-[0.98] disabled:opacity-70"
-            >
-              {aiGenerating ? (
-                <span className="flex items-center justify-center gap-2">
-                  <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                  AI分析中...
-                </span>
-              ) : (
-                "AIで未来を予測する"
-              )}
-            </button>
+            <FutureGraph initialFund={initialFund} />
           </div>
-        )}
 
-        {showAi && (
-          <div className="rounded-2xl bg-gradient-to-br from-blue-500/10 to-purple-500/10 border border-blue-500/20 p-6 mb-6 animate-fade-in">
-            <h3 className="text-base font-bold text-blue-400 mb-4 flex items-center gap-2">
-              <span className="text-lg">🤖</span>
-              <span>AI未来予測</span>
-            </h3>
-            <div className="mb-5 p-4 rounded-xl bg-red-500/5 border border-red-500/15">
-              <p className="text-red-400 text-xs font-bold mb-2 flex items-center gap-1">
-                <span>⚠️</span> 現在の延長線上
-              </p>
-              <p className="text-gray-300 text-sm leading-relaxed">
-                副業を始めないまま1年が過ぎると、物価上昇や増税の影響で実質的な可処分所得は減り続けます。「いつかやろう」と思っている間に、同世代との収入格差は広がり、将来への不安は増す一方です。
-              </p>
-            </div>
-            <div className="p-4 rounded-xl bg-green-500/5 border border-green-500/15">
-              <p className="text-green-400 text-xs font-bold mb-2 flex items-center gap-1">
-                <span>✨</span> 適性を活かした場合
-              </p>
-              <p className="text-gray-300 text-sm leading-relaxed">
-                {userName ? `${userName}さん` : "あなた"}の「{type.name}
-                」としての強みを活かせば、
-                {type.recommendedProducts
-                  .map((pid) => PRODUCTS.find((p) => p.id === pid)?.name)
-                  .filter(Boolean)
-                  .join("や")}
-                で、3ヶ月後には最初の成果が見え始め、半年後には安定した副収入の柱を築ける可能性があります。あなたの性格に合ったやり方だからこそ、無理なく続けられます。
-              </p>
-            </div>
+          {/* このまま何もしなかった場合 */}
+          <div className="mb-4 p-4 rounded-xl bg-red-500/5 border border-red-500/15">
+            <p className="text-red-400 text-xs font-bold mb-2 flex items-center gap-1">
+              <span>⚠️</span> 現在の延長線上
+            </p>
+            <p className="text-gray-300 text-sm leading-relaxed">
+              副業を始めないまま1年が過ぎると、物価上昇や増税の影響で実質的な可処分所得は減り続けます。今の{initialFund.toLocaleString()}円も、インフレにより1年後には実質{Math.round(initialFund * 0.97).toLocaleString()}円の価値に。「いつかやろう」と思っている間に、同世代との収入格差は広がり、将来への不安は増す一方です。
+            </p>
           </div>
-        )}
+
+          {/* 適性を活かした場合 */}
+          <div className="p-4 rounded-xl bg-green-500/5 border border-green-500/15">
+            <p className="text-green-400 text-xs font-bold mb-2 flex items-center gap-1">
+              <span>✨</span> 適性を活かした場合
+            </p>
+            <p className="text-gray-300 text-sm leading-relaxed">
+              {userName ? `${userName}さん` : "あなた"}の「{type.name}」としての強みを正しい方向に活かせば、3ヶ月後には最初の成果が見え始め、半年後には安定した副収入の柱を築ける可能性があります。あなたの性格に合ったやり方だからこそ、無理なく続けられ、1年後には資産{Math.round(initialFund * Math.pow(1.1, 12)).toLocaleString()}円も現実的な目標です。
+            </p>
+          </div>
+        </div>
 
         {/* 個別相談予約 */}
         {!bookingDone ? (
@@ -319,10 +382,10 @@ export default function MatchingResult() {
               <p className="text-gray-300 text-sm leading-relaxed">
                 診断データをもとに、あなたに合った
                 <br />
-                具体的な副業プランを個別にご提案します。
+                具体的な副業プランを個別にお伝えします。
                 <br />
                 <span className="text-blue-300 font-medium">
-                  無料・オンライン・30分
+                  無料・オンライン・60分
                 </span>
               </p>
             </div>
@@ -445,7 +508,6 @@ export default function MatchingResult() {
             )}
           </div>
         ) : (
-          /* 予約完了メッセージ */
           <div className="rounded-2xl bg-green-500/10 border border-green-500/20 p-6 mb-6 text-center animate-fade-in">
             <div className="text-4xl mb-3">✅</div>
             <h3 className="text-xl font-bold text-white mb-2">
@@ -463,19 +525,6 @@ export default function MatchingResult() {
             </p>
           </div>
         )}
-
-        {/* やり直しリンク */}
-        <div className="text-center mb-8">
-          <button
-            onClick={() => {
-              localStorage.removeItem("matching_diagnosis");
-              router.push("/matching/shindan");
-            }}
-            className="text-gray-500 text-sm hover:text-gray-300 transition-colors underline underline-offset-4"
-          >
-            もう一度診断する
-          </button>
-        </div>
       </div>
     </div>
   );

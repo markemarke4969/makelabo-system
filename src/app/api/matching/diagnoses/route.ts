@@ -47,8 +47,10 @@ export async function POST(request: NextRequest) {
   }
 
   // 通常の診断結果保存
-  const { name, birthday, answers, typeId, scores, topProducts, lineUserId } =
-    body;
+  const {
+    name, birthday, answers, typeId, scores, topProducts, lineUserId,
+    gender, ageGroup, familyStatus,
+  } = body;
 
   if (!answers || !typeId || !scores || !topProducts) {
     return Response.json({ error: "必須項目が不足しています" }, { status: 400 });
@@ -64,6 +66,9 @@ export async function POST(request: NextRequest) {
       type_id: typeId,
       scores,
       top_products: topProducts,
+      gender: gender || null,
+      age_group: ageGroup || null,
+      family_status: familyStatus || null,
     })
     .select("id")
     .single();
