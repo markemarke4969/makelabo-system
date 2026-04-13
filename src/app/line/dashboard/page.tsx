@@ -66,11 +66,23 @@ interface Label {
   assigned_users: string[]; // line_user_id[]
 }
 
+interface TemplateMessage {
+  id?: string;
+  msg_order: number;
+  msg_type: string;
+  payload: Record<string, unknown>;
+  body: string | null;
+}
+
 interface Template {
   id: string;
-  title: string;
-  body: string;
+  name: string;
+  group_name: string | null;
+  messages: TemplateMessage[];
   created_at: string;
+  // 旧互換
+  title?: string;
+  body?: string;
 }
 
 interface StepSequence {
@@ -97,6 +109,9 @@ interface StepMessage {
   status: string;
   msg_type?: string | null;
   payload?: Record<string, unknown> | null;
+  timing_mode?: "immediate" | "absolute" | "relative" | null;
+  delivery_days?: number | null;
+  delivery_time?: string | null;
 }
 
 interface InflowRoute {
@@ -114,7 +129,7 @@ interface InflowRoute {
 // メインビュー
 type MainView = "accounts" | "account-detail" | "settings";
 // アカウント詳細内のサブビュー
-type AccountSubView = "followers" | "chat" | "step" | "schedule" | "friend-page" | "labels" | "templates" | "inflow" | "actions";
+type AccountSubView = "followers" | "chat" | "step" | "schedule" | "friend-page" | "labels" | "templates" | "inflow" | "actions" | "custom-fields" | "reminders" | "newsletter";
 
 // アクションルール
 type ActionTriggerType = "follow" | "label_added" | "message_received" | "sequence_completed";
@@ -326,8 +341,26 @@ export default function LineDashboard() {
   const [templates, setTemplates] = useState<Template[]>([]);
   const [showTemplateModal, setShowTemplateModal] = useState(false);
   const [editingTemplate, setEditingTemplate] = useState<Template | null>(null);
-  const [templateForm, setTemplateForm] = useState({ title: "", body: "" });
+  const [templateForm, setTemplateForm] = useState<{ name: string; messages: BroadcastMessage[] }>({ name: "", messages: [] });
   const [showTemplatePopup, setShowTemplatePopup] = useState(false);
+
+  // Custom Fields
+  interface CustomField { id: string; field_key: string; field_label: string; field_type: string; options: unknown; sort_order: number; }
+  const [customFields, setCustomFields] = useState<CustomField[]>([]);
+  const [showCustomFieldModal, setShowCustomFieldModal] = useState(false);
+  const [customFieldForm, setCustomFieldForm] = useState({ field_key: "", field_label: "", field_type: "text" });
+  // Reminders
+  interface Reminder { id: string; name: string; status: string; base_date_field: string; messages: ReminderMessage[]; created_at: string; }
+  interface ReminderMessage { id: string; msg_order: number; offset_days: number; offset_time: string; msg_type: string; payload: Record<string, unknown>; body: string | null; }
+  const [reminders, setReminders] = useState<Reminder[]>([]);
+  const [showReminderModal, setShowReminderModal] = useState(false);
+  const [reminderForm, setReminderForm] = useState({ name: "", base_date_field: "custom", messages: [] as { offset_days: number; offset_time: string; body: string }[] });
+
+  // Newsletter
+  interface Newsletter { id: string; name: string; subject: string; body_html: string; body_text: string; status: string; scheduled_at: string | null; sent_count: number; created_at: string; }
+  const [newsletters, setNewsletters] = useState<Newsletter[]>([]);
+  const [showNewsletterModal, setShowNewsletterModal] = useState(false);
+  const [newsletterForm, setNewsletterForm] = useState({ name: "", subject: "", body_text: "" });
 
   // Feature 6: Mobile responsive
   const [showMobileSidebar, setShowMobileSidebar] = useState(false);
@@ -349,7 +382,7 @@ export default function LineDashboard() {
   const [editingSequence, setEditingSequence] = useState<StepSequence | null>(null);
   const [stepForm, setStepForm] = useState({ name: "" });
   const [showStepMsgModal, setShowStepMsgModal] = useState(false);
-  const [stepMsgForm, setStepMsgForm] = useState({ sequence_id: "", step_order: 1, delay_minutes: 0, media: "LINE", title: "", body: "" });
+  const [stepMsgForm, setStepMsgForm] = useState({ sequence_id: "", step_order: 1, delay_minutes: 0, media: "LINE", title: "", body: "", timing_mode: "immediate" as "immediate" | "absolute" | "relative", delivery_days: 0, delivery_time: "09:00", rel_days: 0, rel_hours: 0, rel_minutes: 0 });
   const [editingStepMsg, setEditingStepMsg] = useState<StepMessage | null>(null);
 
   // Inflow routes
@@ -393,9 +426,11 @@ export default function LineDashboard() {
     audioDuration: number;
     stickerPackageId: string;
     stickerId: string;
+    buttonTitle: string;
+    buttonImageUrl: string;
     buttonText: string;
-    buttonActions: { label: string; uri: string }[];
-    carouselColumns: { title: string; text: string; imageUrl: string; uri: string; label: string }[];
+    buttonActions: { label: string; uri: string; actionType: "uri" | "postback" | "message"; data: string; text: string }[];
+    carouselColumns: { title: string; text: string; imageUrl: string; uri: string; label: string; actionType: "uri" | "postback" | "message"; data: string; actionText: string }[];
   }
   interface BroadcastForm {
     name: string;
@@ -424,11 +459,13 @@ export default function LineDashboard() {
     audioDuration: 60,
     stickerPackageId: "11537",
     stickerId: "52002734",
+    buttonTitle: "",
+    buttonImageUrl: "",
     buttonText: "",
-    buttonActions: [{ label: "詳細を見る", uri: "" }],
+    buttonActions: [{ label: "詳細を見る", uri: "", actionType: "uri" as const, data: "", text: "" }],
     carouselColumns: [
-      { title: "タイトル1", text: "説明1", imageUrl: "", uri: "", label: "詳細" },
-      { title: "タイトル2", text: "説明2", imageUrl: "", uri: "", label: "詳細" },
+      { title: "タイトル1", text: "説明1", imageUrl: "", uri: "", label: "詳細", actionType: "uri" as const, data: "", actionText: "" },
+      { title: "タイトル2", text: "説明2", imageUrl: "", uri: "", label: "詳細", actionType: "uri" as const, data: "", actionText: "" },
     ],
   });
   const emptyBroadcast: BroadcastForm = {
@@ -607,6 +644,41 @@ export default function LineDashboard() {
           })),
         );
       }
+    } catch { /* */ }
+  }, [selectedAccount?.id]);
+
+  const fetchTemplates = useCallback(async () => {
+    if (!selectedAccount) { setTemplates([]); return; }
+    try {
+      const res = await fetch(`/api/line/templates?account_id=${selectedAccount.id}`);
+      if (res.ok) {
+        const data = await res.json();
+        setTemplates(data as Template[]);
+      }
+    } catch { /* */ }
+  }, [selectedAccount?.id]);
+
+  const fetchCustomFields = useCallback(async () => {
+    if (!selectedAccount) { setCustomFields([]); return; }
+    try {
+      const res = await fetch(`/api/line/custom-fields?account_id=${selectedAccount.id}`);
+      if (res.ok) setCustomFields(await res.json());
+    } catch { /* */ }
+  }, [selectedAccount?.id]);
+
+  const fetchReminders = useCallback(async () => {
+    if (!selectedAccount) { setReminders([]); return; }
+    try {
+      const res = await fetch(`/api/line/reminders?account_id=${selectedAccount.id}`);
+      if (res.ok) setReminders(await res.json());
+    } catch { /* */ }
+  }, [selectedAccount?.id]);
+
+  const fetchNewsletters = useCallback(async () => {
+    if (!selectedAccount) { setNewsletters([]); return; }
+    try {
+      const res = await fetch(`/api/line/newsletter?account_id=${selectedAccount.id}`);
+      if (res.ok) setNewsletters(await res.json());
     } catch { /* */ }
   }, [selectedAccount?.id]);
 
@@ -1122,39 +1194,53 @@ export default function LineDashboard() {
     e.target.value = "";
   };
 
-  // Feature 5: Template CRUD
-  const saveTemplate = () => {
-    if (!templateForm.title.trim() || !templateForm.body.trim()) return;
+  // Feature 5: Template CRUD (DB永続化)
+  const saveTemplate = async () => {
+    if (!templateForm.name.trim() || !selectedAccount) return;
+    const messages = templateForm.messages.map((m, i) => ({
+      msg_order: i + 1,
+      msg_type: m.msgType,
+      payload: m,
+      body: m.body || null,
+    }));
     if (editingTemplate) {
-      setTemplates((prev) =>
-        prev.map((t) =>
-          t.id === editingTemplate.id
-            ? { ...t, title: templateForm.title.trim(), body: templateForm.body.trim() }
-            : t
-        )
-      );
+      await fetch("/api/line/templates", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: editingTemplate.id, name: templateForm.name.trim(), messages }),
+      });
     } else {
-      const newTpl: Template = {
-        id: crypto.randomUUID(),
-        title: templateForm.title.trim(),
-        body: templateForm.body.trim(),
-        created_at: new Date().toISOString(),
-      };
-      setTemplates((prev) => [newTpl, ...prev]);
+      await fetch("/api/line/templates", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ account_id: selectedAccount.id, name: templateForm.name.trim(), messages }),
+      });
     }
-    setTemplateForm({ title: "", body: "" });
+    setTemplateForm({ name: "", messages: [emptyMessage()] });
     setEditingTemplate(null);
     setShowTemplateModal(false);
+    fetchTemplates();
   };
 
-  const deleteTemplate = (id: string) => {
-    if (!confirm("この定型文を削除しますか？")) return;
-    setTemplates((prev) => prev.filter((t) => t.id !== id));
+  const deleteTemplate = async (id: string) => {
+    if (!confirm("このテンプレートを削除しますか？")) return;
+    await fetch("/api/line/templates", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id }),
+    });
+    fetchTemplates();
   };
 
   const startEditTemplate = (tpl: Template) => {
     setEditingTemplate(tpl);
-    setTemplateForm({ title: tpl.title, body: tpl.body });
+    const msgs: BroadcastMessage[] = (tpl.messages ?? []).map((m) => {
+      if (m.payload && typeof m.payload === "object") {
+        return { ...emptyMessage(), ...(m.payload as Partial<BroadcastMessage>) };
+      }
+      return { ...emptyMessage(), body: m.body ?? "" };
+    });
+    setTemplateForm({ name: tpl.name || tpl.title || "", messages: msgs.length > 0 ? msgs : [emptyMessage()] });
     setShowTemplateModal(true);
   };
 
@@ -1326,8 +1412,12 @@ export default function LineDashboard() {
       fetchTestFollowers();
       fetchLabels();
       fetchActionRules();
+      fetchTemplates();
+      fetchCustomFields();
+      fetchReminders();
+      fetchNewsletters();
     }
-  }, [selectedAccount, fetchStepSequences, fetchTestFollowers, fetchLabels, fetchActionRules]);
+  }, [selectedAccount, fetchStepSequences, fetchTestFollowers, fetchLabels, fetchActionRules, fetchTemplates, fetchCustomFields, fetchReminders, fetchNewsletters]);
 
   useEffect(() => {
     if (project?.id) fetchInflowRoutes();
@@ -1463,10 +1553,27 @@ export default function LineDashboard() {
         sequenceId = created.id;
       }
 
-      const baseDelay =
-        form.timingMode === "immediate"
-          ? 0
-          : form.timingDays * 1440 + form.timingHours * 60 + form.timingMinutes;
+      // タイミングモードに応じたdelay計算
+      let timingMode: "immediate" | "absolute" | "relative" = "immediate";
+      let baseDelay = 0;
+      let deliveryDays: number | null = null;
+      let deliveryTime: string | null = null;
+
+      if (form.timingMode === "immediate") {
+        timingMode = "immediate";
+        baseDelay = 0;
+      } else if (form.timingMode === "daysAfter") {
+        timingMode = "relative";
+        baseDelay = form.timingDays * 1440 + form.timingHours * 60 + form.timingMinutes;
+      } else if (form.timingMode === "datetime" && kind === "step") {
+        // ステップ配信でdatetime選択の場合はabsoluteモード（N日後のHH:MM）
+        timingMode = "absolute";
+        deliveryDays = form.timingDays;
+        deliveryTime = `${String(form.timingHours).padStart(2, "0")}:${String(form.timingMinutes).padStart(2, "0")}`;
+        baseDelay = form.timingDays * 1440;
+      } else {
+        baseDelay = form.timingDays * 1440 + form.timingHours * 60 + form.timingMinutes;
+      }
 
       for (let i = 0; i < form.messages.length; i++) {
         const msg = form.messages[i];
@@ -1483,6 +1590,9 @@ export default function LineDashboard() {
             msg_type: msg.msgType,
             payload: msg,
             status: form.status,
+            timing_mode: timingMode,
+            delivery_days: deliveryDays,
+            delivery_time: deliveryTime,
           }),
         });
         if (!msgRes.ok) {
@@ -1992,7 +2102,7 @@ export default function LineDashboard() {
                           placeholder="https://example.com/video.mp4"
                           className="w-full border border-gray-200 rounded-md px-3 py-2 text-sm focus:border-blue-400 focus:outline-none"
                         />
-                        <label className="text-xs text-gray-600">プレビュー画像URL (previewImageUrl) <span className="text-[10px] text-red-500">必須</span></label>
+                        <label className="text-xs text-gray-600">プレビュー画像URL (JPEG/PNG) <span className="text-[10px] text-red-500">必須</span></label>
                         <input
                           type="url"
                           value={msg.videoPreviewUrl}
@@ -2016,7 +2126,7 @@ export default function LineDashboard() {
                           />
                         </div>
                         <div>
-                          <label className="text-xs text-gray-600">再生時間（ミリ秒）</label>
+                          <label className="text-xs text-gray-600">再生時間（秒）</label>
                           <input
                             type="number"
                             value={msg.audioDuration}
@@ -2056,7 +2166,24 @@ export default function LineDashboard() {
                     )}
                     {msg.msgType === "button" && (
                       <div className="space-y-2">
-                        <label className="text-xs text-gray-600">メッセージ本文</label>
+                        <label className="text-xs text-gray-600">タイトル（任意・最大40文字）</label>
+                        <input
+                          type="text"
+                          value={msg.buttonTitle}
+                          onChange={(e) => updateMsg(mi, { buttonTitle: e.target.value })}
+                          placeholder="ボタンのタイトル"
+                          maxLength={40}
+                          className="w-full border border-gray-200 rounded-md px-3 py-2 text-sm focus:border-blue-400 focus:outline-none"
+                        />
+                        <label className="text-xs text-gray-600">画像URL（任意・HTTPS）</label>
+                        <input
+                          type="url"
+                          value={msg.buttonImageUrl}
+                          onChange={(e) => updateMsg(mi, { buttonImageUrl: e.target.value })}
+                          placeholder="https://example.com/image.jpg"
+                          className="w-full border border-gray-200 rounded-md px-3 py-2 text-sm focus:border-blue-400 focus:outline-none"
+                        />
+                        <label className="text-xs text-gray-600">メッセージ本文 <span className="text-[10px] text-red-500">必須</span></label>
                         <textarea
                           value={msg.buttonText}
                           onChange={(e) => updateMsg(mi, { buttonText: e.target.value })}
@@ -2066,42 +2193,98 @@ export default function LineDashboard() {
                         />
                         <div className="text-xs text-gray-600 pt-1">ボタン（最大4つ）</div>
                         {msg.buttonActions.map((act, i) => (
-                          <div key={i} className="flex gap-2">
-                            <input
-                              type="text"
-                              value={act.label}
-                              onChange={(e) => {
-                                const next = [...msg.buttonActions];
-                                next[i] = { ...next[i], label: e.target.value };
-                                updateMsg(mi, { buttonActions: next });
-                              }}
-                              placeholder="ラベル"
-                              className="flex-1 border border-gray-200 rounded-md px-2 py-1.5 text-xs"
-                            />
-                            <input
-                              type="url"
-                              value={act.uri}
-                              onChange={(e) => {
-                                const next = [...msg.buttonActions];
-                                next[i] = { ...next[i], uri: e.target.value };
-                                updateMsg(mi, { buttonActions: next });
-                              }}
-                              placeholder="URL"
-                              className="flex-[2] border border-gray-200 rounded-md px-2 py-1.5 text-xs"
-                            />
-                            <button
-                              type="button"
-                              onClick={() => updateMsg(mi, { buttonActions: msg.buttonActions.filter((_, j) => j !== i) })}
-                              className="px-2 text-xs text-red-500 hover:text-red-700"
-                            >
-                              削除
-                            </button>
+                          <div key={i} className="space-y-1 border border-gray-100 rounded-md p-2">
+                            <div className="flex gap-2 items-center">
+                              <select
+                                value={act.actionType || "uri"}
+                                onChange={(e) => {
+                                  const next = [...msg.buttonActions];
+                                  next[i] = { ...next[i], actionType: e.target.value as "uri" | "postback" | "message" };
+                                  updateMsg(mi, { buttonActions: next });
+                                }}
+                                className="border border-gray-200 rounded-md px-2 py-1.5 text-xs bg-white"
+                              >
+                                <option value="uri">URLを開く</option>
+                                <option value="postback">Postback</option>
+                                <option value="message">メッセージ送信</option>
+                              </select>
+                              <input
+                                type="text"
+                                value={act.label}
+                                onChange={(e) => {
+                                  const next = [...msg.buttonActions];
+                                  next[i] = { ...next[i], label: e.target.value };
+                                  updateMsg(mi, { buttonActions: next });
+                                }}
+                                placeholder="ラベル"
+                                className="flex-1 border border-gray-200 rounded-md px-2 py-1.5 text-xs"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => updateMsg(mi, { buttonActions: msg.buttonActions.filter((_, j) => j !== i) })}
+                                className="px-2 text-xs text-red-500 hover:text-red-700"
+                              >
+                                削除
+                              </button>
+                            </div>
+                            {(act.actionType || "uri") === "uri" && (
+                              <input
+                                type="url"
+                                value={act.uri}
+                                onChange={(e) => {
+                                  const next = [...msg.buttonActions];
+                                  next[i] = { ...next[i], uri: e.target.value };
+                                  updateMsg(mi, { buttonActions: next });
+                                }}
+                                placeholder="https://example.com"
+                                className="w-full border border-gray-200 rounded-md px-2 py-1.5 text-xs"
+                              />
+                            )}
+                            {(act.actionType || "uri") === "postback" && (
+                              <div className="space-y-1">
+                                <input
+                                  type="text"
+                                  value={act.data}
+                                  onChange={(e) => {
+                                    const next = [...msg.buttonActions];
+                                    next[i] = { ...next[i], data: e.target.value };
+                                    updateMsg(mi, { buttonActions: next });
+                                  }}
+                                  placeholder="Postbackデータ（自動処理用キー）"
+                                  className="w-full border border-gray-200 rounded-md px-2 py-1.5 text-xs"
+                                />
+                                <input
+                                  type="text"
+                                  value={act.text}
+                                  onChange={(e) => {
+                                    const next = [...msg.buttonActions];
+                                    next[i] = { ...next[i], text: e.target.value };
+                                    updateMsg(mi, { buttonActions: next });
+                                  }}
+                                  placeholder="表示テキスト（任意）"
+                                  className="w-full border border-gray-200 rounded-md px-2 py-1.5 text-xs"
+                                />
+                              </div>
+                            )}
+                            {(act.actionType || "uri") === "message" && (
+                              <input
+                                type="text"
+                                value={act.text}
+                                onChange={(e) => {
+                                  const next = [...msg.buttonActions];
+                                  next[i] = { ...next[i], text: e.target.value };
+                                  updateMsg(mi, { buttonActions: next });
+                                }}
+                                placeholder="送信するメッセージテキスト"
+                                className="w-full border border-gray-200 rounded-md px-2 py-1.5 text-xs"
+                              />
+                            )}
                           </div>
                         ))}
                         {msg.buttonActions.length < 4 && (
                           <button
                             type="button"
-                            onClick={() => updateMsg(mi, { buttonActions: [...msg.buttonActions, { label: "", uri: "" }] })}
+                            onClick={() => updateMsg(mi, { buttonActions: [...msg.buttonActions, { label: "", uri: "", actionType: "uri" as const, data: "", text: "" }] })}
                             className="text-xs text-blue-600 hover:text-blue-800"
                           >
                             + ボタンを追加
@@ -2158,36 +2341,92 @@ export default function LineDashboard() {
                               placeholder="画像URL（任意）"
                               className="w-full border border-gray-200 rounded-md px-2 py-1 text-xs"
                             />
-                            <div className="flex gap-1.5">
-                              <input
-                                type="text"
-                                value={col.label}
-                                onChange={(e) => {
-                                  const next = [...msg.carouselColumns];
-                                  next[i] = { ...next[i], label: e.target.value };
-                                  updateMsg(mi, { carouselColumns: next });
-                                }}
-                                placeholder="ボタン名"
-                                className="flex-1 border border-gray-200 rounded-md px-2 py-1 text-xs"
-                              />
-                              <input
-                                type="url"
-                                value={col.uri}
-                                onChange={(e) => {
-                                  const next = [...msg.carouselColumns];
-                                  next[i] = { ...next[i], uri: e.target.value };
-                                  updateMsg(mi, { carouselColumns: next });
-                                }}
-                                placeholder="ボタンURL"
-                                className="flex-[2] border border-gray-200 rounded-md px-2 py-1 text-xs"
-                              />
+                            <div className="space-y-1.5">
+                              <div className="flex gap-1.5 items-center">
+                                <select
+                                  value={col.actionType || "uri"}
+                                  onChange={(e) => {
+                                    const next = [...msg.carouselColumns];
+                                    next[i] = { ...next[i], actionType: e.target.value as "uri" | "postback" | "message" };
+                                    updateMsg(mi, { carouselColumns: next });
+                                  }}
+                                  className="border border-gray-200 rounded-md px-1.5 py-1 text-xs bg-white"
+                                >
+                                  <option value="uri">URL</option>
+                                  <option value="postback">Postback</option>
+                                  <option value="message">メッセージ</option>
+                                </select>
+                                <input
+                                  type="text"
+                                  value={col.label}
+                                  onChange={(e) => {
+                                    const next = [...msg.carouselColumns];
+                                    next[i] = { ...next[i], label: e.target.value };
+                                    updateMsg(mi, { carouselColumns: next });
+                                  }}
+                                  placeholder="ボタン名"
+                                  className="flex-1 border border-gray-200 rounded-md px-2 py-1 text-xs"
+                                />
+                              </div>
+                              {(col.actionType || "uri") === "uri" && (
+                                <input
+                                  type="url"
+                                  value={col.uri}
+                                  onChange={(e) => {
+                                    const next = [...msg.carouselColumns];
+                                    next[i] = { ...next[i], uri: e.target.value };
+                                    updateMsg(mi, { carouselColumns: next });
+                                  }}
+                                  placeholder="ボタンURL"
+                                  className="w-full border border-gray-200 rounded-md px-2 py-1 text-xs"
+                                />
+                              )}
+                              {(col.actionType || "uri") === "postback" && (
+                                <>
+                                  <input
+                                    type="text"
+                                    value={col.data || ""}
+                                    onChange={(e) => {
+                                      const next = [...msg.carouselColumns];
+                                      next[i] = { ...next[i], data: e.target.value };
+                                      updateMsg(mi, { carouselColumns: next });
+                                    }}
+                                    placeholder="Postbackデータ"
+                                    className="w-full border border-gray-200 rounded-md px-2 py-1 text-xs"
+                                  />
+                                  <input
+                                    type="text"
+                                    value={col.actionText || ""}
+                                    onChange={(e) => {
+                                      const next = [...msg.carouselColumns];
+                                      next[i] = { ...next[i], actionText: e.target.value };
+                                      updateMsg(mi, { carouselColumns: next });
+                                    }}
+                                    placeholder="表示テキスト（任意）"
+                                    className="w-full border border-gray-200 rounded-md px-2 py-1 text-xs"
+                                  />
+                                </>
+                              )}
+                              {(col.actionType || "uri") === "message" && (
+                                <input
+                                  type="text"
+                                  value={col.actionText || ""}
+                                  onChange={(e) => {
+                                    const next = [...msg.carouselColumns];
+                                    next[i] = { ...next[i], actionText: e.target.value };
+                                    updateMsg(mi, { carouselColumns: next });
+                                  }}
+                                  placeholder="送信するメッセージ"
+                                  className="w-full border border-gray-200 rounded-md px-2 py-1 text-xs"
+                                />
+                              )}
                             </div>
                           </div>
                         ))}
                         {msg.carouselColumns.length < 10 && (
                           <button
                             type="button"
-                            onClick={() => updateMsg(mi, { carouselColumns: [...msg.carouselColumns, { title: "", text: "", imageUrl: "", uri: "", label: "詳細" }] })}
+                            onClick={() => updateMsg(mi, { carouselColumns: [...msg.carouselColumns, { title: "", text: "", imageUrl: "", uri: "", label: "詳細", actionType: "uri" as const, data: "", actionText: "" }] })}
                             className="text-xs text-blue-600 hover:text-blue-800"
                           >
                             + カラムを追加（最大10）
@@ -2246,12 +2485,16 @@ export default function LineDashboard() {
                       )}
                       {msg.msgType === "button" && (
                         <div className="inline-block bg-white rounded-lg overflow-hidden shadow-sm w-full max-w-[220px]">
+                          {msg.buttonImageUrl && <img src={msg.buttonImageUrl} alt="" className="w-full h-24 object-cover" />}
+                          {msg.buttonTitle && <div className="px-3 pt-2 text-xs font-bold text-gray-800">{msg.buttonTitle}</div>}
                           <div className="p-3 text-xs text-gray-800 whitespace-pre-wrap break-words">
                             {msg.buttonText || <span className="text-gray-400">本文を入力</span>}
                           </div>
                           <div className="border-t border-gray-100">
                             {msg.buttonActions.map((a, i) => (
-                              <div key={i} className="px-3 py-2 text-xs text-[#06C755] border-b border-gray-100 last:border-b-0 text-center">
+                              <div key={i} className="px-3 py-2 text-xs text-[#06C755] border-b border-gray-100 last:border-b-0 text-center flex items-center justify-center gap-1">
+                                {(a.actionType || "uri") === "postback" && <span className="text-[8px] bg-orange-100 text-orange-600 px-1 rounded">PB</span>}
+                                {(a.actionType || "uri") === "message" && <span className="text-[8px] bg-blue-100 text-blue-600 px-1 rounded">MSG</span>}
                                 {a.label || "ボタン"}
                               </div>
                             ))}
@@ -2332,7 +2575,7 @@ export default function LineDashboard() {
                 onChange={() => setForm({ ...form, timingMode: "daysAfter" })}
                 className="accent-blue-600"
               />
-              送信日を指定
+              登録N日後の指定時刻に送信
               {form.timingMode === "daysAfter" && (
                 <span className="ml-2 flex items-center gap-1 text-xs">
                   （登録
@@ -2509,7 +2752,10 @@ export default function LineDashboard() {
     { key: "friend-page", label: "友だち追加ページ", icon: Icons.friendAdd },
     { key: "labels", label: "ラベル管理", icon: Icons.label },
     { key: "actions", label: "アクション管理", icon: Icons.settings },
-    { key: "templates", label: "定型文管理", icon: Icons.document },
+    { key: "templates", label: "テンプレート管理", icon: Icons.document },
+    { key: "custom-fields", label: "カスタムフィールド", icon: Icons.settings },
+    { key: "reminders", label: "リマインダ配信", icon: Icons.schedule },
+    { key: "newsletter", label: "メルマガ", icon: Icons.document },
     { key: "inflow", label: "流入経路", icon: Icons.friendAdd },
   ];
 
@@ -3194,19 +3440,22 @@ export default function LineDashboard() {
                             <div className="px-3 py-2 border-b border-gray-100 text-xs font-medium text-gray-500">定型文を選択</div>
                             {templates.length === 0 ? (
                               <div className="px-3 py-4 text-center text-xs text-gray-400">
-                                定型文がありません。<br />サイドバーの「定型文管理」から作成してください。
+                                テンプレートがありません。<br />サイドバーの「テンプレート管理」から作成してください。
                               </div>
                             ) : (
-                              templates.map((tpl) => (
-                                <button
-                                  key={tpl.id}
-                                  onClick={() => insertTemplate(tpl.body)}
-                                  className="w-full text-left px-3 py-2.5 hover:bg-blue-50 border-b border-gray-50 transition"
-                                >
-                                  <div className="text-sm font-medium text-gray-800 truncate">{tpl.title}</div>
-                                  <div className="text-xs text-gray-400 truncate mt-0.5">{tpl.body}</div>
-                                </button>
-                              ))
+                              templates.map((tpl) => {
+                                const firstBody = tpl.messages?.[0]?.body || (tpl.messages?.[0]?.payload as Record<string, unknown>)?.body as string || tpl.body || "";
+                                return (
+                                  <button
+                                    key={tpl.id}
+                                    onClick={() => insertTemplate(String(firstBody))}
+                                    className="w-full text-left px-3 py-2.5 hover:bg-blue-50 border-b border-gray-50 transition"
+                                  >
+                                    <div className="text-sm font-medium text-gray-800 truncate">{tpl.name || tpl.title}</div>
+                                    <div className="text-xs text-gray-400 truncate mt-0.5">{String(firstBody)}</div>
+                                  </button>
+                                );
+                              })
                             )}
                           </div>
                         )}
@@ -3725,7 +3974,7 @@ export default function LineDashboard() {
                       <button onClick={() => setShowStepMsgModal(false)} className="text-gray-400 hover:text-gray-600">{Icons.close}</button>
                     </div>
                     <div className="p-5 space-y-3">
-                      <div className="grid grid-cols-3 gap-3">
+                      <div className="grid grid-cols-4 gap-3">
                         <div>
                           <label className="text-xs text-gray-500 block mb-1 font-medium">媒体</label>
                           <select value={stepMsgForm.media} onChange={(e) => setStepMsgForm({ ...stepMsgForm, media: e.target.value })} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:border-blue-400 focus:outline-none">
@@ -3735,11 +3984,40 @@ export default function LineDashboard() {
                             <option value="action">アクション</option>
                           </select>
                         </div>
-                        <div>
+                        <div className="col-span-2">
                           <label className="text-xs text-gray-500 block mb-1 font-medium">送信タイミング</label>
-                          <div className="flex items-center gap-1">
-                            <input type="number" min={0} value={stepMsgForm.delay_minutes} onChange={(e) => setStepMsgForm({ ...stepMsgForm, delay_minutes: Number(e.target.value) })} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:border-blue-400 focus:outline-none" />
-                            <span className="text-xs text-gray-500 whitespace-nowrap">分後</span>
+                          <div className="space-y-2">
+                            <select
+                              value={stepMsgForm.timing_mode}
+                              onChange={(e) => {
+                                const mode = e.target.value as "immediate" | "absolute" | "relative";
+                                const updated = { ...stepMsgForm, timing_mode: mode };
+                                if (mode === "immediate") updated.delay_minutes = 0;
+                                setStepMsgForm(updated);
+                              }}
+                              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:border-blue-400 focus:outline-none"
+                            >
+                              <option value="immediate">登録直後</option>
+                              <option value="absolute">N日後の指定時刻</option>
+                              <option value="relative">N日N時間N分後</option>
+                            </select>
+                            {stepMsgForm.timing_mode === "absolute" && (
+                              <div className="flex items-center gap-2">
+                                <input type="number" min={0} value={stepMsgForm.delivery_days} onChange={(e) => setStepMsgForm({ ...stepMsgForm, delivery_days: Number(e.target.value) })} className="w-20 border border-gray-200 rounded-lg px-2 py-1.5 text-sm" />
+                                <span className="text-xs text-gray-500">日後の</span>
+                                <input type="time" value={stepMsgForm.delivery_time} onChange={(e) => setStepMsgForm({ ...stepMsgForm, delivery_time: e.target.value })} className="border border-gray-200 rounded-lg px-2 py-1.5 text-sm" />
+                              </div>
+                            )}
+                            {stepMsgForm.timing_mode === "relative" && (
+                              <div className="flex items-center gap-1.5">
+                                <input type="number" min={0} value={stepMsgForm.rel_days} onChange={(e) => setStepMsgForm({ ...stepMsgForm, rel_days: Number(e.target.value) })} className="w-16 border border-gray-200 rounded-lg px-2 py-1.5 text-sm" />
+                                <span className="text-xs text-gray-500">日</span>
+                                <input type="number" min={0} max={23} value={stepMsgForm.rel_hours} onChange={(e) => setStepMsgForm({ ...stepMsgForm, rel_hours: Number(e.target.value) })} className="w-16 border border-gray-200 rounded-lg px-2 py-1.5 text-sm" />
+                                <span className="text-xs text-gray-500">時間</span>
+                                <input type="number" min={0} max={59} value={stepMsgForm.rel_minutes} onChange={(e) => setStepMsgForm({ ...stepMsgForm, rel_minutes: Number(e.target.value) })} className="w-16 border border-gray-200 rounded-lg px-2 py-1.5 text-sm" />
+                                <span className="text-xs text-gray-500">分後</span>
+                              </div>
+                            )}
                           </div>
                         </div>
                         <div>
@@ -3761,10 +4039,27 @@ export default function LineDashboard() {
                       <button
                         onClick={async () => {
                           if (!stepMsgForm.title.trim()) return;
+                          // timing_modeに応じてdelay_minutesを計算
+                          let computedDelay = stepMsgForm.delay_minutes;
+                          if (stepMsgForm.timing_mode === "immediate") {
+                            computedDelay = 0;
+                          } else if (stepMsgForm.timing_mode === "relative") {
+                            computedDelay = (stepMsgForm.rel_days * 1440) + (stepMsgForm.rel_hours * 60) + stepMsgForm.rel_minutes;
+                          } else if (stepMsgForm.timing_mode === "absolute") {
+                            // absolute: delay_minutesにdays*1440を入れ、delivery_timeをpayloadに保存
+                            computedDelay = stepMsgForm.delivery_days * 1440;
+                          }
                           const method = editingStepMsg ? "PUT" : "POST";
+                          const payload = {
+                            ...stepMsgForm,
+                            delay_minutes: computedDelay,
+                            timing_mode: stepMsgForm.timing_mode,
+                            delivery_days: stepMsgForm.delivery_days,
+                            delivery_time: stepMsgForm.delivery_time,
+                          };
                           const body = editingStepMsg
-                            ? { id: editingStepMsg.id, ...stepMsgForm }
-                            : stepMsgForm;
+                            ? { id: editingStepMsg.id, ...payload }
+                            : payload;
                           const res = await fetch("/api/line/step-messages", { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
                           if (res.ok) { setShowStepMsgModal(false); fetchStepSequences(); }
                         }}
@@ -3851,7 +4146,22 @@ export default function LineDashboard() {
                             </thead>
                             <tbody>
                               {seq.messages.slice().sort((a, b) => a.step_order - b.step_order).map((msg) => {
-                                const timing = msg.delay_minutes === 0 ? "登録直後" : msg.delay_minutes < 60 ? `${msg.delay_minutes}分後` : msg.delay_minutes < 1440 ? `${Math.floor(msg.delay_minutes / 60)}時間後` : `${Math.floor(msg.delay_minutes / 1440)}日後`;
+                                let timing: string;
+                                if (msg.timing_mode === "absolute" && msg.delivery_time) {
+                                  timing = msg.delivery_days ? `${msg.delivery_days}日後 ${msg.delivery_time}` : `当日 ${msg.delivery_time}`;
+                                } else if (msg.delay_minutes === 0) {
+                                  timing = "登録直後";
+                                } else if (msg.delay_minutes < 60) {
+                                  timing = `${msg.delay_minutes}分後`;
+                                } else if (msg.delay_minutes < 1440) {
+                                  const h = Math.floor(msg.delay_minutes / 60);
+                                  const m = msg.delay_minutes % 60;
+                                  timing = m > 0 ? `${h}時間${m}分後` : `${h}時間後`;
+                                } else {
+                                  const d = Math.floor(msg.delay_minutes / 1440);
+                                  const h = Math.floor((msg.delay_minutes % 1440) / 60);
+                                  timing = h > 0 ? `${d}日${h}時間後` : `${d}日後`;
+                                }
                                 return (
                                   <tr key={msg.id} className="border-b border-gray-100 hover:bg-gray-50">
                                     <td className="px-5 py-2.5 text-gray-500">{msg.step_order}</td>
@@ -4749,11 +5059,11 @@ export default function LineDashboard() {
         {mainView === "account-detail" && accountSubView === "templates" && (
           <>
             <header className="bg-white border-b border-gray-200 px-4 md:px-6 py-3 flex items-center justify-between flex-shrink-0">
-              <h1 className="text-base font-bold text-gray-800">定型文管理</h1>
+              <h1 className="text-base font-bold text-gray-800">テンプレート管理</h1>
               <button
                 onClick={() => {
                   setEditingTemplate(null);
-                  setTemplateForm({ title: "", body: "" });
+                  setTemplateForm({ name: "", messages: [emptyMessage()] as BroadcastMessage[] });
                   setShowTemplateModal(true);
                 }}
                 className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded-md transition"
@@ -4765,40 +5075,108 @@ export default function LineDashboard() {
             <main className="flex-1 overflow-y-auto p-4 md:p-6">
               {/* テンプレート作成/編集モーダル */}
               {showTemplateModal && (
-                <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-                  <div className="bg-white rounded-xl shadow-xl w-full max-w-lg mx-4">
+                <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 overflow-y-auto">
+                  <div className="bg-white rounded-xl shadow-xl w-full max-w-3xl mx-4 my-8">
                     <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
-                      <h3 className="font-bold text-gray-800">{editingTemplate ? "定型文を編集" : "定型文を作成"}</h3>
+                      <h3 className="font-bold text-gray-800">{editingTemplate ? "テンプレートを編集" : "テンプレートを作成"}</h3>
                       <button onClick={() => setShowTemplateModal(false)} className="text-gray-400 hover:text-gray-600">{Icons.close}</button>
                     </div>
-                    <div className="p-5 space-y-4">
+                    <div className="p-5 space-y-4 max-h-[70vh] overflow-y-auto">
                       <div>
-                        <label className="text-xs text-gray-500 block mb-1.5 font-medium">タイトル</label>
+                        <label className="text-xs text-gray-500 block mb-1.5 font-medium">テンプレート名</label>
                         <input
                           type="text"
-                          value={templateForm.title}
-                          onChange={(e) => setTemplateForm({ ...templateForm, title: e.target.value })}
+                          value={templateForm.name}
+                          onChange={(e) => setTemplateForm({ ...templateForm, name: e.target.value })}
                           placeholder="例: 挨拶メッセージ、予約確認"
                           autoFocus
                           className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
                         />
                       </div>
-                      <div>
-                        <label className="text-xs text-gray-500 block mb-1.5 font-medium">本文</label>
-                        <textarea
-                          value={templateForm.body}
-                          onChange={(e) => setTemplateForm({ ...templateForm, body: e.target.value })}
-                          placeholder="定型文の本文を入力..."
-                          rows={6}
-                          className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm resize-none focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
-                        />
-                      </div>
+                      <div className="text-xs font-bold text-gray-700 mb-2">メッセージ（複数設定可）</div>
+                      {templateForm.messages.map((msg, mi) => {
+                        const msgTabs: { key: BroadcastMsgType; label: string }[] = [
+                          { key: "text", label: "テキスト" }, { key: "image", label: "画像" }, { key: "button", label: "ボタン" },
+                          { key: "carousel", label: "カルーセル" }, { key: "sticker", label: "スタンプ" },
+                        ];
+                        const updateTplMsg = (patch: Partial<BroadcastMessage>) => {
+                          const next = [...templateForm.messages];
+                          next[mi] = { ...next[mi], ...patch };
+                          setTemplateForm({ ...templateForm, messages: next });
+                        };
+                        return (
+                          <div key={mi} className="border border-gray-200 rounded-md p-3 space-y-2">
+                            <div className="flex items-center justify-between">
+                              <span className="text-xs text-gray-500">メッセージ{mi + 1}</span>
+                              {templateForm.messages.length > 1 && (
+                                <button type="button" onClick={() => setTemplateForm({ ...templateForm, messages: templateForm.messages.filter((_, j) => j !== mi) })} className="text-[10px] text-red-500">削除</button>
+                              )}
+                            </div>
+                            <div className="flex gap-1 border-b border-gray-100 pb-1">
+                              {msgTabs.map((t) => (
+                                <button key={t.key} type="button" onClick={() => updateTplMsg({ msgType: t.key })} className={`px-2 py-1 text-xs rounded ${msg.msgType === t.key ? "bg-blue-100 text-blue-700 font-medium" : "text-gray-500 hover:bg-gray-100"}`}>{t.label}</button>
+                              ))}
+                            </div>
+                            {msg.msgType === "text" && (
+                              <textarea value={msg.body} onChange={(e) => updateTplMsg({ body: e.target.value })} rows={4} placeholder="テキストを入力..." className="w-full border border-gray-200 rounded-md px-3 py-2 text-sm resize-none" />
+                            )}
+                            {msg.msgType === "image" && (
+                              <input type="url" value={msg.imageUrl} onChange={(e) => updateTplMsg({ imageUrl: e.target.value })} placeholder="画像URL (HTTPS)" className="w-full border border-gray-200 rounded-md px-3 py-2 text-sm" />
+                            )}
+                            {msg.msgType === "button" && (
+                              <div className="space-y-2">
+                                <input type="text" value={msg.buttonTitle} onChange={(e) => updateTplMsg({ buttonTitle: e.target.value })} placeholder="タイトル（任意）" maxLength={40} className="w-full border border-gray-200 rounded-md px-2 py-1.5 text-xs" />
+                                <textarea value={msg.buttonText} onChange={(e) => updateTplMsg({ buttonText: e.target.value })} rows={2} placeholder="本文" className="w-full border border-gray-200 rounded-md px-2 py-1.5 text-xs resize-none" />
+                                {msg.buttonActions.map((act, ai) => (
+                                  <div key={ai} className="flex gap-1.5 items-center">
+                                    <select value={act.actionType || "uri"} onChange={(e) => { const next = [...msg.buttonActions]; next[ai] = { ...next[ai], actionType: e.target.value as "uri" | "postback" | "message" }; updateTplMsg({ buttonActions: next }); }} className="border border-gray-200 rounded px-1.5 py-1 text-xs bg-white">
+                                      <option value="uri">URL</option><option value="postback">PB</option><option value="message">MSG</option>
+                                    </select>
+                                    <input type="text" value={act.label} onChange={(e) => { const next = [...msg.buttonActions]; next[ai] = { ...next[ai], label: e.target.value }; updateTplMsg({ buttonActions: next }); }} placeholder="ラベル" className="flex-1 border border-gray-200 rounded px-2 py-1 text-xs" />
+                                    <input type="text" value={(act.actionType || "uri") === "uri" ? act.uri : (act.data || act.text)} onChange={(e) => { const next = [...msg.buttonActions]; if ((act.actionType || "uri") === "uri") next[ai] = { ...next[ai], uri: e.target.value }; else if (act.actionType === "postback") next[ai] = { ...next[ai], data: e.target.value }; else next[ai] = { ...next[ai], text: e.target.value }; updateTplMsg({ buttonActions: next }); }} placeholder={(act.actionType || "uri") === "uri" ? "URL" : "データ/テキスト"} className="flex-[2] border border-gray-200 rounded px-2 py-1 text-xs" />
+                                    <button type="button" onClick={() => updateTplMsg({ buttonActions: msg.buttonActions.filter((_, j) => j !== ai) })} className="text-xs text-red-400">x</button>
+                                  </div>
+                                ))}
+                                {msg.buttonActions.length < 4 && (
+                                  <button type="button" onClick={() => updateTplMsg({ buttonActions: [...msg.buttonActions, { label: "", uri: "", actionType: "uri" as const, data: "", text: "" }] })} className="text-xs text-blue-600">+ ボタン追加</button>
+                                )}
+                              </div>
+                            )}
+                            {msg.msgType === "carousel" && (
+                              <div className="space-y-2">
+                                {msg.carouselColumns.map((col, ci) => (
+                                  <div key={ci} className="border border-gray-100 rounded p-2 space-y-1">
+                                    <div className="flex justify-between items-center">
+                                      <span className="text-[10px] text-gray-500">カラム{ci + 1}</span>
+                                      {msg.carouselColumns.length > 1 && <button type="button" onClick={() => updateTplMsg({ carouselColumns: msg.carouselColumns.filter((_, j) => j !== ci) })} className="text-[10px] text-red-400">削除</button>}
+                                    </div>
+                                    <input type="text" value={col.title} onChange={(e) => { const next = [...msg.carouselColumns]; next[ci] = { ...next[ci], title: e.target.value }; updateTplMsg({ carouselColumns: next }); }} placeholder="タイトル" className="w-full border border-gray-200 rounded px-2 py-1 text-xs" />
+                                    <input type="text" value={col.text} onChange={(e) => { const next = [...msg.carouselColumns]; next[ci] = { ...next[ci], text: e.target.value }; updateTplMsg({ carouselColumns: next }); }} placeholder="説明文" className="w-full border border-gray-200 rounded px-2 py-1 text-xs" />
+                                    <input type="text" value={col.label} onChange={(e) => { const next = [...msg.carouselColumns]; next[ci] = { ...next[ci], label: e.target.value }; updateTplMsg({ carouselColumns: next }); }} placeholder="ボタン名" className="w-full border border-gray-200 rounded px-2 py-1 text-xs" />
+                                    <input type="url" value={col.uri} onChange={(e) => { const next = [...msg.carouselColumns]; next[ci] = { ...next[ci], uri: e.target.value }; updateTplMsg({ carouselColumns: next }); }} placeholder="URL" className="w-full border border-gray-200 rounded px-2 py-1 text-xs" />
+                                  </div>
+                                ))}
+                                {msg.carouselColumns.length < 10 && (
+                                  <button type="button" onClick={() => updateTplMsg({ carouselColumns: [...msg.carouselColumns, { title: "", text: "", imageUrl: "", uri: "", label: "詳細", actionType: "uri" as const, data: "", actionText: "" }] })} className="text-xs text-blue-600">+ カラム追加</button>
+                                )}
+                              </div>
+                            )}
+                            {msg.msgType === "sticker" && (
+                              <div className="flex gap-2">
+                                <input type="text" value={msg.stickerPackageId} onChange={(e) => updateTplMsg({ stickerPackageId: e.target.value })} placeholder="PackageID" className="flex-1 border border-gray-200 rounded px-2 py-1 text-xs" />
+                                <input type="text" value={msg.stickerId} onChange={(e) => updateTplMsg({ stickerId: e.target.value })} placeholder="StickerID" className="flex-1 border border-gray-200 rounded px-2 py-1 text-xs" />
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                      <button type="button" onClick={() => setTemplateForm({ ...templateForm, messages: [...templateForm.messages, emptyMessage()] })} className="text-xs text-green-600 border border-green-300 rounded px-3 py-1.5 hover:bg-green-50">+ メッセージ追加</button>
                     </div>
                     <div className="flex justify-end gap-2 px-5 py-4 border-t border-gray-200">
                       <button onClick={() => setShowTemplateModal(false)} className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition">キャンセル</button>
                       <button
                         onClick={saveTemplate}
-                        disabled={!templateForm.title.trim() || !templateForm.body.trim()}
+                        disabled={!templateForm.name.trim()}
                         className="px-5 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition"
                       >
                         {editingTemplate ? "更新" : "作成"}
@@ -4811,29 +5189,425 @@ export default function LineDashboard() {
               <div className="max-w-5xl">
                 {templates.length === 0 ? (
                   <div className="bg-white rounded-lg border border-gray-200 p-16 text-center text-gray-400">
-                    <p className="text-lg mb-2">定型文がありません</p>
-                    <p className="text-sm">「新規作成」ボタンから定型文を作成してください</p>
+                    <p className="text-lg mb-2">テンプレートがありません</p>
+                    <p className="text-sm">「新規作成」ボタンからテンプレートを作成してください</p>
                   </div>
                 ) : (
                   <div className="space-y-3">
-                    {templates.map((tpl) => (
-                      <div key={tpl.id} className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-                        <div className="flex items-center justify-between px-5 py-3.5">
+                    {templates.map((tpl) => {
+                      const firstMsg = tpl.messages?.[0];
+                      const msgCount = tpl.messages?.length ?? 0;
+                      const preview = firstMsg?.payload?.body || firstMsg?.body || "";
+                      return (
+                        <div key={tpl.id} className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+                          <div className="flex items-center justify-between px-5 py-3.5">
+                            <div className="min-w-0 flex-1 mr-4">
+                              <div className="text-sm font-medium text-gray-800">{tpl.name || tpl.title}</div>
+                              <div className="flex items-center gap-2 mt-1">
+                                <span className="text-[10px] bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded">{msgCount}通</span>
+                                {firstMsg && <span className="text-[10px] bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded">{(firstMsg.payload as Record<string, unknown>)?.msgType as string || firstMsg.msg_type}</span>}
+                              </div>
+                              {preview && <div className="text-xs text-gray-400 mt-1 line-clamp-2 whitespace-pre-wrap">{String(preview)}</div>}
+                              <div className="text-[10px] text-gray-300 mt-1">{fmtShort(tpl.created_at)}</div>
+                            </div>
+                            <div className="flex items-center gap-2 flex-shrink-0">
+                              <button
+                                onClick={() => startEditTemplate(tpl)}
+                                className="px-3 py-1.5 text-xs text-blue-600 hover:bg-blue-50 rounded-md transition font-medium"
+                              >
+                                編集
+                              </button>
+                              <button
+                                onClick={() => deleteTemplate(tpl.id)}
+                                className="px-3 py-1.5 text-xs text-red-400 hover:text-red-600 hover:bg-red-50 rounded-md transition"
+                              >
+                                削除
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </main>
+          </>
+        )}
+
+        {/* ============================================================ */}
+        {/* アカウント詳細: カスタムフィールド */}
+        {/* ============================================================ */}
+        {mainView === "account-detail" && accountSubView === "custom-fields" && (
+          <>
+            <header className="bg-white border-b border-gray-200 px-4 md:px-6 py-3 flex items-center justify-between flex-shrink-0">
+              <h1 className="text-base font-bold text-gray-800">カスタムフィールド管理</h1>
+              <button
+                onClick={() => { setCustomFieldForm({ field_key: "", field_label: "", field_type: "text" }); setShowCustomFieldModal(true); }}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded-md transition"
+              >
+                {Icons.plus} 新規フィールド
+              </button>
+            </header>
+            <main className="flex-1 overflow-y-auto p-4 md:p-6">
+              {showCustomFieldModal && (
+                <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+                  <div className="bg-white rounded-xl shadow-xl w-full max-w-md mx-4">
+                    <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
+                      <h3 className="font-bold text-gray-800">カスタムフィールド追加</h3>
+                      <button onClick={() => setShowCustomFieldModal(false)} className="text-gray-400 hover:text-gray-600">{Icons.close}</button>
+                    </div>
+                    <div className="p-5 space-y-3">
+                      <div>
+                        <label className="text-xs text-gray-500 block mb-1">フィールドキー</label>
+                        <input type="text" value={customFieldForm.field_key} onChange={(e) => setCustomFieldForm({ ...customFieldForm, field_key: e.target.value })} placeholder="email, phone, gender..." className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+                      </div>
+                      <div>
+                        <label className="text-xs text-gray-500 block mb-1">表示名</label>
+                        <input type="text" value={customFieldForm.field_label} onChange={(e) => setCustomFieldForm({ ...customFieldForm, field_label: e.target.value })} placeholder="メールアドレス、電話番号..." className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+                      </div>
+                      <div>
+                        <label className="text-xs text-gray-500 block mb-1">タイプ</label>
+                        <select value={customFieldForm.field_type} onChange={(e) => setCustomFieldForm({ ...customFieldForm, field_type: e.target.value })} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white">
+                          <option value="text">テキスト</option>
+                          <option value="email">メールアドレス</option>
+                          <option value="phone">電話番号</option>
+                          <option value="number">数値</option>
+                          <option value="date">日付</option>
+                          <option value="select">選択肢</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div className="flex justify-end gap-2 px-5 py-4 border-t border-gray-200">
+                      <button onClick={() => setShowCustomFieldModal(false)} className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg">キャンセル</button>
+                      <button
+                        onClick={async () => {
+                          if (!customFieldForm.field_key || !customFieldForm.field_label || !selectedAccount) return;
+                          await fetch("/api/line/custom-fields", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ account_id: selectedAccount.id, ...customFieldForm }),
+                          });
+                          setShowCustomFieldModal(false);
+                          fetchCustomFields();
+                        }}
+                        disabled={!customFieldForm.field_key || !customFieldForm.field_label}
+                        className="px-5 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-sm font-medium rounded-lg"
+                      >
+                        作成
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+              <div className="max-w-3xl">
+                <div className="bg-white rounded-lg border border-gray-200 mb-4 p-4">
+                  <p className="text-xs text-gray-500 mb-2">デフォルトフィールド（自動作成済み）</p>
+                  <div className="flex flex-wrap gap-2">
+                    {[
+                      { key: "email", label: "メールアドレス", type: "email" },
+                      { key: "phone", label: "電話番号", type: "phone" },
+                      { key: "gender", label: "性別", type: "select" },
+                      { key: "birthday", label: "生年月日", type: "date" },
+                      { key: "address", label: "住所", type: "text" },
+                    ].map((df) => (
+                      <button
+                        key={df.key}
+                        onClick={async () => {
+                          if (!selectedAccount) return;
+                          await fetch("/api/line/custom-fields", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ account_id: selectedAccount.id, field_key: df.key, field_label: df.label, field_type: df.type }),
+                          });
+                          fetchCustomFields();
+                        }}
+                        disabled={customFields.some((f) => f.field_key === df.key)}
+                        className="px-3 py-1.5 text-xs border border-gray-200 rounded-lg hover:bg-blue-50 disabled:opacity-30 disabled:cursor-not-allowed"
+                      >
+                        + {df.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                {customFields.length === 0 ? (
+                  <div className="bg-white rounded-lg border border-gray-200 p-16 text-center text-gray-400">
+                    <p className="text-lg mb-2">カスタムフィールドがありません</p>
+                    <p className="text-sm">上のボタンから追加してください</p>
+                  </div>
+                ) : (
+                  <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-gray-200 bg-gray-50 text-gray-500 text-left">
+                          <th className="px-4 py-2.5 font-medium">キー</th>
+                          <th className="px-4 py-2.5 font-medium">表示名</th>
+                          <th className="px-4 py-2.5 font-medium">タイプ</th>
+                          <th className="px-4 py-2.5 font-medium w-20"></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {customFields.map((f) => (
+                          <tr key={f.id} className="border-b border-gray-100">
+                            <td className="px-4 py-2.5 font-mono text-xs text-gray-600">{f.field_key}</td>
+                            <td className="px-4 py-2.5 text-gray-800">{f.field_label}</td>
+                            <td className="px-4 py-2.5">
+                              <span className="px-2 py-0.5 bg-gray-100 text-gray-600 rounded text-xs">{f.field_type}</span>
+                            </td>
+                            <td className="px-4 py-2.5">
+                              <button
+                                onClick={async () => {
+                                  if (!confirm(`「${f.field_label}」を削除しますか？`)) return;
+                                  await fetch("/api/line/custom-fields", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: f.id }) });
+                                  fetchCustomFields();
+                                }}
+                                className="text-xs text-red-400 hover:text-red-600"
+                              >
+                                削除
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </main>
+          </>
+        )}
+
+        {/* ============================================================ */}
+        {/* アカウント詳細: リマインダ配信 */}
+        {/* ============================================================ */}
+        {mainView === "account-detail" && accountSubView === "reminders" && (
+          <>
+            <header className="bg-white border-b border-gray-200 px-4 md:px-6 py-3 flex items-center justify-between flex-shrink-0">
+              <h1 className="text-base font-bold text-gray-800">リマインダ配信</h1>
+              <button
+                onClick={() => {
+                  setReminderForm({ name: "", base_date_field: "custom", messages: [{ offset_days: -1, offset_time: "09:00", body: "" }] });
+                  setShowReminderModal(true);
+                }}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded-md transition"
+              >
+                {Icons.plus} 新規リマインダ
+              </button>
+            </header>
+            <main className="flex-1 overflow-y-auto p-4 md:p-6">
+              {showReminderModal && (
+                <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+                  <div className="bg-white rounded-xl shadow-xl w-full max-w-lg mx-4">
+                    <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
+                      <h3 className="font-bold text-gray-800">リマインダ作成</h3>
+                      <button onClick={() => setShowReminderModal(false)} className="text-gray-400 hover:text-gray-600">{Icons.close}</button>
+                    </div>
+                    <div className="p-5 space-y-3">
+                      <div>
+                        <label className="text-xs text-gray-500 block mb-1">リマインダ名</label>
+                        <input type="text" value={reminderForm.name} onChange={(e) => setReminderForm({ ...reminderForm, name: e.target.value })} placeholder="例: セミナー前日リマインド" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+                      </div>
+                      <div>
+                        <label className="text-xs text-gray-500 block mb-1">基準日フィールド</label>
+                        <select value={reminderForm.base_date_field} onChange={(e) => setReminderForm({ ...reminderForm, base_date_field: e.target.value })} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white">
+                          <option value="custom">手動指定</option>
+                          {customFields.filter((f) => f.field_type === "date").map((f) => (
+                            <option key={f.id} value={f.field_key}>{f.field_label}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="text-xs font-bold text-gray-700 mt-2">リマインダメッセージ</div>
+                      {reminderForm.messages.map((msg, mi) => (
+                        <div key={mi} className="border border-gray-200 rounded-md p-3 space-y-2">
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-gray-500">基準日の</span>
+                            <input type="number" value={msg.offset_days} onChange={(e) => { const next = [...reminderForm.messages]; next[mi] = { ...next[mi], offset_days: Number(e.target.value) }; setReminderForm({ ...reminderForm, messages: next }); }} className="w-16 border border-gray-200 rounded px-2 py-1 text-xs" />
+                            <span className="text-xs text-gray-500">日{msg.offset_days < 0 ? "前" : msg.offset_days > 0 ? "後" : "当日"}</span>
+                            <input type="time" value={msg.offset_time} onChange={(e) => { const next = [...reminderForm.messages]; next[mi] = { ...next[mi], offset_time: e.target.value }; setReminderForm({ ...reminderForm, messages: next }); }} className="border border-gray-200 rounded px-2 py-1 text-xs" />
+                            {reminderForm.messages.length > 1 && (
+                              <button type="button" onClick={() => setReminderForm({ ...reminderForm, messages: reminderForm.messages.filter((_, j) => j !== mi) })} className="text-xs text-red-400">削除</button>
+                            )}
+                          </div>
+                          <textarea value={msg.body} onChange={(e) => { const next = [...reminderForm.messages]; next[mi] = { ...next[mi], body: e.target.value }; setReminderForm({ ...reminderForm, messages: next }); }} rows={3} placeholder="メッセージ本文" className="w-full border border-gray-200 rounded px-3 py-2 text-sm resize-none" />
+                        </div>
+                      ))}
+                      <button type="button" onClick={() => setReminderForm({ ...reminderForm, messages: [...reminderForm.messages, { offset_days: 0, offset_time: "09:00", body: "" }] })} className="text-xs text-blue-600">+ メッセージ追加</button>
+                    </div>
+                    <div className="flex justify-end gap-2 px-5 py-4 border-t border-gray-200">
+                      <button onClick={() => setShowReminderModal(false)} className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg">キャンセル</button>
+                      <button
+                        onClick={async () => {
+                          if (!reminderForm.name.trim() || !selectedAccount) return;
+                          await fetch("/api/line/reminders", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                              account_id: selectedAccount.id,
+                              name: reminderForm.name.trim(),
+                              base_date_field: reminderForm.base_date_field,
+                              messages: reminderForm.messages.map((m, i) => ({
+                                msg_order: i + 1,
+                                offset_days: m.offset_days,
+                                offset_time: m.offset_time,
+                                msg_type: "text",
+                                body: m.body,
+                              })),
+                            }),
+                          });
+                          setShowReminderModal(false);
+                          fetchReminders();
+                        }}
+                        disabled={!reminderForm.name.trim()}
+                        className="px-5 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-sm font-medium rounded-lg"
+                      >
+                        作成
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+              <div className="max-w-5xl">
+                {reminders.length === 0 ? (
+                  <div className="bg-white rounded-lg border border-gray-200 p-16 text-center text-gray-400">
+                    <p className="text-lg mb-2">リマインダがありません</p>
+                    <p className="text-sm">「新規リマインダ」から作成してください</p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {reminders.map((r) => (
+                      <div key={r.id} className="bg-white rounded-lg border border-gray-200 overflow-hidden px-5 py-3.5">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <div className="text-sm font-medium text-gray-800">{r.name}</div>
+                            <div className="flex items-center gap-2 mt-1">
+                              <span className={`px-2 py-0.5 text-[10px] rounded font-medium ${r.status === "active" ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"}`}>{r.status}</span>
+                              <span className="text-[10px] text-gray-400">{r.messages?.length ?? 0}通</span>
+                            </div>
+                          </div>
+                          <button
+                            onClick={async () => {
+                              if (!confirm(`「${r.name}」を削除しますか？`)) return;
+                              await fetch("/api/line/reminders", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: r.id }) });
+                              fetchReminders();
+                            }}
+                            className="text-xs text-red-400 hover:text-red-600"
+                          >
+                            削除
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </main>
+          </>
+        )}
+
+        {/* ============================================================ */}
+        {/* アカウント詳細: メルマガ */}
+        {/* ============================================================ */}
+        {mainView === "account-detail" && accountSubView === "newsletter" && (
+          <>
+            <header className="bg-white border-b border-gray-200 px-4 md:px-6 py-3 flex items-center justify-between flex-shrink-0">
+              <h1 className="text-base font-bold text-gray-800">メルマガ管理</h1>
+              <button
+                onClick={() => { setNewsletterForm({ name: "", subject: "", body_text: "" }); setShowNewsletterModal(true); }}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded-md transition"
+              >
+                {Icons.plus} 新規メルマガ
+              </button>
+            </header>
+            <main className="flex-1 overflow-y-auto p-4 md:p-6">
+              {showNewsletterModal && (
+                <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+                  <div className="bg-white rounded-xl shadow-xl w-full max-w-lg mx-4">
+                    <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
+                      <h3 className="font-bold text-gray-800">メルマガ作成</h3>
+                      <button onClick={() => setShowNewsletterModal(false)} className="text-gray-400 hover:text-gray-600">{Icons.close}</button>
+                    </div>
+                    <div className="p-5 space-y-3">
+                      <div>
+                        <label className="text-xs text-gray-500 block mb-1">管理名称</label>
+                        <input type="text" value={newsletterForm.name} onChange={(e) => setNewsletterForm({ ...newsletterForm, name: e.target.value })} placeholder="例: 週刊ニュースレター" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+                      </div>
+                      <div>
+                        <label className="text-xs text-gray-500 block mb-1">件名</label>
+                        <input type="text" value={newsletterForm.subject} onChange={(e) => setNewsletterForm({ ...newsletterForm, subject: e.target.value })} placeholder="メールの件名" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+                      </div>
+                      <div>
+                        <label className="text-xs text-gray-500 block mb-1">本文</label>
+                        <textarea value={newsletterForm.body_text} onChange={(e) => setNewsletterForm({ ...newsletterForm, body_text: e.target.value })} rows={8} placeholder="メール本文を入力..." className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm resize-none" />
+                      </div>
+                      <p className="text-[10px] text-gray-400">※ メール配信にはカスタムフィールドの「メールアドレス」フィールドにデータが登録されているフォロワーが対象になります</p>
+                    </div>
+                    <div className="flex justify-end gap-2 px-5 py-4 border-t border-gray-200">
+                      <button onClick={() => setShowNewsletterModal(false)} className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg">キャンセル</button>
+                      <button
+                        onClick={async () => {
+                          if (!newsletterForm.name.trim() || !selectedAccount) return;
+                          await fetch("/api/line/newsletter", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                              account_id: selectedAccount.id,
+                              name: newsletterForm.name.trim(),
+                              subject: newsletterForm.subject.trim(),
+                              body_text: newsletterForm.body_text,
+                            }),
+                          });
+                          setShowNewsletterModal(false);
+                          fetchNewsletters();
+                        }}
+                        disabled={!newsletterForm.name.trim()}
+                        className="px-5 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-sm font-medium rounded-lg"
+                      >
+                        下書き保存
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+              <div className="max-w-5xl">
+                <div className="bg-white rounded-lg border border-gray-200 p-4 mb-4">
+                  <p className="text-xs text-gray-500">メルマガ配信の流れ:</p>
+                  <ol className="text-xs text-gray-600 mt-1 space-y-0.5 list-decimal list-inside">
+                    <li>カスタムフィールドで「メールアドレス」フィールドを作成</li>
+                    <li>フォロワーのメールアドレスを収集（LINEリッチメニューのフォームなど）</li>
+                    <li>メルマガを作成して配信</li>
+                  </ol>
+                </div>
+                {newsletters.length === 0 ? (
+                  <div className="bg-white rounded-lg border border-gray-200 p-16 text-center text-gray-400">
+                    <p className="text-lg mb-2">メルマガがありません</p>
+                    <p className="text-sm">「新規メルマガ」から作成してください</p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {newsletters.map((nl) => (
+                      <div key={nl.id} className="bg-white rounded-lg border border-gray-200 overflow-hidden px-5 py-3.5">
+                        <div className="flex items-center justify-between">
                           <div className="min-w-0 flex-1 mr-4">
-                            <div className="text-sm font-medium text-gray-800">{tpl.title}</div>
-                            <div className="text-xs text-gray-400 mt-1 line-clamp-2 whitespace-pre-wrap">{tpl.body}</div>
-                            <div className="text-[10px] text-gray-300 mt-1">{fmtShort(tpl.created_at)}</div>
+                            <div className="text-sm font-medium text-gray-800">{nl.name}</div>
+                            {nl.subject && <div className="text-xs text-gray-500 mt-0.5">件名: {nl.subject}</div>}
+                            <div className="flex items-center gap-2 mt-1">
+                              <span className={`px-2 py-0.5 text-[10px] rounded font-medium ${
+                                nl.status === "sent" ? "bg-green-100 text-green-700" :
+                                nl.status === "scheduled" ? "bg-yellow-100 text-yellow-700" :
+                                "bg-gray-100 text-gray-500"
+                              }`}>{nl.status === "sent" ? "送信済み" : nl.status === "scheduled" ? "予約済み" : "下書き"}</span>
+                              {nl.sent_count > 0 && <span className="text-[10px] text-gray-400">{nl.sent_count}通送信</span>}
+                              <span className="text-[10px] text-gray-300">{fmtShort(nl.created_at)}</span>
+                            </div>
                           </div>
                           <div className="flex items-center gap-2 flex-shrink-0">
                             <button
-                              onClick={() => startEditTemplate(tpl)}
-                              className="px-3 py-1.5 text-xs text-blue-600 hover:bg-blue-50 rounded-md transition font-medium"
-                            >
-                              編集
-                            </button>
-                            <button
-                              onClick={() => deleteTemplate(tpl.id)}
-                              className="px-3 py-1.5 text-xs text-red-400 hover:text-red-600 hover:bg-red-50 rounded-md transition"
+                              onClick={async () => {
+                                if (!confirm(`「${nl.name}」を削除しますか？`)) return;
+                                await fetch("/api/line/newsletter", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: nl.id }) });
+                                fetchNewsletters();
+                              }}
+                              className="text-xs text-red-400 hover:text-red-600"
                             >
                               削除
                             </button>

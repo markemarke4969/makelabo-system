@@ -11,7 +11,7 @@ import {
 interface Body {
   account_id: string;
   condition: DeliveryCondition;
-  // クライアント側ラベル状態を受け取る（ラベルはまだ DB 永続化されていないため）
+  // クライアント側でキャッシュしたラベル付与状態を受け取る
   labels?: Array<{ id: string; assigned_users: string[] }>;
 }
 

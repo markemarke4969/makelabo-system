@@ -38,6 +38,9 @@ export async function POST(request: NextRequest) {
     msg_type: body.msg_type || null,
     payload: body.payload ?? null,
     status: body.status || "active",
+    timing_mode: body.timing_mode || "immediate",
+    delivery_days: body.delivery_days ?? null,
+    delivery_time: body.delivery_time ?? null,
   };
 
   let { data, error } = await supabase
@@ -46,10 +49,10 @@ export async function POST(request: NextRequest) {
     .select("id")
     .single();
 
-  // 古い環境（msg_type / payload カラム未作成）への fallback
-  if (error && /(msg_type|payload)/.test(error.message)) {
-    const { msg_type: _m, payload: _p, ...rest } = insertRow;
-    void _m; void _p;
+  // 古い環境（新カラム未作成）への fallback
+  if (error && /(msg_type|payload|timing_mode|delivery_days|delivery_time)/.test(error.message)) {
+    const { msg_type: _m, payload: _p, timing_mode: _tm, delivery_days: _dd, delivery_time: _dt, ...rest } = insertRow;
+    void _m; void _p; void _tm; void _dd; void _dt;
     ({ data, error } = await supabase
       .from("line_step_messages")
       .insert(rest)
@@ -80,6 +83,9 @@ export async function PUT(request: NextRequest) {
   if (body.title !== undefined) updates.title = body.title;
   if (body.body !== undefined) updates.body = body.body;
   if (body.status !== undefined) updates.status = body.status;
+  if (body.timing_mode !== undefined) updates.timing_mode = body.timing_mode;
+  if (body.delivery_days !== undefined) updates.delivery_days = body.delivery_days;
+  if (body.delivery_time !== undefined) updates.delivery_time = body.delivery_time;
 
   const { error } = await supabase
     .from("line_step_messages")

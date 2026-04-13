@@ -56,11 +56,14 @@ export function buildLineMessage(
   }
   if (type === "video") {
     const url = p.videoUrl as string | undefined;
+    const previewUrl = p.videoPreviewUrl as string | undefined;
     if (!url) return null;
+    // LINE API: previewImageUrl は JPEG/PNG 画像が必須。未指定なら送信不可
+    if (!previewUrl) return null;
     return {
       type: "video",
       originalContentUrl: url,
-      previewImageUrl: (p.videoPreviewUrl as string) || url,
+      previewImageUrl: previewUrl,
     };
   }
   if (type === "audio") {
@@ -78,16 +81,35 @@ export function buildLineMessage(
   }
   if (type === "button") {
     const text = replaceVars((p.buttonText as string) || "");
-    const rawActions = (p.buttonActions as Array<{ label?: string; uri?: string }>) ?? [];
+    const title = ((p.buttonTitle as string) ?? "").slice(0, 40) || undefined;
+    const thumbUrl = (p.buttonImageUrl as string) || undefined;
+    const rawActions = (p.buttonActions as Array<{ label?: string; uri?: string; actionType?: string; data?: string; text?: string }>) ?? [];
     const actions = rawActions
-      .filter((a) => a.uri)
+      .filter((a) => a.uri || a.data || a.text || a.actionType === "postback" || a.actionType === "message")
       .slice(0, 4)
-      .map((a) => ({ type: "uri", label: a.label || "詳細", uri: a.uri }));
+      .map((a) => {
+        const actionType = a.actionType || "uri";
+        if (actionType === "postback") {
+          return { type: "postback", label: (a.label || "選択").slice(0, 20), data: a.data || a.label || "action", displayText: a.text || undefined };
+        }
+        if (actionType === "message") {
+          return { type: "message", label: (a.label || "送信").slice(0, 20), text: a.text || a.label || "" };
+        }
+        return { type: "uri", label: (a.label || "詳細").slice(0, 20), uri: a.uri };
+      });
     if (actions.length === 0) return null;
+    // LINE API: text は title/thumbnail ありなら160文字、なしなら240文字
+    const maxText = title || thumbUrl ? 160 : 240;
     return {
       type: "template",
       altText: text || "ボタン",
-      template: { type: "buttons", text: text || "選択してください", actions },
+      template: {
+        type: "buttons",
+        thumbnailImageUrl: thumbUrl,
+        title,
+        text: (text || "選択してください").slice(0, maxText),
+        actions,
+      },
     };
   }
   if (type === "carousel") {
@@ -97,17 +119,33 @@ export function buildLineMessage(
       imageUrl?: string;
       uri?: string;
       label?: string;
+      actionType?: string;
+      data?: string;
+      actionText?: string;
     }>) ?? [];
-    const columns = raw
-      .filter((c) => c.uri)
-      .slice(0, 10)
-      .map((c) => ({
-        thumbnailImageUrl: c.imageUrl || undefined,
-        title: (c.title ?? "").slice(0, 40) || undefined,
+    const validCols = raw.filter((c) => c.uri || c.data || c.actionText || c.actionType === "postback" || c.actionType === "message").slice(0, 10);
+    if (validCols.length === 0) return null;
+    // LINE API 制約: title は「全カラムにあり」か「全カラムになし」のどちらか
+    const hasAnyTitle = validCols.some((c) => (c.title ?? "").trim() !== "");
+    // LINE API 制約: thumbnailImageUrl も同様に全カラム統一が必要
+    const hasAnyImage = validCols.some((c) => (c.imageUrl ?? "").trim() !== "");
+    const columns = validCols.map((c) => {
+      const colActionType = c.actionType || "uri";
+      let action: Record<string, unknown>;
+      if (colActionType === "postback") {
+        action = { type: "postback", label: (c.label || "選択").slice(0, 20), data: c.data || c.label || "action", displayText: c.actionText || undefined };
+      } else if (colActionType === "message") {
+        action = { type: "message", label: (c.label || "送信").slice(0, 20), text: c.actionText || c.label || "" };
+      } else {
+        action = { type: "uri", label: (c.label || "詳細").slice(0, 20), uri: c.uri };
+      }
+      return {
+        thumbnailImageUrl: hasAnyImage ? (c.imageUrl || undefined) : undefined,
+        title: hasAnyTitle ? (c.title ?? "").slice(0, 40) || "　" : undefined,
         text: (c.text ?? " ").slice(0, 60) || " ",
-        actions: [{ type: "uri", label: c.label || "詳細", uri: c.uri }],
-      }));
-    if (columns.length === 0) return null;
+        actions: [action],
+      };
+    });
     return {
       type: "template",
       altText: "カルーセル",

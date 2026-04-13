@@ -382,38 +382,67 @@ async function runStepSequenceForUser(
   const token = acc?.channel_access_token as string | undefined;
   if (!token) return { ok: false, error: "access token missing" };
 
-  const { data: msgs } = await supabase
+  // 全メッセージ取得（delay=0 の即時送信 + delay>0 のエンロールメント用）
+  const { data: allMsgs } = await supabase
     .from("line_step_messages")
     .select("id, body, payload, step_order, delay_minutes")
     .eq("sequence_id", sequenceId)
-    .eq("delay_minutes", 0)
     .order("step_order", { ascending: true });
 
-  if (!msgs || msgs.length === 0) {
-    return { ok: false, error: "no messages with delay_minutes=0" };
+  if (!allMsgs || allMsgs.length === 0) {
+    return { ok: false, error: "no messages in sequence" };
   }
+
+  const immediateMsgs = allMsgs.filter((m) => m.delay_minutes === 0);
+  const delayedMsgs = allMsgs.filter((m) => m.delay_minutes > 0);
 
   const { data: follower } = await supabase
     .from("line_followers")
-    .select("display_name")
+    .select("id, display_name")
     .eq("line_account_id", accountId)
     .eq("line_user_id", lineUserId)
     .maybeSingle();
   const displayName = (follower?.display_name as string | null) ?? "ゲスト";
+  const followerId = follower?.id as string | undefined;
 
-  const built = msgs
-    .map((m) =>
-      buildLineMessage(
-        (m.payload as Record<string, unknown> | null) ?? { msgType: "text", body: m.body },
-        displayName,
-      ),
-    )
-    .filter((x): x is Record<string, unknown> => x !== null);
+  // 即時メッセージを送信
+  if (immediateMsgs.length > 0) {
+    const built = immediateMsgs
+      .map((m) =>
+        buildLineMessage(
+          (m.payload as Record<string, unknown> | null) ?? { msgType: "text", body: m.body },
+          displayName,
+        ),
+      )
+      .filter((x): x is Record<string, unknown> => x !== null);
 
-  if (built.length === 0) return { ok: false, error: "no valid messages" };
+    if (built.length > 0) {
+      const res = await pushLineMessages(token, lineUserId, built);
+      if (!res.ok) return { ok: false, error: `${res.status}: ${res.error}` };
+    }
+  }
 
-  const res = await pushLineMessages(token, lineUserId, built);
-  if (!res.ok) return { ok: false, error: `${res.status}: ${res.error}` };
+  // N分後メッセージがある場合はエンロールメント作成
+  if (delayedMsgs.length > 0 && followerId) {
+    const maxImmediate = immediateMsgs.reduce((max, m) => Math.max(max, m.step_order), 0);
+    try {
+      await supabase.from("line_step_enrollments").upsert(
+        {
+          sequence_id: sequenceId,
+          follower_id: followerId,
+          account_id: accountId,
+          line_user_id: lineUserId,
+          enrolled_at: new Date().toISOString(),
+          last_sent_step: maxImmediate,
+          status: "active",
+        },
+        { onConflict: "sequence_id,follower_id" },
+      );
+    } catch (e) {
+      console.error("[action-rules] enrollment insert failed:", e);
+    }
+  }
+
   return { ok: true };
 }
 

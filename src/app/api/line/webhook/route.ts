@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { supabase } from "@/lib/supabase";
-import { verifySignature, getProfile } from "@/lib/line";
+import { verifySignature, getProfile, buildLineMessage, pushLineMessages } from "@/lib/line";
 import { fireTrigger } from "@/lib/action-rules";
 
 interface LineAccountRow {
@@ -18,6 +18,7 @@ interface LineEvent {
   replyToken?: string;
   timestamp: number;
   message?: { id: string; type: string; text?: string };
+  postback?: { data: string };
 }
 
 async function logWebhookAttempt(
@@ -132,6 +133,9 @@ export async function POST(request: NextRequest) {
         line_user_id: event.source.userId,
         message_text: event.message?.text ?? null,
       });
+    } else if (event.type === "postback") {
+      console.log(`[LINE Webhook] postback data=${event.postback?.data}`);
+      await handlePostback(event, matchedAccount);
     }
   }
 
@@ -240,51 +244,93 @@ async function handleFollow(event: LineEvent, account: LineAccountRow) {
   }
 
   // ステップ配信: 「登録直後 (delay_minutes = 0)」の step_messages を push
+  // ※ kind='step' のシーケンスのみ対象（予約配信 kind='schedule' は cron で処理）
   if (account.channel_access_token) {
     try {
-      const { data: sequences } = await supabase
-        .from("line_step_sequences")
-        .select("id")
-        .eq("account_id", account.id)
-        .eq("status", "active");
+      // kind カラム未作成環境への fallback 付き
+      let sequenceIds: string[] = [];
+      {
+        const r = await supabase
+          .from("line_step_sequences")
+          .select("id")
+          .eq("account_id", account.id)
+          .eq("status", "active")
+          .eq("kind", "step");
+        if (r.error && /kind/.test(r.error.message)) {
+          const fb = await supabase
+            .from("line_step_sequences")
+            .select("id")
+            .eq("account_id", account.id)
+            .eq("status", "active");
+          sequenceIds = (fb.data ?? []).map((s) => s.id as string);
+        } else {
+          sequenceIds = (r.data ?? []).map((s) => s.id as string);
+        }
+      }
 
-      const sequenceIds = (sequences ?? []).map((s) => s.id as string);
       if (sequenceIds.length > 0) {
         const { data: msgs } = await supabase
           .from("line_step_messages")
-          .select("id, body, step_order, sequence_id, delay_minutes")
+          .select("id, body, payload, msg_type, step_order, sequence_id, delay_minutes")
           .in("sequence_id", sequenceIds)
-          .eq("delay_minutes", 0)
           .order("step_order", { ascending: true });
 
-        for (const msg of msgs ?? []) {
-          if (!msg.body) continue;
-          const text = String(msg.body).replace(
-            /\{display_name\}/g,
-            profile?.displayName ?? "ゲスト",
-          );
+        const displayName = profile?.displayName ?? "ゲスト";
+
+        // 即時配信 (delay_minutes = 0) のメッセージを送信
+        for (const msg of (msgs ?? []).filter((m) => m.delay_minutes === 0)) {
+          const payload = (msg.payload as Record<string, unknown> | null) ?? {
+            msgType: "text",
+            body: msg.body,
+          };
+          const lineMsg = buildLineMessage(payload, displayName);
+          if (!lineMsg) continue;
+
           try {
-            const res = await fetch("https://api.line.me/v2/bot/message/push", {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                Authorization: `Bearer ${account.channel_access_token}`,
-              },
-              body: JSON.stringify({
-                to: userId,
-                messages: [{ type: "text", text }],
-              }),
-            });
+            const res = await pushLineMessages(
+              account.channel_access_token!,
+              userId,
+              [lineMsg],
+            );
             if (!res.ok) {
-              const errText = await res.text();
               console.error(
                 "[LINE Webhook] 登録直後ステップ送信失敗:",
                 res.status,
-                errText,
+                res.error,
               );
             }
           } catch (e) {
             console.error("[LINE Webhook] 登録直後ステップ送信例外:", e);
+          }
+        }
+
+        // N分後配信 (delay_minutes > 0) があるシーケンスにエンロールメント作成
+        const seqsWithDelay = new Set(
+          (msgs ?? []).filter((m) => m.delay_minutes > 0).map((m) => m.sequence_id as string),
+        );
+        if (seqsWithDelay.size > 0 && upserted) {
+          // 即時送信済みの最大 step_order を計算（エンロールメントの last_sent_step に設定）
+          const immediateSteps = (msgs ?? []).filter((m) => m.delay_minutes === 0);
+          for (const seqId of seqsWithDelay) {
+            const maxImmediate = immediateSteps
+              .filter((m) => m.sequence_id === seqId)
+              .reduce((max, m) => Math.max(max, m.step_order), 0);
+            try {
+              await supabase.from("line_step_enrollments").upsert(
+                {
+                  sequence_id: seqId,
+                  follower_id: upserted.id,
+                  account_id: account.id,
+                  line_user_id: userId,
+                  enrolled_at: new Date().toISOString(),
+                  last_sent_step: maxImmediate,
+                  status: "active",
+                },
+                { onConflict: "sequence_id,follower_id" },
+              );
+            } catch (e) {
+              console.error("[LINE Webhook] エンロールメント作成失敗:", e);
+            }
           }
         }
       }
@@ -343,4 +389,73 @@ async function handleBlock(event: LineEvent, accountId: string) {
   if (error) {
     console.error("[LINE Webhook] block更新失敗:", error.message);
   }
+}
+
+async function handlePostback(event: LineEvent, account: LineAccountRow) {
+  const postbackData = event.postback?.data ?? "";
+  console.log(`[LINE Webhook] handlePostback: userId=${event.source.userId}, data=${postbackData}`);
+
+  // postbackデータをメッセージとして保存
+  await supabase.from("line_messages").insert({
+    line_account_id: account.id,
+    line_user_id: event.source.userId,
+    direction: "incoming",
+    message_type: "postback",
+    message_text: postbackData,
+    raw_event: event,
+    reply_token: event.replyToken ?? null,
+    sent_at: new Date(event.timestamp).toISOString(),
+  });
+
+  // postbackデータのパース: "action=xxx&label_id=yyy" 形式をサポート
+  const params = new URLSearchParams(postbackData);
+  const action = params.get("action");
+
+  if (action === "add_label" && params.get("label_id")) {
+    // ラベル追加アクション
+    const { data: follower } = await supabase
+      .from("line_followers")
+      .select("id")
+      .eq("line_account_id", account.id)
+      .eq("line_user_id", event.source.userId)
+      .maybeSingle();
+    if (follower) {
+      await supabase.from("line_follower_labels").upsert({
+        label_id: params.get("label_id"),
+        follower_id: follower.id,
+      });
+      await fireTrigger("label_added", {
+        account_id: account.id,
+        line_user_id: event.source.userId,
+        follower_id: follower.id,
+        label_id: params.get("label_id"),
+      });
+    }
+  } else if (action === "start_sequence" && params.get("sequence_id")) {
+    // シーケンス開始アクション
+    const { data: follower } = await supabase
+      .from("line_followers")
+      .select("id")
+      .eq("line_account_id", account.id)
+      .eq("line_user_id", event.source.userId)
+      .maybeSingle();
+    if (follower) {
+      await supabase.from("line_step_enrollments").upsert({
+        sequence_id: params.get("sequence_id"),
+        follower_id: follower.id,
+        account_id: account.id,
+        line_user_id: event.source.userId,
+        enrolled_at: new Date().toISOString(),
+        last_sent_step: 0,
+        status: "active",
+      });
+    }
+  }
+
+  // message_received トリガーとしても発火（Postbackはメッセージ受信の一種として扱う）
+  await fireTrigger("message_received", {
+    account_id: account.id,
+    line_user_id: event.source.userId,
+    message_text: postbackData,
+  });
 }
