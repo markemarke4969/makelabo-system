@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { verifySignature, getProfile } from "@/lib/line";
+import { fireTrigger } from "@/lib/action-rules";
 
 interface LineAccountRow {
   id: string;
@@ -8,6 +9,7 @@ interface LineAccountRow {
   channel_secret: string | null;
   channel_access_token: string | null;
   greeting_message: string | null;
+  project_id: string | null;
 }
 
 interface LineEvent {
@@ -50,13 +52,13 @@ export async function POST(request: NextRequest) {
   let accounts: LineAccountRow[] = [];
   {
     // greeting_message カラム未作成環境への fallback
-    let res = await supabase
+    const res = await supabase
       .from("line_accounts")
-      .select("id, channel_id, channel_secret, channel_access_token, greeting_message");
+      .select("id, channel_id, channel_secret, channel_access_token, greeting_message, project_id");
     if (res.error && /greeting_message/.test(res.error.message)) {
       const fb = await supabase
         .from("line_accounts")
-        .select("id, channel_id, channel_secret, channel_access_token");
+        .select("id, channel_id, channel_secret, channel_access_token, project_id");
       if (fb.error) {
         console.error("[LINE Webhook] accounts fetch error:", fb.error.message);
         return Response.json({ error: "DB error" }, { status: 500 });
@@ -116,10 +118,20 @@ export async function POST(request: NextRequest) {
 
     if (event.type === "follow") {
       await handleFollow(event, matchedAccount);
+      await fireTrigger("follow", {
+        account_id: matchedAccount.id,
+        line_user_id: event.source.userId,
+      });
     } else if (event.type === "unfollow") {
       await handleUnfollow(event, matchedAccount.id);
     } else if (event.type === "block") {
       await handleBlock(event, matchedAccount.id);
+    } else if (event.type === "message") {
+      await fireTrigger("message_received", {
+        account_id: matchedAccount.id,
+        line_user_id: event.source.userId,
+        message_text: event.message?.text ?? null,
+      });
     }
   }
 
@@ -136,7 +148,7 @@ async function handleFollow(event: LineEvent, account: LineAccountRow) {
   console.log("[LINE Webhook] follow profile:", profile);
 
   // upsert（再フォロー対応）
-  const { error } = await supabase
+  const { data: upserted, error } = await supabase
     .from("line_followers")
     .upsert(
       {
@@ -150,10 +162,54 @@ async function handleFollow(event: LineEvent, account: LineAccountRow) {
         updated_at: new Date().toISOString(),
       },
       { onConflict: "line_account_id,line_user_id" },
-    );
+    )
+    .select("id, inflow_route_id")
+    .maybeSingle();
 
   if (error) {
     console.error("[LINE Webhook] follower upsert失敗:", error.message);
+  }
+
+  // 流入経路の紐付け: 直近30分以内の未消費クリックで最新のものを同一案件内から探す
+  // LINE webhook には流入情報が来ないため時間窓ヒューリスティックで対応。
+  // 既に inflow_route_id が入っている follower（再フォロー等）は上書きしない。
+  if (upserted && !upserted.inflow_route_id && account.project_id) {
+    try {
+      const since = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+      const { data: routesOfProject } = await supabase
+        .from("line_inflow_routes")
+        .select("id")
+        .eq("project_id", account.project_id);
+      const routeIds = (routesOfProject ?? []).map((r) => r.id as string);
+
+      if (routeIds.length > 0) {
+        const { data: recentClick } = await supabase
+          .from("line_inflow_clicks")
+          .select("id, inflow_route_id")
+          .in("inflow_route_id", routeIds)
+          .is("follower_id", null)
+          .gte("clicked_at", since)
+          .order("clicked_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (recentClick) {
+          await supabase
+            .from("line_followers")
+            .update({ inflow_route_id: recentClick.inflow_route_id })
+            .eq("id", upserted.id);
+          await supabase
+            .from("line_inflow_clicks")
+            .update({ follower_id: upserted.id })
+            .eq("id", recentClick.id);
+          console.log(
+            `[LINE Webhook] 流入紐付け: follower=${upserted.id} ← click=${recentClick.id} (route=${recentClick.inflow_route_id})`,
+          );
+        }
+      }
+    } catch (e) {
+      console.error("[LINE Webhook] 流入紐付け失敗:", e);
+    }
   }
 
   // カスタム挨拶メッセージを送信（設定されていれば）

@@ -35,14 +35,36 @@ export async function GET(request: NextRequest) {
     return Response.json({ error: error.message }, { status: 500 });
   }
 
-  const formatted = (data ?? []).map((route: any) => {
+  const routes = data ?? [];
+  const routeIds = routes.map((r: any) => r.id as string);
+
+  // 実フォロワー数を line_followers.inflow_route_id から集計
+  // 列が未追加の環境では 0 扱いで fallback
+  const followerCountMap = new Map<string, number>();
+  if (routeIds.length > 0) {
+    const { data: followers, error: fErr } = await supabase
+      .from("line_followers")
+      .select("inflow_route_id")
+      .in("inflow_route_id", routeIds);
+    if (!fErr && followers) {
+      for (const f of followers as { inflow_route_id: string | null }[]) {
+        if (!f.inflow_route_id) continue;
+        followerCountMap.set(
+          f.inflow_route_id,
+          (followerCountMap.get(f.inflow_route_id) ?? 0) + 1,
+        );
+      }
+    }
+  }
+
+  const formatted = routes.map((route: any) => {
     const clickCount = Array.isArray(route.click_count)
       ? route.click_count[0]?.count ?? 0
       : route.click_count ?? 0;
     return {
       ...route,
       click_count: clickCount,
-      follower_count: clickCount,
+      follower_count: followerCountMap.get(route.id) ?? 0,
     };
   });
 

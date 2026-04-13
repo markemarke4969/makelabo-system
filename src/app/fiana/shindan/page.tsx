@@ -21,7 +21,23 @@ export default function FianaShindan() {
   const [saving, setSaving] = useState(false);
   const [demo, setDemo] = useState(false);
 
-  const [birthday, setBirthday] = useState("");
+  // 動物占い計算のため1980年代中盤をデフォルトに
+  const [birthYear, setBirthYear] = useState(1985);
+  const [birthMonth, setBirthMonth] = useState(6);
+  const [birthDay, setBirthDay] = useState(15);
+
+  const currentYear = new Date().getFullYear();
+  const yearOptions = Array.from(
+    { length: currentYear - 1920 + 1 },
+    (_, i) => currentYear - i,
+  );
+  const daysInBirthMonth = new Date(birthYear, birthMonth, 0).getDate();
+
+  useEffect(() => {
+    if (birthDay > daysInBirthMonth) setBirthDay(daysInBirthMonth);
+  }, [birthDay, daysInBirthMonth]);
+
+  const birthday = `${birthYear}-${String(birthMonth).padStart(2, "0")}-${String(birthDay).padStart(2, "0")}`;
 
   useEffect(() => {
     if (isDemoMode()) {
@@ -145,14 +161,49 @@ export default function FianaShindan() {
               <label className="block text-sm font-medium text-gray-300 mb-2">
                 生年月日（任意）
               </label>
-              <input
-                type="date"
-                value={birthday}
-                onChange={(e) => setBirthday(e.target.value)}
-                className="fiana-input w-full"
-              />
+              <div className="grid grid-cols-3 gap-2">
+                <select
+                  value={birthYear}
+                  onChange={(e) => setBirthYear(Number(e.target.value))}
+                  className="fiana-input"
+                  aria-label="年"
+                >
+                  {yearOptions.map((y) => (
+                    <option key={y} value={y}>
+                      {y}年
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={birthMonth}
+                  onChange={(e) => setBirthMonth(Number(e.target.value))}
+                  className="fiana-input"
+                  aria-label="月"
+                >
+                  {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => (
+                    <option key={m} value={m}>
+                      {m}月
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={birthDay}
+                  onChange={(e) => setBirthDay(Number(e.target.value))}
+                  className="fiana-input"
+                  aria-label="日"
+                >
+                  {Array.from(
+                    { length: daysInBirthMonth },
+                    (_, i) => i + 1,
+                  ).map((d) => (
+                    <option key={d} value={d}>
+                      {d}日
+                    </option>
+                  ))}
+                </select>
+              </div>
               <p className="text-xs text-gray-500 mt-2">
-                より精度の高い診断結果に反映されます
+                より精度の高い診断結果と、動物占いとのクロス診断に反映されます
               </p>
             </div>
 

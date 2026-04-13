@@ -7,11 +7,15 @@ import { isDemoMode, getDemoProfile, saveDemoProfile } from "@/lib/fiana-demo";
 import { LINE_URL, formatJPY, formatJPYPlain } from "@/lib/fiana-config";
 import { ANIMAL_TYPES } from "@/lib/fiana-diagnosis";
 import {
-  HAPPINESS_DAILY_STATS,
-  HAPPINESS_RECENT_TRADES,
-  scaleByCapital,
-  scaleLot,
-} from "@/lib/fiana-happiness-data";
+  CAPITAL_TIERS,
+  HISTORY_BY_CAPITAL,
+  pickCapitalTier,
+  formatMT4Amount,
+  formatMT4Signed,
+  formatMT4Price,
+  type CapitalTier,
+  type TierTradeRow,
+} from "@/lib/fiana-history-data";
 
 // ========================================
 // 型
@@ -25,9 +29,7 @@ interface Profile {
   current_assets?: number;
 }
 
-type TabKey = "trial" | "backtest" | "economy";
-
-const TRIAL_DAYS_FREE = 14;
+type TabKey = "history" | "backtest" | "economy";
 
 // ========================================
 // メインダッシュボード
@@ -36,7 +38,7 @@ export default function FianaDashboard() {
   const router = useRouter();
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState<TabKey>("trial");
+  const [tab, setTab] = useState<TabKey>("history");
 
   useEffect(() => {
     const load = async () => {
@@ -164,7 +166,7 @@ export default function FianaDashboard() {
       >
         <div className="max-w-lg mx-auto grid grid-cols-3 gap-2">
           {[
-            { key: "trial" as const, label: "体験版", icon: "📺" },
+            { key: "history" as const, label: "口座履歴", icon: "📈" },
             { key: "backtest" as const, label: "バックテスト", icon: "📊" },
             { key: "economy" as const, label: "経済指標", icon: "📅" },
           ].map((t) => {
@@ -197,271 +199,290 @@ export default function FianaDashboard() {
 
       {/* コンテンツ */}
       <div className="max-w-lg mx-auto px-4 py-5">
-        {tab === "trial" && <TrialTab profile={profile} />}
+        {tab === "history" && <HistoryTab profile={profile} />}
         {tab === "backtest" && <BacktestTab profile={profile} />}
         {tab === "economy" && <EconomyTab profile={profile} />}
+      </div>
+
+      {/* 口座履歴タブ専用 下部固定CTA */}
+      {tab === "history" && <HistoryFixedCTA />}
+    </div>
+  );
+}
+
+// ========================================
+// 口座履歴タブ（MT4互換UI / 資金別スナップショット）
+// ========================================
+// MT4 モバイルアプリの口座履歴画面を忠実に再現する。
+// - 純黒背景 #000000
+// - モノスペース + tabular-nums
+// - buy=青 / sell=赤 / profit=緑 / loss=赤
+// - 行レイアウト: "SYMBOL, direction lot" + profit  /  openTime + price→price
+// - MT4 形式の金額表示 "2 340.00"（千桁スペース / 小数2桁）
+// - 下線アクティブのサブタブ
+// - 角丸なし・フラット
+
+const MT4 = {
+  bg: "#000000",
+  surface: "#0A0A0B",
+  surfaceAlt: "#111113",
+  border: "#1C1C20",
+  borderStrong: "#2A2A30",
+  textPrimary: "#E8E8E8",
+  textSecondary: "#8E8E93",
+  textMuted: "#636366",
+  buy: "#2196F3",
+  sell: "#F23645",
+  profit: "#26A69A",
+  loss: "#EF5350",
+  accent: "#FFD54F",
+};
+
+function HistoryTab({ profile }: { profile: Profile }) {
+  const defaultTier = useMemo(
+    () => pickCapitalTier(profile.virtual_deposit),
+    [profile.virtual_deposit],
+  );
+  const [tier, setTier] = useState<CapitalTier>(defaultTier);
+
+  const snap = HISTORY_BY_CAPITAL[tier];
+  const balance = snap.capital + snap.totalProfit;
+  const profitColor = snap.totalProfit >= 0 ? MT4.profit : MT4.loss;
+
+  return (
+    <div
+      className="-mx-4 -my-5 font-mono"
+      style={{
+        background: MT4.bg,
+        color: MT4.textPrimary,
+        fontFamily:
+          '"SF Mono", "Segoe UI Mono", Menlo, Consolas, "Liberation Mono", monospace',
+      }}
+    >
+      {/* MT4 サブタブバー */}
+      <div
+        className="flex items-stretch"
+        style={{ borderBottom: `1px solid ${MT4.border}` }}
+      >
+        {[
+          { label: "気配値", active: false },
+          { label: "チャート", active: false },
+          { label: "トレード", active: false },
+          { label: "履歴", active: true },
+        ].map((t) => (
+          <div
+            key={t.label}
+            className="flex-1 text-center py-2.5 text-[11px] tracking-wide"
+            style={{
+              color: t.active ? MT4.textPrimary : MT4.textMuted,
+              borderBottom: t.active
+                ? `2px solid ${MT4.accent}`
+                : "2px solid transparent",
+              background: t.active ? MT4.surfaceAlt : "transparent",
+            }}
+          >
+            {t.label}
+          </div>
+        ))}
+      </div>
+
+      {/* 資金ティアセレクタ（MT4 には無いがシミュレータ機能として） */}
+      <div
+        className="flex items-center"
+        style={{ borderBottom: `1px solid ${MT4.border}` }}
+      >
+        {CAPITAL_TIERS.map((t) => {
+          const active = tier === t;
+          return (
+            <button
+              key={t}
+              onClick={() => setTier(t)}
+              className="flex-1 py-2 text-[11px] tracking-wide transition-colors"
+              style={{
+                color: active ? MT4.textPrimary : MT4.textSecondary,
+                background: active ? MT4.surfaceAlt : "transparent",
+                borderBottom: active
+                  ? `2px solid ${MT4.accent}`
+                  : "2px solid transparent",
+                fontWeight: active ? 600 : 400,
+              }}
+            >
+              {HISTORY_BY_CAPITAL[t].label}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* 期間バー */}
+      <div
+        className="flex items-center justify-between px-3 py-2 text-[10px]"
+        style={{
+          background: MT4.surface,
+          color: MT4.textSecondary,
+          borderBottom: `1px solid ${MT4.border}`,
+        }}
+      >
+        <span>期間:</span>
+        <span className="tabular-nums" style={{ color: MT4.textPrimary }}>
+          {snap.period.start} - {snap.period.end}
+        </span>
+      </div>
+
+      {/* トレード履歴リスト */}
+      <div>
+        {[...snap.trades].reverse().map((t) => (
+          <MT4TradeRow key={t.id} trade={t} />
+        ))}
+      </div>
+
+      {/* サマリーフッター（MT4 の履歴下部の合計表示） */}
+      <div
+        className="px-3 py-3 text-[11px]"
+        style={{
+          background: MT4.surface,
+          borderTop: `1px solid ${MT4.borderStrong}`,
+          borderBottom: `1px solid ${MT4.border}`,
+        }}
+      >
+        <div className="flex items-center justify-between py-0.5">
+          <span style={{ color: MT4.textSecondary }}>損益:</span>
+          <span
+            className="tabular-nums font-semibold text-[13px]"
+            style={{ color: profitColor }}
+          >
+            {formatMT4Signed(snap.totalProfit)}
+          </span>
+        </div>
+        <div className="flex items-center justify-between py-0.5">
+          <span style={{ color: MT4.textSecondary }}>入金:</span>
+          <span
+            className="tabular-nums"
+            style={{ color: MT4.textPrimary }}
+          >
+            {formatMT4Amount(snap.capital)}
+          </span>
+        </div>
+        <div className="flex items-center justify-between py-0.5">
+          <span style={{ color: MT4.textSecondary }}>残高:</span>
+          <span
+            className="tabular-nums"
+            style={{ color: MT4.textPrimary }}
+          >
+            {formatMT4Amount(balance)}
+          </span>
+        </div>
+        <div
+          className="flex items-center justify-between py-0.5 mt-1 pt-1"
+          style={{ borderTop: `1px solid ${MT4.border}` }}
+        >
+          <span style={{ color: MT4.textSecondary }}>
+            勝率: {snap.winRate}%
+          </span>
+          <span style={{ color: MT4.textSecondary }}>
+            取引数: {snap.tradeCount} ({snap.winCount}/{snap.lossCount})
+          </span>
+        </div>
+      </div>
+
+      {/* 固定CTAとの干渉を防ぐ底部スペーサー */}
+      <div style={{ height: 112, background: MT4.bg }} />
+    </div>
+  );
+}
+
+function MT4TradeRow({ trade }: { trade: TierTradeRow }) {
+  const win = trade.profit >= 0;
+  const profitColor = win ? MT4.profit : MT4.loss;
+  const dirColor = trade.direction === "BUY" ? MT4.buy : MT4.sell;
+  const dirLabel = trade.direction === "BUY" ? "buy" : "sell";
+
+  return (
+    <div
+      className="px-3 py-2.5"
+      style={{
+        background: MT4.bg,
+        borderBottom: `1px solid ${MT4.border}`,
+      }}
+    >
+      {/* 1行目: SYMBOL, direction lot  ... profit */}
+      <div className="flex items-baseline justify-between">
+        <div className="text-[13px] tabular-nums">
+          <span style={{ color: MT4.textPrimary, fontWeight: 600 }}>
+            {trade.symbol}
+          </span>
+          <span style={{ color: MT4.textSecondary }}>, </span>
+          <span style={{ color: dirColor, fontWeight: 600 }}>{dirLabel}</span>{" "}
+          <span style={{ color: MT4.textPrimary }}>
+            {trade.lot.toFixed(2)}
+          </span>
+        </div>
+        <div
+          className="text-[14px] tabular-nums font-semibold"
+          style={{ color: profitColor }}
+        >
+          {formatMT4Signed(trade.profit)}
+        </div>
+      </div>
+      {/* 2行目: openTime  price → price */}
+      <div className="flex items-baseline justify-between mt-1">
+        <div
+          className="text-[10.5px] tabular-nums"
+          style={{ color: MT4.textSecondary }}
+        >
+          {trade.openTime}
+        </div>
+        <div
+          className="text-[10.5px] tabular-nums"
+          style={{ color: MT4.textSecondary }}
+        >
+          {formatMT4Price(trade.openPrice)}
+          <span style={{ color: MT4.textMuted }}> → </span>
+          {formatMT4Price(trade.closePrice)}
+        </div>
       </div>
     </div>
   );
 }
 
 // ========================================
-// システム体験版タブ（ハピネスプラス実績データ）
+// 口座履歴タブ 下部固定CTA（MT4 の暗色に馴染ませる）
 // ========================================
-function TrialTab({ profile }: { profile: Profile }) {
-  const daysElapsed = useMemo(() => {
-    const start = new Date(profile.trial_start_date).getTime();
-    const now = Date.now();
-    return Math.max(0, Math.floor((now - start) / (1000 * 60 * 60 * 24)));
-  }, [profile.trial_start_date]);
-
-  const daysLeft = Math.max(0, TRIAL_DAYS_FREE - daysElapsed);
-  const expired = daysLeft <= 0;
-  const deposit = profile.virtual_deposit;
-
-  // 口座番号（決定論的に生成）
-  const accountNo = useMemo(() => {
-    const seed = deposit + profile.lot_size * 1000;
-    return `FIA-${Math.floor(seed * 7 + 100000).toString().slice(0, 7)}`;
-  }, [deposit, profile.lot_size]);
-
-  // ハピネスプラスの実績データをユーザー資金にスケーリング
-  const scaled = useMemo(() => {
-    const dailyStats = HAPPINESS_DAILY_STATS.map((d) => ({
-      ...d,
-      profit: scaleByCapital(d.profitAtBase, deposit),
-    }));
-
-    // 累積損益を算出して資産推移を作る
-    let running = 0;
-    const equityCurve = dailyStats.map((d) => {
-      running += d.profit;
-      return {
-        date: d.date,
-        profit: d.profit,
-        equity: deposit + running,
-      };
-    });
-
-    const totalProfit = running;
-    const totalTrades = dailyStats.reduce((s, d) => s + d.trades, 0);
-    const totalWins = dailyStats.reduce((s, d) => s + d.wins, 0);
-    const totalLosses = dailyStats.reduce((s, d) => s + d.losses, 0);
-    const winRate = totalTrades > 0 ? (totalWins / totalTrades) * 100 : 0;
-    const returnRate = (totalProfit / deposit) * 100;
-
-    const trades = HAPPINESS_RECENT_TRADES.map((t) => ({
-      ...t,
-      lot: scaleLot(t.lotAtBase, deposit),
-      profit: scaleByCapital(t.profitAtBase, deposit),
-    }));
-
-    return {
-      dailyStats,
-      equityCurve,
-      totalProfit,
-      totalTrades,
-      totalWins,
-      totalLosses,
-      winRate,
-      returnRate,
-      trades,
-    };
-  }, [deposit]);
-
-  const equity = deposit + scaled.totalProfit;
-
+function HistoryFixedCTA() {
   return (
-    <div className="space-y-4">
-      {/* トライアル状態 */}
-      <div
-        className="rounded-2xl p-5 border"
-        style={{
-          background: expired
-            ? "linear-gradient(135deg, rgba(239,68,68,0.15), rgba(234,88,12,0.1))"
-            : "linear-gradient(135deg, rgba(34,197,94,0.12), rgba(16,185,129,0.08))",
-          borderColor: expired
-            ? "rgba(239,68,68,0.35)"
-            : "rgba(34,197,94,0.3)",
-        }}
-      >
-        <div className="flex items-center justify-between mb-3">
-          <div>
-            <p className="text-[11px] text-gray-400 mb-0.5">
-              ハピネスプラス 体験版（2週間無料）
-            </p>
-            <p
-              className={`text-2xl font-bold ${
-                expired ? "text-red-300" : "text-green-300"
-              }`}
-            >
-              {expired ? "期間終了" : `残り ${daysLeft} 日`}
-            </p>
-          </div>
-          <div className="text-4xl">{expired ? "🔒" : "🟢"}</div>
-        </div>
-        <div className="h-2 bg-white/10 rounded-full overflow-hidden">
-          <div
-            className="h-full rounded-full transition-all"
-            style={{
-              width: `${Math.min(100, (daysElapsed / TRIAL_DAYS_FREE) * 100)}%`,
-              background: expired
-                ? "linear-gradient(90deg,#ef4444,#f97316)"
-                : "linear-gradient(90deg,#22c55e,#10b981)",
-            }}
-          />
-        </div>
-      </div>
-
-      {/* MT4風アカウント情報 */}
-      <div className="fiana-card p-5">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-sm font-bold text-gray-300 flex items-center gap-2">
-            <span className="text-lg">📈</span>FIANA Trading Terminal
-          </h2>
-          <span className="text-[10px] font-mono bg-green-500/20 text-green-400 px-2 py-0.5 rounded">
-            LIVE
-          </span>
-        </div>
-
-        <div className="grid grid-cols-2 gap-3 mb-4">
-          <div className="bg-white/5 rounded-lg p-3 border border-white/10">
-            <p className="text-[10px] text-gray-500 mb-1">口座番号</p>
-            <p className="text-sm font-mono text-white">{accountNo}</p>
-          </div>
-          <div className="bg-white/5 rounded-lg p-3 border border-white/10">
-            <p className="text-[10px] text-gray-500 mb-1">稼働システム</p>
-            <p className="text-sm text-white">ハピネスプラス EA</p>
-          </div>
-          <div className="bg-white/5 rounded-lg p-3 border border-white/10">
-            <p className="text-[10px] text-gray-500 mb-1">残高</p>
-            <p className="text-sm font-mono text-white">
-              {formatJPYPlain(deposit)}
-            </p>
-          </div>
-          <div className="bg-white/5 rounded-lg p-3 border border-white/10">
-            <p className="text-[10px] text-gray-500 mb-1">有効証拠金</p>
-            <p className="text-sm font-mono text-green-400">
-              {formatJPYPlain(equity)}
-            </p>
-          </div>
-        </div>
-
-        <div
-          className="rounded-xl p-4 text-center"
+    <div
+      className="fixed bottom-0 left-0 right-0 z-30 px-3 py-3"
+      style={{
+        background: "rgba(0,0,0,0.96)",
+        borderTop: `1px solid ${MT4.borderStrong}`,
+        backdropFilter: "blur(8px)",
+      }}
+    >
+      <div className="max-w-lg mx-auto">
+        <p
+          className="text-center text-[11px] mb-2 leading-snug"
           style={{
-            background:
-              "linear-gradient(135deg, rgba(16,185,129,0.15), rgba(5,150,105,0.08))",
-            border: "1px solid rgba(16,185,129,0.3)",
+            color: MT4.textSecondary,
+            fontFamily:
+              '"SF Mono", "Segoe UI Mono", Menlo, Consolas, monospace',
           }}
         >
-          <p className="text-[11px] text-emerald-200/70 mb-1">
-            運用開始からの累計損益
-          </p>
-          <p className="text-3xl font-bold text-emerald-300 mb-1">
-            {formatJPY(scaled.totalProfit)}
-          </p>
-          <p className="text-[11px] text-emerald-200/60">
-            収益率 +{scaled.returnRate.toFixed(2)}% ／ 勝率{" "}
-            {scaled.winRate.toFixed(0)}% ／ {scaled.totalTrades}取引
-          </p>
-        </div>
+          この結果を元にあなた専用の運用プランを無料で作ります
+        </p>
+        <a
+          href={LINE_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="block w-full text-center py-3 text-[13px] font-bold"
+          style={{
+            background: "linear-gradient(135deg,#6366f1,#8b5cf6)",
+            color: "#ffffff",
+            borderRadius: 10,
+            boxShadow: "0 0 24px rgba(99,102,241,0.35)",
+          }}
+        >
+          あなた専用の運用プランを無料で相談する
+        </a>
       </div>
-
-      {/* 日次パフォーマンスサマリー */}
-      <div className="fiana-card p-5">
-        <h3 className="text-sm font-bold text-gray-300 mb-3 flex items-center gap-2">
-          <span className="text-lg">📆</span>直近の日次パフォーマンス
-        </h3>
-        <div className="space-y-1">
-          {[...scaled.dailyStats]
-            .slice(-10)
-            .reverse()
-            .map((d) => (
-              <div
-                key={d.date}
-                className="flex items-center justify-between py-2 border-b border-white/5 text-[12px]"
-              >
-                <span className="text-gray-400 font-mono">
-                  {d.date.slice(5)}
-                </span>
-                <span className="text-gray-500 font-mono">
-                  {d.wins}勝{d.losses}敗
-                </span>
-                <span
-                  className={`font-bold font-mono ${
-                    d.profit >= 0 ? "text-green-400" : "text-red-400"
-                  }`}
-                >
-                  {formatJPY(d.profit)}
-                </span>
-              </div>
-            ))}
-        </div>
-      </div>
-
-      {/* 取引ログ（MT4風） */}
-      <div className="fiana-card p-4">
-        <h3 className="text-xs font-bold text-gray-400 mb-3">
-          ▼ 直近の取引履歴
-        </h3>
-        <div className="space-y-1 font-mono text-[10px]">
-          <div className="grid grid-cols-6 gap-1 pb-1 border-b border-white/10 text-gray-600">
-            <span>日時</span>
-            <span>通貨</span>
-            <span>方向</span>
-            <span className="text-right">Lot</span>
-            <span className="text-right">pips</span>
-            <span className="text-right">損益</span>
-          </div>
-          {scaled.trades.map((t) => (
-            <div
-              key={t.id}
-              className="grid grid-cols-6 gap-1 py-1.5 border-b border-white/5 text-gray-300"
-            >
-              <span>{t.date.slice(5)}</span>
-              <span>{t.pair}</span>
-              <span
-                className={
-                  t.direction === "BUY" ? "text-indigo-400" : "text-orange-400"
-                }
-              >
-                {t.direction}
-              </span>
-              <span className="text-right">{t.lot.toFixed(2)}</span>
-              <span
-                className={`text-right ${
-                  t.pips >= 0 ? "text-green-400" : "text-red-400"
-                }`}
-              >
-                {t.pips > 0 ? "+" : ""}
-                {t.pips.toFixed(1)}
-              </span>
-              <span
-                className={`text-right ${
-                  t.profit >= 0 ? "text-green-400" : "text-red-400"
-                }`}
-              >
-                {formatJPY(t.profit)}
-              </span>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* 相談CTA */}
-      <ConsultCTA
-        headline={
-          expired
-            ? "体験期間が終了しました"
-            : `あなたの${formatJPYPlain(deposit)}で実運用に切り替える前に`
-        }
-        body={
-          expired
-            ? "実際の運用に切り替えるかどうか、資産運用アドバイザーと個別に相談できます。"
-            : `体験中の実績（${formatJPY(scaled.totalProfit)} / 収益率 +${scaled.returnRate.toFixed(1)}%）をもとに、あなた専用の運用プランを無料で作成します。`
-        }
-      />
     </div>
   );
 }

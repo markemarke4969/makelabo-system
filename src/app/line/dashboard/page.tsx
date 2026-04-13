@@ -3,6 +3,19 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase-browser";
+import {
+  DeliveryCondition,
+  ConditionRow,
+  ConditionField,
+  ConditionOp,
+  ConditionConnector,
+  FIELD_LABELS,
+  OP_LABELS,
+  operatorsForField,
+  inputKindForRow,
+  emptyDeliveryCondition,
+  isSupportedField,
+} from "@/lib/delivery-conditions";
 
 // ============================================================
 // 型定義
@@ -67,6 +80,10 @@ interface StepSequence {
   status: string;
   created_at: string;
   messages: StepMessage[];
+  kind?: "step" | "schedule" | null;
+  scheduled_at?: string | null;
+  sent_at?: string | null;
+  target_condition?: DeliveryCondition | null;
 }
 
 interface StepMessage {
@@ -97,7 +114,31 @@ interface InflowRoute {
 // メインビュー
 type MainView = "accounts" | "account-detail" | "settings";
 // アカウント詳細内のサブビュー
-type AccountSubView = "followers" | "chat" | "step" | "schedule" | "friend-page" | "labels" | "templates" | "inflow";
+type AccountSubView = "followers" | "chat" | "step" | "schedule" | "friend-page" | "labels" | "templates" | "inflow" | "actions";
+
+// アクションルール
+type ActionTriggerType = "follow" | "label_added" | "message_received" | "sequence_completed";
+type ActionActionType = "start_sequence" | "label_add" | "label_remove" | "move_sequence" | "webhook";
+interface ActionRuleCondition {
+  type: "label_in" | "inflow_route_in" | "days_after_follow";
+  label_ids?: string[];
+  route_ids?: string[];
+  days?: number;
+}
+interface ActionRule {
+  id: string;
+  account_id: string;
+  name: string;
+  status: string;
+  trigger_type: ActionTriggerType;
+  trigger_config: Record<string, unknown>;
+  conditions: ActionRuleCondition[];
+  action_type: ActionActionType;
+  action_config: Record<string, unknown>;
+  created_at: string;
+}
+
+const DEFAULT_GREETING_MESSAGE = "{display_name}さん、友達追加ありがとうございます！";
 
 // ============================================================
 // 絵文字データ
@@ -317,6 +358,28 @@ export default function LineDashboard() {
   const [inflowForm, setInflowForm] = useState({ name: "", code: "", url: "", description: "" });
   const [editingInflow, setEditingInflow] = useState<InflowRoute | null>(null);
 
+  // Action rules
+  const [actionRules, setActionRules] = useState<ActionRule[]>([]);
+  const [showActionModal, setShowActionModal] = useState(false);
+  const [editingActionRule, setEditingActionRule] = useState<ActionRule | null>(null);
+  const [actionForm, setActionForm] = useState<{
+    name: string;
+    status: string;
+    trigger_type: ActionTriggerType;
+    trigger_config: Record<string, unknown>;
+    conditions: ActionRuleCondition[];
+    action_type: ActionActionType;
+    action_config: Record<string, unknown>;
+  }>({
+    name: "",
+    status: "active",
+    trigger_type: "follow",
+    trigger_config: {},
+    conditions: [],
+    action_type: "start_sequence",
+    action_config: {},
+  });
+
   // ステップ／予約配信作成ページ
   type BroadcastMsgType = "text" | "image" | "button" | "carousel" | "audio" | "video" | "sticker";
   type TimingMode = "immediate" | "datetime" | "daysAfter";
@@ -337,6 +400,7 @@ export default function LineDashboard() {
   interface BroadcastForm {
     name: string;
     condition: "all" | "filtered";
+    targetCondition: DeliveryCondition;
     messages: BroadcastMessage[];
     customSender: string;
     timingMode: TimingMode;
@@ -370,6 +434,7 @@ export default function LineDashboard() {
   const emptyBroadcast: BroadcastForm = {
     name: "",
     condition: "all",
+    targetCondition: emptyDeliveryCondition,
     messages: [emptyMessage()],
     customSender: "",
     timingMode: "immediate",
@@ -401,6 +466,17 @@ export default function LineDashboard() {
   const [showScheduleCreator, setShowScheduleCreator] = useState(false);
   const [scheduleCreatorForm, setScheduleCreatorForm] = useState<BroadcastForm>(emptyBroadcast);
 
+  // 対象者確認モーダル
+  const [audiencePreview, setAudiencePreview] = useState<{
+    open: boolean;
+    loading: boolean;
+    total: number;
+    matched: number;
+    sample: { id: string; line_user_id: string; display_name: string | null }[];
+    unsupported: string[];
+    error: string | null;
+  }>({ open: false, loading: false, total: 0, matched: 0, sample: [], unsupported: [], error: null });
+
   const [form, setForm] = useState({
     account_name: "",
     channel_id: "",
@@ -410,7 +486,7 @@ export default function LineDashboard() {
     group_name: "",
     project_id: "",
     role: "main" as "main" | "standby",
-    greeting_message: "",
+    greeting_message: DEFAULT_GREETING_MESSAGE,
   });
   const [editingId, setEditingId] = useState<string | null>(null);
 
@@ -502,6 +578,35 @@ export default function LineDashboard() {
     try {
       const res = await fetch(`/api/line/followers?test_only=1&account_id=${selectedAccount.id}`);
       if (res.ok) setTestFollowers(await res.json());
+    } catch { /* */ }
+  }, [selectedAccount?.id]);
+
+  // アクションルール一覧取得
+  const fetchActionRules = useCallback(async () => {
+    if (!selectedAccount) { setActionRules([]); return; }
+    try {
+      const res = await fetch(`/api/line/action-rules?account_id=${selectedAccount.id}`);
+      if (res.ok) setActionRules(await res.json());
+    } catch { /* */ }
+  }, [selectedAccount?.id]);
+
+  // ラベル一覧取得（アカウント単位）
+  const fetchLabels = useCallback(async () => {
+    if (!selectedAccount) { setLabels([]); return; }
+    try {
+      const res = await fetch(`/api/line/labels?account_id=${selectedAccount.id}`);
+      if (res.ok) {
+        const data = await res.json();
+        setLabels(
+          (data as Array<{ id: string; name: string; color: string; sort_order: number; created_at: string; assigned_users: string[] }>).map((l) => ({
+            id: l.id,
+            name: l.name,
+            color: l.color,
+            created_at: l.created_at,
+            assigned_users: l.assigned_users ?? [],
+          })),
+        );
+      }
     } catch { /* */ }
   }, [selectedAccount?.id]);
 
@@ -747,29 +852,80 @@ export default function LineDashboard() {
     }
   };
 
+  const deleteFollower = async (id: string, label: string) => {
+    if (!confirm(`${label} を削除しますか？\n\n※メッセージ履歴も削除されます`)) return;
+    const res = await fetch("/api/line/followers", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids: [id] }),
+    });
+    if (res.ok) {
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+      setSelectedUser(null);
+      setShowUserDetail(false);
+      fetchFollowers();
+    } else {
+      alert("削除に失敗しました");
+    }
+  };
+
   // ラベル管理
   const LABEL_COLORS = ["#3B82F6", "#EF4444", "#10B981", "#F59E0B", "#8B5CF6", "#EC4899", "#06B6D4", "#F97316"];
 
-  const createLabel = () => {
-    if (!newLabelName.trim()) return;
-    const newLabel: Label = {
-      id: crypto.randomUUID(),
-      name: newLabelName.trim(),
-      color: LABEL_COLORS[labels.length % LABEL_COLORS.length],
-      created_at: new Date().toISOString(),
-      assigned_users: [],
-    };
-    setLabels((prev) => [newLabel, ...prev]);
-    setNewLabelName("");
-    setShowAddLabel(false);
+  const createLabel = async () => {
+    if (!newLabelName.trim() || !selectedAccount) return;
+    try {
+      const res = await fetch("/api/line/labels", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          account_id: selectedAccount.id,
+          name: newLabelName.trim(),
+          color: LABEL_COLORS[labels.length % LABEL_COLORS.length],
+          sort_order: labels.length,
+        }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        alert(`ラベル作成失敗: ${data.error ?? res.status}`);
+        return;
+      }
+      setNewLabelName("");
+      setShowAddLabel(false);
+      await fetchLabels();
+    } catch (e) {
+      alert(`ラベル作成失敗: ${(e as Error).message}`);
+    }
   };
 
-  const deleteLabel = (id: string) => {
+  const deleteLabel = async (id: string) => {
     if (!confirm("このラベルを削除しますか？")) return;
-    setLabels((prev) => prev.filter((l) => l.id !== id));
+    try {
+      const res = await fetch("/api/line/labels", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        alert(`削除失敗: ${data.error ?? res.status}`);
+        return;
+      }
+      await fetchLabels();
+    } catch (e) {
+      alert(`削除失敗: ${(e as Error).message}`);
+    }
   };
 
-  const toggleLabelUser = (labelId: string, lineUserId: string) => {
+  const toggleLabelUser = async (labelId: string, lineUserId: string) => {
+    if (!selectedAccount) return;
+    const current = labels.find((l) => l.id === labelId);
+    const assigned = !(current?.assigned_users ?? []).includes(lineUserId);
+    // 楽観更新
     setLabels((prev) =>
       prev.map((l) => {
         if (l.id !== labelId) return l;
@@ -782,6 +938,118 @@ export default function LineDashboard() {
         };
       })
     );
+    try {
+      const res = await fetch("/api/line/labels/assign", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          label_id: labelId,
+          line_user_id: lineUserId,
+          account_id: selectedAccount.id,
+          assigned,
+        }),
+      });
+      if (!res.ok) {
+        // 失敗時はロールバック
+        await fetchLabels();
+      }
+    } catch {
+      await fetchLabels();
+    }
+  };
+
+  // アクションルール CRUD
+  const openNewActionRule = () => {
+    setEditingActionRule(null);
+    setActionForm({
+      name: "",
+      status: "active",
+      trigger_type: "follow",
+      trigger_config: {},
+      conditions: [],
+      action_type: "start_sequence",
+      action_config: {},
+    });
+    setShowActionModal(true);
+  };
+
+  const openEditActionRule = (rule: ActionRule) => {
+    setEditingActionRule(rule);
+    setActionForm({
+      name: rule.name,
+      status: rule.status,
+      trigger_type: rule.trigger_type,
+      trigger_config: rule.trigger_config ?? {},
+      conditions: Array.isArray(rule.conditions) ? rule.conditions : [],
+      action_type: rule.action_type,
+      action_config: rule.action_config ?? {},
+    });
+    setShowActionModal(true);
+  };
+
+  const saveActionRule = async () => {
+    if (!selectedAccount) return;
+    if (!actionForm.name.trim()) { alert("ルール名を入力してください"); return; }
+    try {
+      if (editingActionRule) {
+        const res = await fetch("/api/line/action-rules", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: editingActionRule.id, ...actionForm }),
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          alert(`更新失敗: ${data.error ?? res.status}`);
+          return;
+        }
+      } else {
+        const res = await fetch("/api/line/action-rules", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ account_id: selectedAccount.id, ...actionForm }),
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          alert(`作成失敗: ${data.error ?? res.status}`);
+          return;
+        }
+      }
+      setShowActionModal(false);
+      await fetchActionRules();
+    } catch (e) {
+      alert(`保存失敗: ${(e as Error).message}`);
+    }
+  };
+
+  const deleteActionRule = async (id: string) => {
+    if (!confirm("このアクションルールを削除しますか？")) return;
+    try {
+      const res = await fetch("/api/line/action-rules", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        alert(`削除失敗: ${data.error ?? res.status}`);
+        return;
+      }
+      await fetchActionRules();
+    } catch (e) {
+      alert(`削除失敗: ${(e as Error).message}`);
+    }
+  };
+
+  const toggleActionRuleStatus = async (rule: ActionRule) => {
+    const next = rule.status === "active" ? "paused" : "active";
+    try {
+      const res = await fetch("/api/line/action-rules", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: rule.id, status: next }),
+      });
+      if (res.ok) await fetchActionRules();
+    } catch { /* */ }
   };
 
   // Feature 1: Save display name
@@ -936,7 +1204,7 @@ export default function LineDashboard() {
   };
 
   const resetForm = () => {
-    setForm({ account_name: "", channel_id: "", basic_id: "", channel_secret: "", channel_access_token: "", group_name: "", project_id: "", role: "main", greeting_message: "" });
+    setForm({ account_name: "", channel_id: "", basic_id: "", channel_secret: "", channel_access_token: "", group_name: "", project_id: "", role: "main", greeting_message: DEFAULT_GREETING_MESSAGE });
     setEditingId(null);
     setSaveMsg(null);
   };
@@ -951,7 +1219,7 @@ export default function LineDashboard() {
       group_name: acc.group_name ?? "",
       project_id: acc.project_id ?? "",
       role: acc.role === "standby" ? "standby" : "main",
-      greeting_message: acc.greeting_message ?? "",
+      greeting_message: acc.greeting_message && acc.greeting_message.trim() !== "" ? acc.greeting_message : DEFAULT_GREETING_MESSAGE,
     });
     setEditingId(acc.id);
     setSaveMsg(null);
@@ -1056,8 +1324,10 @@ export default function LineDashboard() {
     if (selectedAccount) {
       fetchStepSequences();
       fetchTestFollowers();
+      fetchLabels();
+      fetchActionRules();
     }
-  }, [selectedAccount, fetchStepSequences, fetchTestFollowers]);
+  }, [selectedAccount, fetchStepSequences, fetchTestFollowers, fetchLabels, fetchActionRules]);
 
   useEffect(() => {
     if (project?.id) fetchInflowRoutes();
@@ -1113,15 +1383,41 @@ export default function LineDashboard() {
       alert("メッセージが1通もありません");
       return false;
     }
-    const fullName = `${kind === "schedule" ? "[予約] " : ""}${form.name.trim()}`;
+
+    // 予約配信は日時指定モードを必須にする
+    let scheduledAtIso: string | null = null;
+    if (kind === "schedule") {
+      if (form.timingMode !== "datetime" || !form.timingDate) {
+        alert("予約配信は送信日時を指定してください");
+        return false;
+      }
+      const dt = new Date(form.timingDate);
+      if (isNaN(dt.getTime())) {
+        alert("送信日時の形式が不正です");
+        return false;
+      }
+      scheduledAtIso = dt.toISOString();
+    }
+
+    const cleanName = form.name.trim();
     try {
+      const targetConditionPayload =
+        form.condition === "filtered" ? form.targetCondition : { ...emptyDeliveryCondition, mode: "all" as const };
+
       let sequenceId: string;
       if (editingSequenceId) {
         // 既存シーケンスを更新 + 既存メッセージを全削除
         const putRes = await fetch("/api/line/step-sequences", {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ id: editingSequenceId, name: fullName, status: form.status }),
+          body: JSON.stringify({
+            id: editingSequenceId,
+            name: cleanName,
+            status: form.status,
+            kind,
+            scheduled_at: scheduledAtIso,
+            target_condition: targetConditionPayload,
+          }),
         });
         if (!putRes.ok) {
           const data = await putRes.json().catch(() => ({}));
@@ -1148,7 +1444,10 @@ export default function LineDashboard() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             account_id: selectedAccount.id,
-            name: fullName,
+            name: cleanName,
+            kind,
+            scheduled_at: scheduledAtIso,
+            target_condition: targetConditionPayload,
           }),
         });
         if (!seqRes.ok) {
@@ -1200,8 +1499,8 @@ export default function LineDashboard() {
     }
   };
 
-  // 既存シーケンスを編集画面で開く
-  const openEditStep = (seq: StepSequence) => {
+  // 既存シーケンスを編集画面で開く（共通ロジック）
+  const buildFormFromSequence = (seq: StepSequence): BroadcastForm => {
     const rawMessages = seq.messages ?? [];
     const messages: BroadcastMessage[] = rawMessages
       .slice()
@@ -1214,18 +1513,48 @@ export default function LineDashboard() {
         return { ...emptyMessage(), body: m.body ?? "" };
       });
     const firstDelay = rawMessages[0]?.delay_minutes ?? 0;
-    setStepCreatorForm({
+    // datetime-local 用に "YYYY-MM-DDTHH:mm" 形式へ変換（UTC→ローカル）
+    const timingDate = seq.scheduled_at
+      ? (() => {
+          const d = new Date(seq.scheduled_at);
+          const pad = (n: number) => String(n).padStart(2, "0");
+          return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+        })()
+      : "";
+    const restoredCondition: DeliveryCondition =
+      seq.target_condition && typeof seq.target_condition === "object" && Array.isArray(seq.target_condition.rows)
+        ? seq.target_condition
+        : emptyDeliveryCondition;
+    return {
       ...emptyBroadcast,
-      name: seq.name.replace(/^\[予約\] /, ""),
+      name: seq.name.replace(/^\[予約\]\s*/, ""),
+      condition: restoredCondition.mode === "filtered" ? "filtered" : "all",
+      targetCondition: restoredCondition,
       messages: messages.length > 0 ? messages : [emptyMessage()],
-      timingMode: firstDelay === 0 ? "immediate" : "daysAfter",
+      timingMode:
+        seq.kind === "schedule"
+          ? "datetime"
+          : firstDelay === 0
+            ? "immediate"
+            : "daysAfter",
+      timingDate,
       timingDays: Math.floor(firstDelay / 1440),
       timingHours: Math.floor((firstDelay % 1440) / 60),
       timingMinutes: firstDelay % 60,
       status: seq.status === "paused" ? "paused" : "active",
-    });
+    };
+  };
+
+  const openEditStep = (seq: StepSequence) => {
+    setStepCreatorForm(buildFormFromSequence(seq));
     setEditingSequenceId(seq.id);
     setShowStepCreator(true);
+  };
+
+  const openEditSchedule = (seq: StepSequence) => {
+    setScheduleCreatorForm(buildFormFromSequence(seq));
+    setEditingSequenceId(seq.id);
+    setShowScheduleCreator(true);
   };
 
   const openChat = (f: Follower) => {
@@ -1283,6 +1612,253 @@ export default function LineDashboard() {
       f.line_user_id.includes(searchQuery);
   });
 
+  // 対象者確認モーダルを開く
+  const openAudiencePreview = async (form: BroadcastForm) => {
+    if (!selectedAccount) return;
+    setAudiencePreview({ open: true, loading: true, total: 0, matched: 0, sample: [], unsupported: [], error: null });
+    try {
+      const res = await fetch("/api/line/audience-preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          account_id: selectedAccount.id,
+          condition:
+            form.condition === "filtered"
+              ? form.targetCondition
+              : { ...emptyDeliveryCondition, mode: "all" },
+          labels: labels.map((l) => ({ id: l.id, assigned_users: l.assigned_users })),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setAudiencePreview((s) => ({ ...s, loading: false, error: data.error ?? `エラー: ${res.status}` }));
+        return;
+      }
+      setAudiencePreview({
+        open: true,
+        loading: false,
+        total: data.total ?? 0,
+        matched: data.matched ?? 0,
+        sample: data.sample ?? [],
+        unsupported: data.unsupported_fields ?? [],
+        error: null,
+      });
+    } catch (e) {
+      setAudiencePreview((s) => ({ ...s, loading: false, error: (e as Error).message }));
+    }
+  };
+
+  // 配信条件セクション（ラジオ + 条件行 + AND/OR追加 + 対象者確認）
+  const renderDeliveryConditionSection = (
+    form: BroadcastForm,
+    setForm: (f: BroadcastForm) => void,
+    titleLabel: string,
+  ) => {
+    const cond = form.targetCondition;
+    const setCond = (next: DeliveryCondition) => setForm({ ...form, targetCondition: next });
+    const disabled = form.condition !== "filtered";
+
+    const updateRow = (idx: number, patch: Partial<ConditionRow>) => {
+      const nextRows = cond.rows.map((r, i) => (i === idx ? { ...r, ...patch } : r));
+      // フィールドを変えたら op が非対応なら先頭に戻す
+      if (patch.field) {
+        const validOps = operatorsForField(patch.field);
+        if (!validOps.includes(nextRows[idx].op)) nextRows[idx].op = validOps[0];
+        nextRows[idx].value = "";
+      }
+      setCond({ ...cond, rows: nextRows });
+    };
+    const addRow = (connector: ConditionConnector) => {
+      setCond({
+        ...cond,
+        rows: [...cond.rows, { field: "line_display_name", op: "eq", value: "" }],
+        connectors: [...cond.connectors, connector],
+      });
+    };
+    const removeRow = (idx: number) => {
+      if (cond.rows.length <= 1) return;
+      const nextRows = cond.rows.filter((_, i) => i !== idx);
+      const nextConnectors = cond.connectors.filter((_, i) => i !== Math.max(0, idx - 1));
+      setCond({ ...cond, rows: nextRows, connectors: nextConnectors });
+    };
+
+    // 全フィールド（対応済みを先頭、未対応は末尾）
+    const allFields: ConditionField[] = [
+      "line_display_name",
+      "inflow_route",
+      "followed_at_date",
+      "followed_at_datetime",
+      "label",
+      "name",
+      "email",
+      "phone",
+      "address",
+      "gender",
+      "age",
+      "job",
+      "custom_free_text",
+      "scenario",
+      "broadcast",
+    ];
+
+    return (
+      <div className="px-5 py-4 border-b border-gray-200">
+        <h3 className="text-xs font-bold text-gray-700 mb-3">配信条件</h3>
+        <div className="space-y-2">
+          <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+            <input
+              type="radio"
+              name={`${titleLabel}-condition`}
+              checked={form.condition === "all"}
+              onChange={() => setForm({ ...form, condition: "all" })}
+              className="accent-blue-600"
+            />
+            シナリオ登録者全員に配信（条件を指定しない）
+          </label>
+          <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+            <input
+              type="radio"
+              name={`${titleLabel}-condition`}
+              checked={form.condition === "filtered"}
+              onChange={() => setForm({ ...form, condition: "filtered", targetCondition: { ...cond, mode: "filtered" } })}
+              className="accent-blue-600"
+            />
+            条件に該当する登録者に配信（条件を指定する）
+          </label>
+
+          {/* 条件行 */}
+          <div className={`mt-3 space-y-2 ${disabled ? "opacity-50 pointer-events-none" : ""}`}>
+            {cond.rows.map((row, idx) => {
+              const kind = inputKindForRow(row);
+              const ops = operatorsForField(row.field);
+              return (
+                <div key={idx} className="space-y-1">
+                  {idx > 0 && (
+                    <div className="text-[10px] font-bold text-gray-500">
+                      {cond.connectors[idx - 1] ?? "AND"}
+                    </div>
+                  )}
+                  <div className="flex items-center gap-2">
+                    <select
+                      value={row.field}
+                      onChange={(e) => updateRow(idx, { field: e.target.value as ConditionField })}
+                      className="flex-1 border border-gray-300 rounded-md px-2 py-1.5 text-xs bg-white"
+                    >
+                      {allFields.map((f) => (
+                        <option key={f} value={f}>
+                          {FIELD_LABELS[f]}
+                          {!isSupportedField(f) ? " (未対応)" : ""}
+                        </option>
+                      ))}
+                    </select>
+                    <select
+                      value={row.op}
+                      onChange={(e) => updateRow(idx, { op: e.target.value as ConditionOp })}
+                      className="w-44 border border-gray-300 rounded-md px-2 py-1.5 text-xs bg-white"
+                    >
+                      {ops.map((o) => (
+                        <option key={o} value={o}>
+                          {OP_LABELS[o]}
+                        </option>
+                      ))}
+                    </select>
+                    {kind === "none" ? (
+                      <div className="flex-1 text-xs text-gray-400 px-2">（値の入力不要）</div>
+                    ) : kind === "select" && row.field === "inflow_route" ? (
+                      <select
+                        value={row.value}
+                        onChange={(e) => updateRow(idx, { value: e.target.value })}
+                        className="flex-1 border border-gray-300 rounded-md px-2 py-1.5 text-xs bg-white"
+                      >
+                        <option value="">-- 選択してください --</option>
+                        {inflowRoutes.map((r) => (
+                          <option key={r.id} value={r.id}>
+                            {r.name}
+                          </option>
+                        ))}
+                      </select>
+                    ) : kind === "select" && row.field === "label" ? (
+                      <select
+                        value={row.value}
+                        onChange={(e) => updateRow(idx, { value: e.target.value })}
+                        className="flex-1 border border-gray-300 rounded-md px-2 py-1.5 text-xs bg-white"
+                      >
+                        <option value="">-- 選択してください --</option>
+                        {labels.map((l) => (
+                          <option key={l.id} value={l.id}>
+                            {l.name}
+                          </option>
+                        ))}
+                      </select>
+                    ) : kind === "date" ? (
+                      <input
+                        type="date"
+                        value={row.value}
+                        onChange={(e) => updateRow(idx, { value: e.target.value })}
+                        className="flex-1 border border-gray-300 rounded-md px-2 py-1.5 text-xs"
+                      />
+                    ) : kind === "datetime-local" ? (
+                      <input
+                        type="datetime-local"
+                        value={row.value}
+                        onChange={(e) => updateRow(idx, { value: e.target.value })}
+                        className="flex-1 border border-gray-300 rounded-md px-2 py-1.5 text-xs"
+                      />
+                    ) : (
+                      <input
+                        type="text"
+                        value={row.value}
+                        onChange={(e) => updateRow(idx, { value: e.target.value })}
+                        placeholder="値を入力"
+                        className="flex-1 border border-gray-300 rounded-md px-2 py-1.5 text-xs"
+                      />
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => removeRow(idx)}
+                      disabled={cond.rows.length <= 1}
+                      className="w-8 h-8 border border-gray-300 rounded-md text-gray-500 hover:bg-gray-100 disabled:opacity-30"
+                      title="この条件を削除"
+                    >
+                      −
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+            <div className="flex items-center gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => addRow("AND")}
+                className="px-3 py-1.5 border border-blue-400 text-blue-600 hover:bg-blue-50 text-xs font-medium rounded-md"
+              >
+                AND条件追加
+              </button>
+              <button
+                type="button"
+                onClick={() => addRow("OR")}
+                className="px-3 py-1.5 border border-blue-400 text-blue-600 hover:bg-blue-50 text-xs font-medium rounded-md"
+              >
+                OR条件追加
+              </button>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => openAudiencePreview(form)}
+            className="mt-3 px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white text-xs font-medium rounded-md transition"
+          >
+            対象者確認
+          </button>
+          <p className="text-[10px] text-gray-400 mt-1">
+            ※「(未対応)」のフィールドは現時点でフィルタに反映されません（無視されます）。
+          </p>
+        </div>
+      </div>
+    );
+  };
+
   // 配信作成フォーム（ステップ配信・予約配信で共用）
   const renderBroadcastCreator = (
     form: BroadcastForm,
@@ -1330,37 +1906,7 @@ export default function LineDashboard() {
           </div>
         </div>
         {/* 配信条件 */}
-        <div className="px-5 py-4 border-b border-gray-200">
-          <h3 className="text-xs font-bold text-gray-700 mb-3">配信条件</h3>
-          <div className="space-y-2">
-            <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
-              <input
-                type="radio"
-                name={`${titleLabel}-condition`}
-                checked={form.condition === "all"}
-                onChange={() => setForm({ ...form, condition: "all" })}
-                className="accent-blue-600"
-              />
-              シナリオ登録者全員に配信（条件を指定しない）
-            </label>
-            <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
-              <input
-                type="radio"
-                name={`${titleLabel}-condition`}
-                checked={form.condition === "filtered"}
-                onChange={() => setForm({ ...form, condition: "filtered" })}
-                className="accent-blue-600"
-              />
-              条件に該当する登録者に配信（条件を指定する）
-            </label>
-            <button
-              type="button"
-              className="mt-2 px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white text-xs font-medium rounded-md transition"
-            >
-              対象者確認
-            </button>
-          </div>
-        </div>
+        {renderDeliveryConditionSection(form, setForm, titleLabel)}
         {/* 配信メッセージ */}
         <div className="px-5 py-4 border-b border-gray-200">
           <h3 className="text-xs font-bold text-gray-700 mb-3">配信メッセージ</h3>
@@ -1962,6 +2508,7 @@ export default function LineDashboard() {
     { key: "schedule", label: "予約配信", icon: Icons.schedule },
     { key: "friend-page", label: "友だち追加ページ", icon: Icons.friendAdd },
     { key: "labels", label: "ラベル管理", icon: Icons.label },
+    { key: "actions", label: "アクション管理", icon: Icons.settings },
     { key: "templates", label: "定型文管理", icon: Icons.document },
     { key: "inflow", label: "流入経路", icon: Icons.friendAdd },
   ];
@@ -3076,12 +3623,20 @@ export default function LineDashboard() {
                           <td className="px-5 py-3 hidden md:table-cell"><StatusBadge status={f.status} /></td>
                           <td className="px-5 py-3 text-gray-500 hidden md:table-cell">{fmtShort(f.followed_at)}</td>
                           <td className="px-5 py-3">
-                            <button
-                              onClick={() => { setAccountSubView("chat"); openChat(f); }}
-                              className="px-3 py-1 bg-[#06C755] hover:bg-[#05a648] text-white text-xs font-medium rounded-md transition"
-                            >
-                              チャット
-                            </button>
+                            <div className="flex items-center gap-2">
+                              <button
+                                onClick={() => { setAccountSubView("chat"); openChat(f); }}
+                                className="px-3 py-1 bg-[#06C755] hover:bg-[#05a648] text-white text-xs font-medium rounded-md transition"
+                              >
+                                チャット
+                              </button>
+                              <button
+                                onClick={() => deleteFollower(f.id, f.display_name ?? f.line_user_id.slice(0, 10))}
+                                className="px-3 py-1 bg-red-500 hover:bg-red-600 text-white text-xs font-medium rounded-md transition"
+                              >
+                                削除
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       ))}
@@ -3224,13 +3779,13 @@ export default function LineDashboard() {
               )}
 
               <div className="max-w-5xl space-y-4">
-                {stepSequences.length === 0 ? (
+                {stepSequences.filter((s) => (s.kind ?? "step") === "step").length === 0 ? (
                   <div className="bg-white rounded-lg border border-gray-200 p-16 text-center text-gray-400">
                     <p className="text-lg mb-2">ステップ配信がありません</p>
                     <p className="text-sm">「新規シーケンス」から作成してください</p>
                   </div>
                 ) : (
-                  stepSequences.map((seq) => (
+                  stepSequences.filter((s) => (s.kind ?? "step") === "step").map((seq) => (
                     <div key={seq.id} className="bg-white rounded-lg border border-gray-200 overflow-hidden">
                       {/* シーケンスヘッダー: 管理名称の行をクリックで編集画面を開く */}
                       <div
@@ -3358,9 +3913,129 @@ export default function LineDashboard() {
                 </div>
               )}
               {!showScheduleCreator && (
-                <div className="max-w-5xl bg-white rounded-lg border border-gray-200 p-16 text-center text-gray-400">
-                  <p className="text-lg mb-2">予約配信がありません</p>
-                  <p className="text-sm">「新規追加」から作成してください</p>
+                <div className="max-w-5xl space-y-4">
+                  {stepSequences.filter((s) => s.kind === "schedule").length === 0 ? (
+                    <div className="bg-white rounded-lg border border-gray-200 p-16 text-center text-gray-400">
+                      <p className="text-lg mb-2">予約配信がありません</p>
+                      <p className="text-sm">「新規追加」から作成してください</p>
+                    </div>
+                  ) : (
+                    stepSequences
+                      .filter((s) => s.kind === "schedule")
+                      .sort((a, b) => {
+                        const at = a.scheduled_at ? new Date(a.scheduled_at).getTime() : 0;
+                        const bt = b.scheduled_at ? new Date(b.scheduled_at).getTime() : 0;
+                        return bt - at;
+                      })
+                      .map((seq) => {
+                        const scheduled = seq.scheduled_at
+                          ? new Date(seq.scheduled_at).toLocaleString("ja-JP", {
+                              year: "numeric",
+                              month: "2-digit",
+                              day: "2-digit",
+                              hour: "2-digit",
+                              minute: "2-digit",
+                            })
+                          : "日時未設定";
+                        const isSent = !!seq.sent_at;
+                        const isOverdue =
+                          !isSent &&
+                          !!seq.scheduled_at &&
+                          new Date(seq.scheduled_at).getTime() < Date.now();
+                        return (
+                          <div
+                            key={seq.id}
+                            className="bg-white rounded-lg border border-gray-200 overflow-hidden"
+                          >
+                            <div
+                              onClick={() => openEditSchedule(seq)}
+                              className="flex items-center justify-between px-5 py-3 bg-gray-50 border-b border-gray-200 cursor-pointer hover:bg-gray-100 transition"
+                            >
+                              <div className="flex items-center gap-3 min-w-0">
+                                <h3 className="text-sm font-bold text-gray-800 truncate">
+                                  {seq.name}
+                                </h3>
+                                {isSent ? (
+                                  <span className="px-2 py-0.5 text-xs rounded-full font-medium flex-shrink-0 bg-gray-200 text-gray-600">
+                                    送信済み
+                                  </span>
+                                ) : seq.status === "paused" ? (
+                                  <span className="px-2 py-0.5 text-xs rounded-full font-medium flex-shrink-0 bg-yellow-100 text-yellow-700">
+                                    一時停止
+                                  </span>
+                                ) : isOverdue ? (
+                                  <span className="px-2 py-0.5 text-xs rounded-full font-medium flex-shrink-0 bg-orange-100 text-orange-700">
+                                    送信待ち
+                                  </span>
+                                ) : (
+                                  <span className="px-2 py-0.5 text-xs rounded-full font-medium flex-shrink-0 bg-green-100 text-green-700">
+                                    予約中
+                                  </span>
+                                )}
+                                <span className="text-xs text-gray-400 flex-shrink-0">
+                                  {seq.messages?.length ?? 0}通
+                                </span>
+                              </div>
+                              <div
+                                className="flex items-center gap-2 flex-shrink-0"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <span className="text-xs text-gray-500">
+                                  {isSent ? `送信: ${new Date(seq.sent_at!).toLocaleString("ja-JP", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}` : `予定: ${scheduled}`}
+                                </span>
+                                {!isSent && (
+                                  <button
+                                    onClick={async () => {
+                                      const newStatus =
+                                        seq.status === "active" ? "paused" : "active";
+                                      await fetch("/api/line/step-sequences", {
+                                        method: "PUT",
+                                        headers: { "Content-Type": "application/json" },
+                                        body: JSON.stringify({
+                                          id: seq.id,
+                                          status: newStatus,
+                                        }),
+                                      });
+                                      fetchStepSequences();
+                                    }}
+                                    className={`px-3 py-1 text-xs font-medium rounded-md transition ${seq.status === "active" ? "bg-yellow-100 text-yellow-700 hover:bg-yellow-200" : "bg-green-100 text-green-700 hover:bg-green-200"}`}
+                                  >
+                                    {seq.status === "active" ? "一時停止" : "再開"}
+                                  </button>
+                                )}
+                                <button
+                                  onClick={async () => {
+                                    if (!confirm(`「${seq.name}」を削除しますか？`)) return;
+                                    await fetch("/api/line/step-sequences", {
+                                      method: "DELETE",
+                                      headers: { "Content-Type": "application/json" },
+                                      body: JSON.stringify({ id: seq.id }),
+                                    });
+                                    fetchStepSequences();
+                                  }}
+                                  className="px-2 py-1 text-xs text-red-500 hover:bg-red-50 rounded-md transition"
+                                >
+                                  削除
+                                </button>
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => openEditSchedule(seq)}
+                              className="w-full text-left px-5 py-3 text-xs text-gray-600 hover:bg-gray-50"
+                            >
+                              {seq.messages && seq.messages.length > 0
+                                ? seq.messages
+                                    .slice()
+                                    .sort((a, b) => a.step_order - b.step_order)
+                                    .map((m) => m.title)
+                                    .join(" / ")
+                                : "メッセージがありません（クリックして編集）"}
+                            </button>
+                          </div>
+                        );
+                      })
+                  )}
                 </div>
               )}
             </main>
@@ -3606,6 +4281,464 @@ export default function LineDashboard() {
                   </div>
                 )}
               </div>
+            </main>
+          </>
+        )}
+
+        {/* ============================================================ */}
+        {/* アカウント詳細: アクション管理 */}
+        {/* ============================================================ */}
+        {mainView === "account-detail" && accountSubView === "actions" && (
+          <>
+            <header className="bg-white border-b border-gray-200 px-4 md:px-6 py-3 flex items-center justify-between flex-shrink-0">
+              <h1 className="text-base font-bold text-gray-800">アクション管理</h1>
+              <button
+                onClick={openNewActionRule}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded-md transition"
+              >
+                {Icons.plus}
+                新規ルール
+              </button>
+            </header>
+            <main className="flex-1 overflow-y-auto p-4 md:p-6">
+              <div className="max-w-5xl space-y-3">
+                {actionRules.length === 0 ? (
+                  <div className="bg-white rounded-lg border border-gray-200 p-16 text-center text-gray-400">
+                    <p className="text-lg mb-2">アクションルールがありません</p>
+                    <p className="text-sm">「+ 新規ルール」からトリガー → アクションを設定してください</p>
+                  </div>
+                ) : (
+                  actionRules.map((rule) => {
+                    const triggerLabel: Record<ActionTriggerType, string> = {
+                      follow: "友だち追加時",
+                      label_added: "ラベル追加時",
+                      message_received: "メッセージ受信時",
+                      sequence_completed: "シナリオ完了時",
+                    };
+                    const actionLabel: Record<ActionActionType, string> = {
+                      start_sequence: "シナリオ配信開始",
+                      label_add: "ラベル追加",
+                      label_remove: "ラベル削除",
+                      move_sequence: "別シナリオへ移動",
+                      webhook: "Webhook送信",
+                    };
+                    return (
+                      <div key={rule.id} className="bg-white rounded-lg border border-gray-200 p-4">
+                        <div className="flex items-start justify-between gap-4">
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 mb-2">
+                              <span className="text-sm font-bold text-gray-800 truncate">{rule.name}</span>
+                              <span
+                                className={`text-[10px] px-2 py-0.5 rounded-full ${
+                                  rule.status === "active"
+                                    ? "bg-green-100 text-green-700"
+                                    : "bg-gray-100 text-gray-500"
+                                }`}
+                              >
+                                {rule.status === "active" ? "有効" : "停止"}
+                              </span>
+                            </div>
+                            <div className="text-xs text-gray-600 flex flex-wrap gap-x-4 gap-y-1">
+                              <span><span className="text-gray-400">トリガー: </span>{triggerLabel[rule.trigger_type]}</span>
+                              <span><span className="text-gray-400">アクション: </span>{actionLabel[rule.action_type]}</span>
+                              {rule.conditions.length > 0 && (
+                                <span><span className="text-gray-400">条件: </span>{rule.conditions.length}件</span>
+                              )}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-1 flex-shrink-0">
+                            <button
+                              onClick={() => toggleActionRuleStatus(rule)}
+                              className="px-2 py-1 text-xs text-gray-600 hover:bg-gray-100 rounded transition"
+                            >
+                              {rule.status === "active" ? "停止" : "有効化"}
+                            </button>
+                            <button
+                              onClick={() => openEditActionRule(rule)}
+                              className="px-2 py-1 text-xs text-blue-600 hover:bg-blue-50 rounded transition"
+                            >
+                              編集
+                            </button>
+                            <button
+                              onClick={() => deleteActionRule(rule.id)}
+                              className="px-2 py-1 text-xs text-red-400 hover:bg-red-50 rounded transition"
+                            >
+                              削除
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+
+              {/* アクションルール作成/編集モーダル */}
+              {showActionModal && (
+                <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+                  <div className="bg-white rounded-xl shadow-xl w-full max-w-xl max-h-[90vh] overflow-y-auto">
+                    <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 sticky top-0 bg-white">
+                      <h3 className="font-bold text-gray-800">
+                        {editingActionRule ? "アクションルールを編集" : "アクションルールを作成"}
+                      </h3>
+                      <button onClick={() => setShowActionModal(false)} className="text-gray-400 hover:text-gray-600">{Icons.close}</button>
+                    </div>
+                    <div className="p-5 space-y-4">
+                      {/* ルール名 */}
+                      <div>
+                        <label className="text-xs text-gray-500 block mb-1.5 font-medium">ルール名</label>
+                        <input
+                          type="text"
+                          value={actionForm.name}
+                          onChange={(e) => setActionForm({ ...actionForm, name: e.target.value })}
+                          placeholder="例: 初回フォロワーにシナリオA配信"
+                          className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                        />
+                      </div>
+
+                      {/* トリガー */}
+                      <div>
+                        <label className="text-xs text-gray-500 block mb-1.5 font-medium">トリガー</label>
+                        <select
+                          value={actionForm.trigger_type}
+                          onChange={(e) => setActionForm({ ...actionForm, trigger_type: e.target.value as ActionTriggerType, trigger_config: {} })}
+                          className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                        >
+                          <option value="follow">友だち追加時</option>
+                          <option value="label_added">ラベル追加時</option>
+                          <option value="message_received">メッセージ受信時</option>
+                          <option value="sequence_completed">シナリオ完了時</option>
+                        </select>
+
+                        {actionForm.trigger_type === "label_added" && (
+                          <div className="mt-2">
+                            <label className="text-[10px] text-gray-400 block mb-1">対象ラベル（空欄なら任意）</label>
+                            <select
+                              value={(actionForm.trigger_config.label_id as string) ?? ""}
+                              onChange={(e) =>
+                                setActionForm({
+                                  ...actionForm,
+                                  trigger_config: e.target.value ? { label_id: e.target.value } : {},
+                                })
+                              }
+                              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
+                            >
+                              <option value="">（任意ラベル）</option>
+                              {labels.map((l) => (
+                                <option key={l.id} value={l.id}>{l.name}</option>
+                              ))}
+                            </select>
+                          </div>
+                        )}
+
+                        {actionForm.trigger_type === "message_received" && (
+                          <div className="mt-2">
+                            <label className="text-[10px] text-gray-400 block mb-1">キーワード（空欄なら全受信）</label>
+                            <input
+                              type="text"
+                              value={(actionForm.trigger_config.keyword as string) ?? ""}
+                              onChange={(e) =>
+                                setActionForm({
+                                  ...actionForm,
+                                  trigger_config: e.target.value ? { keyword: e.target.value } : {},
+                                })
+                              }
+                              placeholder="例: 予約"
+                              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
+                            />
+                          </div>
+                        )}
+
+                        {actionForm.trigger_type === "sequence_completed" && (
+                          <div className="mt-2">
+                            <label className="text-[10px] text-gray-400 block mb-1">対象シナリオ（空欄なら任意）</label>
+                            <select
+                              value={(actionForm.trigger_config.sequence_id as string) ?? ""}
+                              onChange={(e) =>
+                                setActionForm({
+                                  ...actionForm,
+                                  trigger_config: e.target.value ? { sequence_id: e.target.value } : {},
+                                })
+                              }
+                              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
+                            >
+                              <option value="">（任意シナリオ）</option>
+                              {stepSequences.map((s) => (
+                                <option key={s.id} value={s.id}>{s.name}</option>
+                              ))}
+                            </select>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* 条件 */}
+                      <div>
+                        <div className="flex items-center justify-between mb-1.5">
+                          <label className="text-xs text-gray-500 font-medium">条件（AND評価）</label>
+                          <div className="flex gap-1">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setActionForm({
+                                  ...actionForm,
+                                  conditions: [...actionForm.conditions, { type: "label_in", label_ids: [] }],
+                                })
+                              }
+                              className="text-[10px] px-2 py-0.5 bg-gray-100 hover:bg-gray-200 rounded"
+                            >
+                              + ラベル
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setActionForm({
+                                  ...actionForm,
+                                  conditions: [...actionForm.conditions, { type: "inflow_route_in", route_ids: [] }],
+                                })
+                              }
+                              className="text-[10px] px-2 py-0.5 bg-gray-100 hover:bg-gray-200 rounded"
+                            >
+                              + 流入経路
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setActionForm({
+                                  ...actionForm,
+                                  conditions: [...actionForm.conditions, { type: "days_after_follow", days: 1 }],
+                                })
+                              }
+                              className="text-[10px] px-2 py-0.5 bg-gray-100 hover:bg-gray-200 rounded"
+                            >
+                              + 登録後N日
+                            </button>
+                          </div>
+                        </div>
+                        <div className="space-y-2">
+                          {actionForm.conditions.length === 0 && (
+                            <div className="text-[11px] text-gray-400 px-2">条件なし（トリガー発火時に即実行）</div>
+                          )}
+                          {actionForm.conditions.map((c, idx) => (
+                            <div key={idx} className="flex items-start gap-2 border border-gray-200 rounded-lg p-2">
+                              <div className="flex-1">
+                                {c.type === "label_in" && (
+                                  <div>
+                                    <div className="text-[10px] text-gray-400 mb-1">次のいずれかのラベルが付与されている</div>
+                                    <select
+                                      multiple
+                                      value={c.label_ids ?? []}
+                                      onChange={(e) => {
+                                        const vals = Array.from(e.target.selectedOptions).map((o) => o.value);
+                                        const nextConds = [...actionForm.conditions];
+                                        nextConds[idx] = { ...c, label_ids: vals };
+                                        setActionForm({ ...actionForm, conditions: nextConds });
+                                      }}
+                                      className="w-full border border-gray-200 rounded px-2 py-1 text-xs"
+                                      size={Math.min(4, Math.max(2, labels.length))}
+                                    >
+                                      {labels.map((l) => (
+                                        <option key={l.id} value={l.id}>{l.name}</option>
+                                      ))}
+                                    </select>
+                                  </div>
+                                )}
+                                {c.type === "inflow_route_in" && (
+                                  <div>
+                                    <div className="text-[10px] text-gray-400 mb-1">次のいずれかの流入経路から登録</div>
+                                    <select
+                                      multiple
+                                      value={c.route_ids ?? []}
+                                      onChange={(e) => {
+                                        const vals = Array.from(e.target.selectedOptions).map((o) => o.value);
+                                        const nextConds = [...actionForm.conditions];
+                                        nextConds[idx] = { ...c, route_ids: vals };
+                                        setActionForm({ ...actionForm, conditions: nextConds });
+                                      }}
+                                      className="w-full border border-gray-200 rounded px-2 py-1 text-xs"
+                                      size={Math.min(4, Math.max(2, inflowRoutes.length))}
+                                    >
+                                      {inflowRoutes.map((r) => (
+                                        <option key={r.id} value={r.id}>{r.name}</option>
+                                      ))}
+                                    </select>
+                                  </div>
+                                )}
+                                {c.type === "days_after_follow" && (
+                                  <div>
+                                    <div className="text-[10px] text-gray-400 mb-1">友だち追加から何日後に実行するか</div>
+                                    <div className="flex items-center gap-2">
+                                      <input
+                                        type="number"
+                                        min={0}
+                                        value={c.days ?? 0}
+                                        onChange={(e) => {
+                                          const nextConds = [...actionForm.conditions];
+                                          nextConds[idx] = { ...c, days: parseInt(e.target.value, 10) || 0 };
+                                          setActionForm({ ...actionForm, conditions: nextConds });
+                                        }}
+                                        className="w-20 border border-gray-200 rounded px-2 py-1 text-xs"
+                                      />
+                                      <span className="text-xs text-gray-500">日後</span>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const nextConds = actionForm.conditions.filter((_, i) => i !== idx);
+                                  setActionForm({ ...actionForm, conditions: nextConds });
+                                }}
+                                className="text-xs text-red-400 hover:text-red-600 px-1"
+                              >
+                                ×
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* アクション */}
+                      <div>
+                        <label className="text-xs text-gray-500 block mb-1.5 font-medium">アクション</label>
+                        <select
+                          value={actionForm.action_type}
+                          onChange={(e) => setActionForm({ ...actionForm, action_type: e.target.value as ActionActionType, action_config: {} })}
+                          className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
+                        >
+                          <option value="start_sequence">シナリオ配信開始</option>
+                          <option value="label_add">ラベル追加</option>
+                          <option value="label_remove">ラベル削除</option>
+                          <option value="move_sequence">別シナリオへ移動</option>
+                          <option value="webhook">Webhook送信</option>
+                        </select>
+
+                        {(actionForm.action_type === "start_sequence") && (
+                          <div className="mt-2">
+                            <label className="text-[10px] text-gray-400 block mb-1">配信するシナリオ</label>
+                            <select
+                              value={(actionForm.action_config.sequence_id as string) ?? ""}
+                              onChange={(e) =>
+                                setActionForm({ ...actionForm, action_config: { sequence_id: e.target.value } })
+                              }
+                              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
+                            >
+                              <option value="">選択してください</option>
+                              {stepSequences.map((s) => (
+                                <option key={s.id} value={s.id}>{s.name}</option>
+                              ))}
+                            </select>
+                          </div>
+                        )}
+
+                        {(actionForm.action_type === "label_add" || actionForm.action_type === "label_remove") && (
+                          <div className="mt-2">
+                            <label className="text-[10px] text-gray-400 block mb-1">対象ラベル</label>
+                            <select
+                              value={(actionForm.action_config.label_id as string) ?? ""}
+                              onChange={(e) =>
+                                setActionForm({ ...actionForm, action_config: { label_id: e.target.value } })
+                              }
+                              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
+                            >
+                              <option value="">選択してください</option>
+                              {labels.map((l) => (
+                                <option key={l.id} value={l.id}>{l.name}</option>
+                              ))}
+                            </select>
+                          </div>
+                        )}
+
+                        {actionForm.action_type === "move_sequence" && (
+                          <div className="mt-2 space-y-2">
+                            <div>
+                              <label className="text-[10px] text-gray-400 block mb-1">移動元シナリオ（任意）</label>
+                              <select
+                                value={(actionForm.action_config.from_sequence_id as string) ?? ""}
+                                onChange={(e) =>
+                                  setActionForm({
+                                    ...actionForm,
+                                    action_config: { ...actionForm.action_config, from_sequence_id: e.target.value },
+                                  })
+                                }
+                                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
+                              >
+                                <option value="">（なし）</option>
+                                {stepSequences.map((s) => (
+                                  <option key={s.id} value={s.id}>{s.name}</option>
+                                ))}
+                              </select>
+                            </div>
+                            <div>
+                              <label className="text-[10px] text-gray-400 block mb-1">移動先シナリオ</label>
+                              <select
+                                value={(actionForm.action_config.to_sequence_id as string) ?? ""}
+                                onChange={(e) =>
+                                  setActionForm({
+                                    ...actionForm,
+                                    action_config: { ...actionForm.action_config, to_sequence_id: e.target.value },
+                                  })
+                                }
+                                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
+                              >
+                                <option value="">選択してください</option>
+                                {stepSequences.map((s) => (
+                                  <option key={s.id} value={s.id}>{s.name}</option>
+                                ))}
+                              </select>
+                            </div>
+                          </div>
+                        )}
+
+                        {actionForm.action_type === "webhook" && (
+                          <div className="mt-2 space-y-2">
+                            <div>
+                              <label className="text-[10px] text-gray-400 block mb-1">送信先URL</label>
+                              <input
+                                type="url"
+                                value={(actionForm.action_config.url as string) ?? ""}
+                                onChange={(e) =>
+                                  setActionForm({
+                                    ...actionForm,
+                                    action_config: { ...actionForm.action_config, url: e.target.value },
+                                  })
+                                }
+                                placeholder="https://..."
+                                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[10px] text-gray-400 block mb-1">メソッド</label>
+                              <select
+                                value={(actionForm.action_config.method as string) ?? "POST"}
+                                onChange={(e) =>
+                                  setActionForm({
+                                    ...actionForm,
+                                    action_config: { ...actionForm.action_config, method: e.target.value },
+                                  })
+                                }
+                                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
+                              >
+                                <option value="POST">POST</option>
+                                <option value="GET">GET</option>
+                              </select>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex justify-end gap-2 px-5 py-4 border-t border-gray-200 sticky bottom-0 bg-white">
+                      <button onClick={() => setShowActionModal(false)} className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition">キャンセル</button>
+                      <button
+                        onClick={saveActionRule}
+                        className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition"
+                      >
+                        {editingActionRule ? "更新" : "作成"}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
             </main>
           </>
         )}
@@ -4192,6 +5325,22 @@ export default function LineDashboard() {
                   </div>
                 </label>
               </div>
+              {/* 削除 */}
+              <div className="bg-red-50 border border-red-200 rounded-lg p-3">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex-1">
+                    <div className="text-sm font-medium text-red-800">この友だちを削除</div>
+                    <div className="text-[11px] text-red-600 mt-0.5">友だち情報とメッセージ履歴を完全に削除します（元に戻せません）</div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => deleteFollower(userDetailTarget.id, userDetailTarget.display_name ?? userDetailTarget.line_user_id.slice(0, 10))}
+                    className="px-3 py-1.5 bg-red-500 hover:bg-red-600 text-white text-xs font-medium rounded-md transition flex-shrink-0"
+                  >
+                    削除
+                  </button>
+                </div>
+              </div>
               {/* 友だち追加日 */}
               <div className="text-xs text-gray-500">
                 友だち追加日: {fmtShort(userDetailTarget.followed_at)}
@@ -4264,6 +5413,70 @@ export default function LineDashboard() {
                   className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition"
                 >
                   保存
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 対象者確認モーダル */}
+      {audiencePreview.open && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md max-h-[80vh] overflow-y-auto">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
+              <h3 className="font-bold text-gray-800 text-sm">対象者確認</h3>
+              <button
+                onClick={() => setAudiencePreview((s) => ({ ...s, open: false }))}
+                className="text-gray-400 hover:text-gray-600"
+              >
+                {Icons.close}
+              </button>
+            </div>
+            <div className="p-5 space-y-4">
+              {audiencePreview.loading ? (
+                <div className="text-center text-sm text-gray-500 py-8">集計中...</div>
+              ) : audiencePreview.error ? (
+                <div className="text-sm text-red-600">エラー: {audiencePreview.error}</div>
+              ) : (
+                <>
+                  <div className="bg-gray-50 rounded-lg p-4 text-center">
+                    <div className="text-[11px] text-gray-500">対象人数</div>
+                    <div className="text-2xl font-bold text-gray-800 mt-1">
+                      {audiencePreview.matched}
+                      <span className="text-sm text-gray-400 font-normal ml-1">/ {audiencePreview.total} 人</span>
+                    </div>
+                  </div>
+                  {audiencePreview.unsupported.length > 0 && (
+                    <div className="bg-yellow-50 border border-yellow-200 rounded-md p-3 text-[11px] text-yellow-800">
+                      <div className="font-bold mb-1">※ 以下のフィールドは未対応のためフィルタに反映されていません:</div>
+                      <div>{audiencePreview.unsupported.join(", ")}</div>
+                    </div>
+                  )}
+                  {audiencePreview.sample.length > 0 && (
+                    <div>
+                      <div className="text-[11px] text-gray-500 mb-2">サンプル（最大20名）</div>
+                      <div className="space-y-1 max-h-60 overflow-y-auto">
+                        {audiencePreview.sample.map((s) => (
+                          <div key={s.id} className="flex items-center justify-between text-xs border border-gray-100 rounded px-2 py-1.5">
+                            <span className="truncate">{s.display_name ?? "(名前なし)"}</span>
+                            <span className="text-gray-400 font-mono text-[10px] truncate ml-2">{s.line_user_id.slice(0, 12)}...</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {audiencePreview.matched === 0 && !audiencePreview.error && (
+                    <div className="text-[11px] text-gray-500 text-center">条件に一致する登録者がいません。</div>
+                  )}
+                </>
+              )}
+              <div className="flex justify-end">
+                <button
+                  onClick={() => setAudiencePreview((s) => ({ ...s, open: false }))}
+                  className="px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 text-sm rounded-lg"
+                >
+                  閉じる
                 </button>
               </div>
             </div>
