@@ -1,9 +1,8 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import {
-  MATCHING_TYPES,
   PRODUCTS,
   calculateMatching,
   type MatchingResult,
@@ -17,26 +16,118 @@ export default function MatchingResult() {
   const [showAi, setShowAi] = useState(false);
   const [aiGenerating, setAiGenerating] = useState(false);
 
-  useEffect(() => {
-    const stored = localStorage.getItem("matching_diagnosis");
-    if (!stored) {
-      router.replace("/matching/shindan");
-      return;
+  // DB保存
+  const [diagnosisId, setDiagnosisId] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState(false);
+
+  // 面談予約フォーム
+  const [showBooking, setShowBooking] = useState(false);
+  const [bookingDate, setBookingDate] = useState("");
+  const [bookingTime, setBookingTime] = useState("");
+  const [contactMethod, setContactMethod] = useState("phone");
+  const [bookingSubmitting, setBookingSubmitting] = useState(false);
+  const [bookingDone, setBookingDone] = useState(false);
+
+  // 予約可能日（明日から14日間）
+  const availableDates = useMemo(() => {
+    const dates: string[] = [];
+    const now = new Date();
+    for (let i = 1; i <= 14; i++) {
+      const d = new Date(now);
+      d.setDate(d.getDate() + i);
+      dates.push(d.toISOString().split("T")[0]);
     }
-    const data = JSON.parse(stored);
-    setUserName(data.name || "");
-    const res = calculateMatching(data.answers);
-    setResult(res);
-    setLoading(false);
+    return dates;
+  }, []);
+
+  const timeSlots = [
+    "10:00", "11:00", "13:00", "14:00", "15:00", "16:00", "17:00", "19:00", "20:00",
+  ];
+
+  const formatDate = (iso: string) => {
+    const d = new Date(iso + "T00:00:00");
+    const weekdays = ["日", "月", "火", "水", "木", "金", "土"];
+    return `${d.getMonth() + 1}/${d.getDate()}（${weekdays[d.getDay()]}）`;
+  };
+
+  // 初期化：結果計算 + DB保存
+  useEffect(() => {
+    const init = async () => {
+      const stored = localStorage.getItem("matching_diagnosis");
+      if (!stored) {
+        router.replace("/matching/shindan");
+        return;
+      }
+      const data = JSON.parse(stored);
+      setUserName(data.name || "");
+      const res = calculateMatching(data.answers);
+      setResult(res);
+      setLoading(false);
+
+      // DB保存（まだ保存していなければ）
+      if (!data.savedId) {
+        try {
+          const resp = await fetch("/api/matching/diagnoses", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              name: data.name || null,
+              birthday: data.birthday || null,
+              answers: data.answers,
+              typeId: res.type.id,
+              scores: res.scores,
+              topProducts: res.topProducts.map((p) => p.id),
+            }),
+          });
+          if (resp.ok) {
+            const { id } = await resp.json();
+            setDiagnosisId(id);
+            // savedIdをlocalStorageに書き戻して二重保存を防ぐ
+            data.savedId = id;
+            localStorage.setItem("matching_diagnosis", JSON.stringify(data));
+          } else {
+            setSaveError(true);
+          }
+        } catch {
+          setSaveError(true);
+        }
+      } else {
+        setDiagnosisId(data.savedId);
+      }
+    };
+    init();
   }, [router]);
 
   const handleAiGenerate = () => {
     setAiGenerating(true);
-    // 演出：1.5秒のローディングアニメーション後に表示
     setTimeout(() => {
       setAiGenerating(false);
       setShowAi(true);
     }, 1500);
+  };
+
+  const handleBooking = async () => {
+    if (!diagnosisId || !bookingDate || !bookingTime) return;
+    setBookingSubmitting(true);
+    try {
+      const resp = await fetch("/api/matching/consultations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          diagnosisId,
+          preferredDate: bookingDate,
+          preferredTime: bookingTime,
+          contactMethod,
+        }),
+      });
+      if (resp.ok) {
+        setBookingDone(true);
+      }
+    } catch {
+      // エラーでも画面は維持
+    } finally {
+      setBookingSubmitting(false);
+    }
   };
 
   if (loading || !result) {
@@ -185,8 +276,6 @@ export default function MatchingResult() {
               <span className="text-lg">🤖</span>
               <span>AI未来予測</span>
             </h3>
-
-            {/* このまま何もしなかった場合 */}
             <div className="mb-5 p-4 rounded-xl bg-red-500/5 border border-red-500/15">
               <p className="text-red-400 text-xs font-bold mb-2 flex items-center gap-1">
                 <span>⚠️</span> 現在の延長線上
@@ -195,14 +284,13 @@ export default function MatchingResult() {
                 副業を始めないまま1年が過ぎると、物価上昇や増税の影響で実質的な可処分所得は減り続けます。「いつかやろう」と思っている間に、同世代との収入格差は広がり、将来への不安は増す一方です。
               </p>
             </div>
-
-            {/* 適性を活かした場合 */}
             <div className="p-4 rounded-xl bg-green-500/5 border border-green-500/15">
               <p className="text-green-400 text-xs font-bold mb-2 flex items-center gap-1">
                 <span>✨</span> 適性を活かした場合
               </p>
               <p className="text-gray-300 text-sm leading-relaxed">
-                {userName ? `${userName}さん` : "あなた"}の「{type.name}」としての強みを活かせば、
+                {userName ? `${userName}さん` : "あなた"}の「{type.name}
+                」としての強みを活かせば、
                 {type.recommendedProducts
                   .map((pid) => PRODUCTS.find((p) => p.id === pid)?.name)
                   .filter(Boolean)
@@ -213,42 +301,169 @@ export default function MatchingResult() {
           </div>
         )}
 
-        {/* 個別相談CTA */}
-        <div
-          className="rounded-2xl p-6 mb-6 border text-center"
-          style={{
-            background:
-              "linear-gradient(135deg, rgba(59,130,246,0.15), rgba(6,182,212,0.1))",
-            borderColor: "rgba(59,130,246,0.3)",
-            boxShadow: "0 0 40px rgba(59,130,246,0.15)",
-          }}
-        >
-          <div className="text-3xl mb-3">💬</div>
-          <h3 className="text-xl font-bold text-white mb-2">
-            専門アドバイザーに相談
-          </h3>
-          <p className="text-gray-300 text-sm leading-relaxed mb-5">
-            診断データをもとに、あなたに合った
-            <br />
-            具体的な副業プランを個別にご提案します。
-            <br />
-            <span className="text-blue-300 font-medium">無料・オンライン・30分</span>
-          </p>
-
-          {/* TODO: 面談予約カレンダー埋め込み or LINE誘導 */}
-          <button
-            onClick={() => {
-              // 後でLINE URLやカレンダー埋め込みに差し替え
-              alert("面談予約機能は近日実装予定です");
+        {/* 個別相談予約 */}
+        {!bookingDone ? (
+          <div
+            className="rounded-2xl p-6 mb-6 border"
+            style={{
+              background:
+                "linear-gradient(135deg, rgba(59,130,246,0.15), rgba(6,182,212,0.1))",
+              borderColor: "rgba(59,130,246,0.3)",
+              boxShadow: "0 0 40px rgba(59,130,246,0.15)",
             }}
-            className="w-full py-4 rounded-xl font-bold text-white text-base bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 transition-all shadow-lg shadow-blue-500/25 active:scale-[0.98]"
           >
-            無料の個別相談を予約する
-          </button>
-          <p className="text-center text-xs text-gray-500 mt-3">
-            ※ 強引な勧誘は一切ありません
-          </p>
-        </div>
+            <div className="text-center mb-5">
+              <div className="text-3xl mb-3">💬</div>
+              <h3 className="text-xl font-bold text-white mb-2">
+                専門アドバイザーに相談
+              </h3>
+              <p className="text-gray-300 text-sm leading-relaxed">
+                診断データをもとに、あなたに合った
+                <br />
+                具体的な副業プランを個別にご提案します。
+                <br />
+                <span className="text-blue-300 font-medium">
+                  無料・オンライン・30分
+                </span>
+              </p>
+            </div>
+
+            {!showBooking ? (
+              <>
+                <button
+                  onClick={() => setShowBooking(true)}
+                  disabled={!diagnosisId && !saveError}
+                  className="w-full py-4 rounded-xl font-bold text-white text-base bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 transition-all shadow-lg shadow-blue-500/25 active:scale-[0.98] disabled:opacity-50"
+                >
+                  無料の個別相談を予約する
+                </button>
+                <p className="text-center text-xs text-gray-500 mt-3">
+                  ※ 強引な勧誘は一切ありません
+                </p>
+              </>
+            ) : (
+              <div className="space-y-4 animate-fade-in">
+                {/* 希望日 */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-2">
+                    ご希望の日程
+                  </label>
+                  <div className="grid grid-cols-3 gap-2">
+                    {availableDates.map((date) => (
+                      <button
+                        key={date}
+                        onClick={() => setBookingDate(date)}
+                        className={`py-2.5 rounded-lg text-sm font-medium transition-all ${
+                          bookingDate === date
+                            ? "bg-blue-500 text-white"
+                            : "bg-white/5 border border-white/15 text-gray-300 hover:bg-white/10"
+                        }`}
+                      >
+                        {formatDate(date)}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* 希望時間 */}
+                {bookingDate && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-300 mb-2">
+                      ご希望の時間帯
+                    </label>
+                    <div className="grid grid-cols-3 gap-2">
+                      {timeSlots.map((time) => (
+                        <button
+                          key={time}
+                          onClick={() => setBookingTime(time)}
+                          className={`py-2.5 rounded-lg text-sm font-medium transition-all ${
+                            bookingTime === time
+                              ? "bg-blue-500 text-white"
+                              : "bg-white/5 border border-white/15 text-gray-300 hover:bg-white/10"
+                          }`}
+                        >
+                          {time}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* 相談方法 */}
+                {bookingTime && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-300 mb-2">
+                      ご希望の相談方法
+                    </label>
+                    <div className="grid grid-cols-3 gap-2">
+                      {[
+                        { value: "phone", label: "電話" },
+                        { value: "zoom", label: "Zoom" },
+                        { value: "line", label: "LINE通話" },
+                      ].map((m) => (
+                        <button
+                          key={m.value}
+                          onClick={() => setContactMethod(m.value)}
+                          className={`py-2.5 rounded-lg text-sm font-medium transition-all ${
+                            contactMethod === m.value
+                              ? "bg-blue-500 text-white"
+                              : "bg-white/5 border border-white/15 text-gray-300 hover:bg-white/10"
+                          }`}
+                        >
+                          {m.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* 予約確定ボタン */}
+                {bookingDate && bookingTime && (
+                  <div className="pt-2">
+                    <p className="text-center text-sm text-gray-300 mb-3">
+                      <span className="text-blue-400 font-medium">
+                        {formatDate(bookingDate)} {bookingTime}〜
+                      </span>
+                      （{contactMethod === "phone" ? "電話" : contactMethod === "zoom" ? "Zoom" : "LINE通話"}）
+                    </p>
+                    <button
+                      onClick={handleBooking}
+                      disabled={bookingSubmitting}
+                      className="w-full py-4 rounded-xl font-bold text-white text-base bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 transition-all shadow-lg shadow-blue-500/25 active:scale-[0.98] disabled:opacity-70"
+                    >
+                      {bookingSubmitting ? (
+                        <span className="flex items-center justify-center gap-2">
+                          <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                          予約中...
+                        </span>
+                      ) : (
+                        "この日時で予約する"
+                      )}
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        ) : (
+          /* 予約完了メッセージ */
+          <div className="rounded-2xl bg-green-500/10 border border-green-500/20 p-6 mb-6 text-center animate-fade-in">
+            <div className="text-4xl mb-3">✅</div>
+            <h3 className="text-xl font-bold text-white mb-2">
+              予約が完了しました！
+            </h3>
+            <p className="text-gray-300 text-sm leading-relaxed mb-2">
+              <span className="text-green-400 font-medium">
+                {formatDate(bookingDate)} {bookingTime}〜
+              </span>
+            </p>
+            <p className="text-gray-400 text-xs leading-relaxed">
+              担当アドバイザーから事前にご連絡いたします。
+              <br />
+              お気軽にご質問やご要望をお伝えください。
+            </p>
+          </div>
+        )}
 
         {/* やり直しリンク */}
         <div className="text-center mb-8">
