@@ -49,17 +49,6 @@ const CREDIT_CARD_LABELS: Record<string, string> = {
   c: "クレジットカードを持っていない",
   d: "過去に債務整理・自己破産の経験がある",
 };
-const OCCUPATION_LABELS: Record<string, string> = {
-  office_clerical: "会社員（事務系）",
-  office_engineer: "会社員（技術・エンジニア系）",
-  office_sales: "会社員（営業・販売系）",
-  medical_care: "医療・介護・福祉系",
-  construction_mfg: "建設・製造・物流系",
-  self_employed: "自営業・経営者",
-  homemaker: "主婦・主夫",
-  student: "学生",
-  other: "その他・無職",
-};
 
 const LOADING_MESSAGES = [
   "あなたの回答を分析中...",
@@ -285,7 +274,6 @@ export default function MatchingResult() {
       experience: EXPERIENCE_LABELS[answers[8]] || "不明",
       avoid: AVOID_LABELS[answers[11]] || "不明",
       creditCard: CREDIT_CARD_LABELS[answers[6]] || "不明",
-      occupation: OCCUPATION_LABELS[data.occupation] || "未回答",
     })
       .then((json) => {
         if (json) setAiDiagnosis(json);
@@ -354,7 +342,20 @@ export default function MatchingResult() {
             {userName ? `${userName}さんの` : "あなたの"}副業適性タイプ
           </p>
           <div className="text-7xl mb-5">{heroEmoji}</div>
-          <h1 className="text-3xl font-bold text-white mb-3 leading-tight">
+          <p
+            className="font-extrabold text-white mb-4 leading-tight tracking-wide"
+            style={{ fontSize: "28px" }}
+          >
+            あなたは
+            <span
+              className="mx-1 bg-gradient-to-r from-yellow-300 via-amber-300 to-orange-300 bg-clip-text text-transparent drop-shadow-[0_0_12px_rgba(251,191,36,0.45)]"
+              style={{ fontSize: "36px" }}
+            >
+              『{type.characterName}』
+            </span>
+            タイプです
+          </p>
+          <h1 className="text-2xl font-bold text-white/90 mb-3 leading-tight">
             {heroHeadline}
           </h1>
           {doubutsu && (

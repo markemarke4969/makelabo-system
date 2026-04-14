@@ -53,6 +53,7 @@ export const AXIS2_LABELS: Record<Axis2, string> = {
 export interface MatchingType {
   id: string;
   name: string;
+  characterName: string;
   emoji: string;
   headline: string;
   description: string;
@@ -66,6 +67,7 @@ export const MATCHING_TYPES: MatchingType[] = [
   {
     id: "analytical_stable",
     name: "分析派安定志向型",
+    characterName: "戦略家",
     emoji: "📊",
     headline: "数字で選ぶ分析派安定志向型",
     description: "論理とリスク管理で確実な成果を積み上げるタイプです。",
@@ -76,6 +78,7 @@ export const MATCHING_TYPES: MatchingType[] = [
   {
     id: "analytical_steady",
     name: "分析派コツコツ継続型",
+    characterName: "研究者",
     emoji: "📈",
     headline: "データ重視の分析派コツコツ継続型",
     description: "地道な検証と継続で成果を伸ばすタイプです。",
@@ -86,6 +89,7 @@ export const MATCHING_TYPES: MatchingType[] = [
   {
     id: "analytical_speed",
     name: "分析派スピード重視型",
+    characterName: "討論者",
     emoji: "⚡",
     headline: "瞬時に判断する分析派スピード重視型",
     description: "分析スピードと決断力で素早く成果を掴むタイプです。",
@@ -96,6 +100,7 @@ export const MATCHING_TYPES: MatchingType[] = [
   {
     id: "analytical_leader",
     name: "分析派リーダー型",
+    characterName: "指揮官",
     emoji: "🎯",
     headline: "戦略立案型の分析派リーダー",
     description: "ロジックで仕組みや人を動かすタイプです。",
@@ -107,6 +112,7 @@ export const MATCHING_TYPES: MatchingType[] = [
   {
     id: "intuitive_stable",
     name: "直感型安定志向型",
+    characterName: "仲介者",
     emoji: "🌿",
     headline: "勘と堅実さの直感型安定志向型",
     description: "感覚を活かしつつリスクを抑えるタイプです。",
@@ -117,6 +123,7 @@ export const MATCHING_TYPES: MatchingType[] = [
   {
     id: "intuitive_steady",
     name: "直感型コツコツ継続型",
+    characterName: "冒険家",
     emoji: "🌱",
     headline: "ひらめきを積み上げる直感型コツコツ継続型",
     description: "ひらめきを日々の積み重ねに変えるタイプです。",
@@ -127,6 +134,7 @@ export const MATCHING_TYPES: MatchingType[] = [
   {
     id: "intuitive_speed",
     name: "直感型スピード重視型",
+    characterName: "起業家",
     emoji: "🚀",
     headline: "勘で即行動する直感型スピード重視型",
     description: "ひらめき即実行でチャンスを掴むタイプです。",
@@ -137,6 +145,7 @@ export const MATCHING_TYPES: MatchingType[] = [
   {
     id: "intuitive_leader",
     name: "直感型リーダー型",
+    characterName: "主人公",
     emoji: "🔥",
     headline: "巻き込む力の直感型リーダー",
     description: "直感と巻き込み力で周囲を動かすタイプです。",
@@ -148,6 +157,7 @@ export const MATCHING_TYPES: MatchingType[] = [
   {
     id: "cautious_stable",
     name: "慎重派安定志向型",
+    characterName: "管理者",
     emoji: "🛡️",
     headline: "ど安定の慎重派安定志向型",
     description: "リスク最小で着実な成果を重視するタイプです。",
@@ -158,6 +168,7 @@ export const MATCHING_TYPES: MatchingType[] = [
   {
     id: "cautious_steady",
     name: "慎重派コツコツ継続型",
+    characterName: "擁護者",
     emoji: "🏗️",
     headline: "地に足のついた慎重派コツコツ継続型",
     description: "確実な手順を踏んで成果を積み上げるタイプです。",
@@ -168,6 +179,7 @@ export const MATCHING_TYPES: MatchingType[] = [
   {
     id: "cautious_speed",
     name: "慎重派スピード重視型",
+    characterName: "領事",
     emoji: "🏃",
     headline: "準備してから一気に動く慎重派スピード重視型",
     description: "下準備を固めてから素早く動くタイプです。",
@@ -178,6 +190,7 @@ export const MATCHING_TYPES: MatchingType[] = [
   {
     id: "cautious_leader",
     name: "慎重派リーダー型",
+    characterName: "幹部",
     emoji: "🧱",
     headline: "手堅くまとめる慎重派リーダー",
     description: "信頼と堅実さで人を引っ張るタイプです。",
@@ -189,6 +202,7 @@ export const MATCHING_TYPES: MatchingType[] = [
   {
     id: "builder_stable",
     name: "仕組み構築型安定志向型",
+    characterName: "建築家",
     emoji: "⚙️",
     headline: "自動化と安定の仕組み構築型安定志向型",
     description: "自動化と堅実運用を両立するタイプです。",
@@ -199,6 +213,7 @@ export const MATCHING_TYPES: MatchingType[] = [
   {
     id: "builder_steady",
     name: "仕組み構築型コツコツ継続型",
+    characterName: "論理学者",
     emoji: "🔧",
     headline: "改善し続ける仕組み構築型コツコツ継続型",
     description: "自動化と継続改善で力を発揮するタイプです。",
@@ -209,6 +224,7 @@ export const MATCHING_TYPES: MatchingType[] = [
   {
     id: "builder_speed",
     name: "仕組み構築型スピード重視型",
+    characterName: "革新者",
     emoji: "💫",
     headline: "仕組みで加速する仕組み構築型スピード重視型",
     description: "スピードを仕組みで再現するタイプです。",
@@ -219,6 +235,7 @@ export const MATCHING_TYPES: MatchingType[] = [
   {
     id: "builder_leader",
     name: "仕組み構築型リーダー",
+    characterName: "支配者",
     emoji: "👑",
     headline: "自動化で動かす仕組み構築型リーダー",
     description: "自動化と統率力で仕組みを動かすタイプです。",
