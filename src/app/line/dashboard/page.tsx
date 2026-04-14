@@ -124,6 +124,18 @@ interface InflowRoute {
   is_active: boolean;
   created_at: string;
   follower_count?: number;
+  group_id?: string | null;
+}
+
+interface InflowGroup {
+  id: string;
+  account_id: string | null;
+  project_id: string | null;
+  name: string;
+  color: string;
+  sort_order: number;
+  route_count?: number;
+  follower_count?: number;
 }
 
 // メインビュー
@@ -388,8 +400,14 @@ export default function LineDashboard() {
   // Inflow routes
   const [inflowRoutes, setInflowRoutes] = useState<InflowRoute[]>([]);
   const [showInflowModal, setShowInflowModal] = useState(false);
-  const [inflowForm, setInflowForm] = useState({ name: "", code: "", url: "", description: "" });
+  const [inflowForm, setInflowForm] = useState({ name: "", code: "", url: "", description: "", group_id: "" });
   const [editingInflow, setEditingInflow] = useState<InflowRoute | null>(null);
+
+  // Inflow groups（登録経路グループ）
+  const [inflowGroups, setInflowGroups] = useState<InflowGroup[]>([]);
+  const [showInflowGroupModal, setShowInflowGroupModal] = useState(false);
+  const [inflowGroupForm, setInflowGroupForm] = useState({ name: "", color: "#3B82F6" });
+  const [editingInflowGroup, setEditingInflowGroup] = useState<InflowGroup | null>(null);
 
   // Action rules
   const [actionRules, setActionRules] = useState<ActionRule[]>([]);
@@ -414,8 +432,12 @@ export default function LineDashboard() {
   });
 
   // ステップ／予約配信作成ページ
-  type BroadcastMsgType = "text" | "image" | "button" | "carousel" | "audio" | "video" | "sticker";
+  type BroadcastMsgType = "text" | "image" | "button" | "carousel" | "audio" | "video" | "sticker" | "branch";
   type TimingMode = "immediate" | "datetime" | "daysAfter";
+  interface BranchRule {
+    label_ids: string[];
+    body: string;
+  }
   interface BroadcastMessage {
     msgType: BroadcastMsgType;
     body: string;
@@ -431,6 +453,8 @@ export default function LineDashboard() {
     buttonText: string;
     buttonActions: { label: string; uri: string; actionType: "uri" | "postback" | "message"; data: string; text: string }[];
     carouselColumns: { title: string; text: string; imageUrl: string; uri: string; label: string; actionType: "uri" | "postback" | "message"; data: string; actionText: string }[];
+    branches?: BranchRule[];
+    defaultBody?: string;
   }
   interface BroadcastForm {
     name: string;
@@ -606,6 +630,15 @@ export default function LineDashboard() {
     try {
       const res = await fetch(`/api/line/inflow-routes?project_id=${project.id}`);
       if (res.ok) setInflowRoutes(await res.json());
+    } catch { /* */ }
+  }, [project?.id]);
+
+  // 流入経路グループ一覧取得
+  const fetchInflowGroups = useCallback(async () => {
+    if (!project?.id) return;
+    try {
+      const res = await fetch(`/api/line/inflow-groups?project_id=${project.id}`);
+      if (res.ok) setInflowGroups(await res.json());
     } catch { /* */ }
   }, [project?.id]);
 
@@ -1420,8 +1453,11 @@ export default function LineDashboard() {
   }, [selectedAccount, fetchStepSequences, fetchTestFollowers, fetchLabels, fetchActionRules, fetchTemplates, fetchCustomFields, fetchReminders, fetchNewsletters]);
 
   useEffect(() => {
-    if (project?.id) fetchInflowRoutes();
-  }, [project?.id, fetchInflowRoutes]);
+    if (project?.id) {
+      fetchInflowRoutes();
+      fetchInflowGroups();
+    }
+  }, [project?.id, fetchInflowRoutes, fetchInflowGroups]);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -1985,6 +2021,7 @@ export default function LineDashboard() {
       { key: "audio", label: "音声" },
       { key: "video", label: "動画" },
       { key: "sticker", label: "スタンプ" },
+      { key: "branch", label: "条件分岐" },
     ];
     const updateMsg = (mi: number, patch: Partial<BroadcastMessage>) => {
       const next = [...form.messages];
@@ -2076,7 +2113,16 @@ export default function LineDashboard() {
                           placeholder="テキストを入力"
                           className="w-full border border-gray-200 rounded-md px-3 py-2 text-sm resize-none focus:border-blue-400 focus:outline-none"
                         />
-                        <p className="text-[10px] text-gray-400 mt-1">① 置き換え文字 {"{display_name}"} 等が使えます</p>
+                        <div className="text-[10px] text-gray-400 mt-1 space-y-0.5">
+                          <p>① 置き換え文字（クリックで挿入）:</p>
+                          <div className="flex flex-wrap gap-1">
+                            {["{display_name}","{label_names}","{inflow_route_name}","{followed_at}","{days_since_follow}","{today}","{field:email}","{field:phone}"].map((v) => (
+                              <button key={v} type="button" onClick={() => updateMsg(mi, { body: (msg.body ?? "") + v })} className="px-1.5 py-0.5 bg-gray-100 hover:bg-blue-100 text-gray-600 hover:text-blue-700 rounded border border-gray-200 text-[10px] font-mono">
+                                {v}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
                       </div>
                     )}
                     {msg.msgType === "image" && (
@@ -2162,6 +2208,69 @@ export default function LineDashboard() {
                         <p className="text-[10px] text-gray-400">
                           一覧: <a className="text-blue-500 underline" href="https://developers.line.biz/en/docs/messaging-api/sticker-list/" target="_blank" rel="noreferrer">LINE sticker list</a>
                         </p>
+                      </div>
+                    )}
+                    {msg.msgType === "branch" && (
+                      <div className="space-y-3">
+                        <p className="text-[11px] text-gray-500">ラベル付与状況に応じて配信本文を切り替えます。上から順に評価し、最初にマッチした本文を送信します。</p>
+                        {(msg.branches ?? []).map((br, bi) => (
+                          <div key={bi} className="border border-gray-200 rounded-md p-2 space-y-1.5 bg-gray-50">
+                            <div className="flex items-center justify-between">
+                              <span className="text-[11px] font-medium text-gray-700">分岐 {bi + 1}</span>
+                              <button type="button" onClick={() => {
+                                const next = [...(msg.branches ?? [])];
+                                next.splice(bi, 1);
+                                updateMsg(mi, { branches: next });
+                              }} className="text-[10px] text-red-500 hover:text-red-700">削除</button>
+                            </div>
+                            <div>
+                              <label className="text-[10px] text-gray-500">対象ラベル（いずれかを持っていれば該当）</label>
+                              <select
+                                multiple
+                                value={br.label_ids}
+                                onChange={(e) => {
+                                  const ids = Array.from(e.target.selectedOptions).map((o) => o.value);
+                                  const next = [...(msg.branches ?? [])];
+                                  next[bi] = { ...next[bi], label_ids: ids };
+                                  updateMsg(mi, { branches: next });
+                                }}
+                                className="w-full border border-gray-200 rounded-md px-2 py-1 text-xs bg-white"
+                              >
+                                {labels.map((l) => (
+                                  <option key={l.id} value={l.id}>{l.name}</option>
+                                ))}
+                              </select>
+                            </div>
+                            <div>
+                              <label className="text-[10px] text-gray-500">本文</label>
+                              <textarea
+                                value={br.body}
+                                onChange={(e) => {
+                                  const next = [...(msg.branches ?? [])];
+                                  next[bi] = { ...next[bi], body: e.target.value };
+                                  updateMsg(mi, { branches: next });
+                                }}
+                                rows={3}
+                                placeholder="このラベル向け本文"
+                                className="w-full border border-gray-200 rounded-md px-2 py-1.5 text-xs resize-none"
+                              />
+                            </div>
+                          </div>
+                        ))}
+                        <button type="button" onClick={() => {
+                          const next = [...(msg.branches ?? []), { label_ids: [], body: "" }];
+                          updateMsg(mi, { branches: next });
+                        }} className="text-[11px] text-blue-600 hover:text-blue-700">＋ 分岐を追加</button>
+                        <div className="border border-gray-200 rounded-md p-2 bg-white">
+                          <label className="text-[10px] text-gray-500">どれにも当てはまらない場合の本文（デフォルト）</label>
+                          <textarea
+                            value={msg.defaultBody ?? ""}
+                            onChange={(e) => updateMsg(mi, { defaultBody: e.target.value })}
+                            rows={3}
+                            placeholder="デフォルト本文"
+                            className="w-full border border-gray-200 rounded-md px-2 py-1.5 text-xs resize-none mt-1"
+                          />
+                        </div>
                       </div>
                     )}
                     {msg.msgType === "button" && (
@@ -2515,6 +2624,23 @@ export default function LineDashboard() {
                               </div>
                             </div>
                           ))}
+                        </div>
+                      )}
+                      {msg.msgType === "branch" && (
+                        <div className="space-y-1">
+                          <div className="text-[10px] text-gray-400">条件分岐（配信時に評価）</div>
+                          {(msg.branches ?? []).map((br, i) => (
+                            <div key={i} className="border-l-2 border-blue-300 pl-2 text-[11px] text-gray-600">
+                              <div className="text-blue-600">if ラベル: {br.label_ids.length}件</div>
+                              <div className="whitespace-pre-wrap">{br.body || "（未入力）"}</div>
+                            </div>
+                          ))}
+                          {msg.defaultBody && (
+                            <div className="border-l-2 border-gray-300 pl-2 text-[11px] text-gray-600">
+                              <div className="text-gray-500">default</div>
+                              <div className="whitespace-pre-wrap">{msg.defaultBody}</div>
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>
@@ -5602,6 +5728,37 @@ export default function LineDashboard() {
                             </div>
                           </div>
                           <div className="flex items-center gap-2 flex-shrink-0">
+                            {nl.status !== "sent" && (
+                              <>
+                                <button
+                                  onClick={async () => {
+                                    if (!confirm(`「${nl.name}」を今すぐ送信しますか？対象フォロワーにメールを配信します。`)) return;
+                                    const r = await fetch("/api/line/newsletter/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: nl.id, mode: "now" }) });
+                                    const data = await r.json().catch(() => ({}));
+                                    if (r.ok) alert(`送信完了: ${data.sent ?? 0}通送信 / ${data.failed ?? 0}通失敗`);
+                                    else alert(`送信失敗: ${data.error ?? r.status}`);
+                                    fetchNewsletters();
+                                  }}
+                                  className="text-xs bg-green-100 hover:bg-green-200 text-green-700 px-2 py-1 rounded font-medium"
+                                >
+                                  今すぐ送信
+                                </button>
+                                <button
+                                  onClick={async () => {
+                                    const input = prompt("予約日時を入力 (YYYY-MM-DD HH:mm):", new Date(Date.now() + 60 * 60 * 1000).toISOString().slice(0, 16).replace("T", " "));
+                                    if (!input) return;
+                                    const iso = new Date(input.replace(" ", "T")).toISOString();
+                                    const r = await fetch("/api/line/newsletter/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: nl.id, mode: "schedule", scheduled_at: iso }) });
+                                    if (r.ok) alert(`予約設定完了: ${input}`);
+                                    else alert("予約失敗");
+                                    fetchNewsletters();
+                                  }}
+                                  className="text-xs bg-yellow-100 hover:bg-yellow-200 text-yellow-700 px-2 py-1 rounded font-medium"
+                                >
+                                  予約設定
+                                </button>
+                              </>
+                            )}
                             <button
                               onClick={async () => {
                                 if (!confirm(`「${nl.name}」を削除しますか？`)) return;
@@ -5638,7 +5795,13 @@ export default function LineDashboard() {
                   レポートを見る
                 </a>
                 <button
-                  onClick={() => { setInflowForm({ name: "", code: "", url: "", description: "" }); setEditingInflow(null); setShowInflowModal(true); }}
+                  onClick={() => { setInflowGroupForm({ name: "", color: "#3B82F6" }); setEditingInflowGroup(null); setShowInflowGroupModal(true); }}
+                  className="px-3 py-1.5 bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 text-xs font-medium rounded-md transition"
+                >
+                  ＋ 新規グループ
+                </button>
+                <button
+                  onClick={() => { setInflowForm({ name: "", code: "", url: "", description: "", group_id: "" }); setEditingInflow(null); setShowInflowModal(true); }}
                   className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded-md transition"
                 >
                   {Icons.plus} 新規経路
@@ -5669,6 +5832,15 @@ export default function LineDashboard() {
                         <input type="text" value={inflowForm.url} onChange={(e) => setInflowForm({ ...inflowForm, url: e.target.value })} placeholder="https://..." className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400" />
                       </div>
                       <div>
+                        <label className="text-xs text-gray-500 block mb-1 font-medium">グループ</label>
+                        <select value={inflowForm.group_id} onChange={(e) => setInflowForm({ ...inflowForm, group_id: e.target.value })} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400">
+                          <option value="">（グループなし）</option>
+                          {inflowGroups.map((g) => (
+                            <option key={g.id} value={g.id}>{g.name}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
                         <label className="text-xs text-gray-500 block mb-1 font-medium">説明</label>
                         <textarea value={inflowForm.description} onChange={(e) => setInflowForm({ ...inflowForm, description: e.target.value })} rows={2} placeholder="メモ" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm resize-none focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400" />
                       </div>
@@ -5687,7 +5859,7 @@ export default function LineDashboard() {
                             if (res.ok) {
                               setShowInflowModal(false);
                               setEditingInflow(null);
-                              setInflowForm({ name: "", code: "", url: "", description: "" });
+                              setInflowForm({ name: "", code: "", url: "", description: "", group_id: "" });
                               await fetchInflowRoutes();
                             } else {
                               const data = await res.json().catch(() => ({}));
@@ -5707,7 +5879,83 @@ export default function LineDashboard() {
                 </div>
               )}
 
+              {/* グループ管理モーダル */}
+              {showInflowGroupModal && (
+                <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+                  <div className="bg-white rounded-xl shadow-xl w-full max-w-md mx-4">
+                    <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
+                      <h3 className="font-bold text-gray-800">{editingInflowGroup ? "グループ編集" : "新規グループ"}</h3>
+                      <button onClick={() => setShowInflowGroupModal(false)} className="text-gray-400 hover:text-gray-600">{Icons.close}</button>
+                    </div>
+                    <div className="p-5 space-y-3">
+                      <div>
+                        <label className="text-xs text-gray-500 block mb-1 font-medium">グループ名 <span className="text-red-500">*</span></label>
+                        <input type="text" value={inflowGroupForm.name} onChange={(e) => setInflowGroupForm({ ...inflowGroupForm, name: e.target.value })} placeholder="例: YouTube" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+                      </div>
+                      <div>
+                        <label className="text-xs text-gray-500 block mb-1 font-medium">カラー</label>
+                        <input type="color" value={inflowGroupForm.color} onChange={(e) => setInflowGroupForm({ ...inflowGroupForm, color: e.target.value })} className="w-20 h-8 border border-gray-200 rounded" />
+                      </div>
+                    </div>
+                    <div className="flex justify-end gap-2 px-5 py-4 border-t border-gray-200">
+                      <button onClick={() => setShowInflowGroupModal(false)} className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg">キャンセル</button>
+                      <button
+                        onClick={async () => {
+                          if (!inflowGroupForm.name.trim() || !project?.id) return;
+                          const method = editingInflowGroup ? "PUT" : "POST";
+                          const body = editingInflowGroup
+                            ? { id: editingInflowGroup.id, ...inflowGroupForm }
+                            : { project_id: project.id, ...inflowGroupForm };
+                          const res = await fetch("/api/line/inflow-groups", { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+                          if (res.ok) {
+                            setShowInflowGroupModal(false);
+                            setEditingInflowGroup(null);
+                            setInflowGroupForm({ name: "", color: "#3B82F6" });
+                            await fetchInflowGroups();
+                          } else {
+                            const d = await res.json().catch(() => ({}));
+                            alert(`グループの保存に失敗: ${d.error ?? res.status}`);
+                          }
+                        }}
+                        disabled={!inflowGroupForm.name.trim()}
+                        className="px-5 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-sm font-medium rounded-lg"
+                      >
+                        {editingInflowGroup ? "更新" : "作成"}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               <div className="max-w-5xl">
+                {/* グループ集計 */}
+                {inflowGroups.length > 0 && (
+                  <div className="bg-white rounded-lg border border-gray-200 p-4 mb-4">
+                    <div className="text-xs font-medium text-gray-700 mb-2">グループ別集計</div>
+                    <div className="flex flex-wrap gap-2">
+                      {inflowGroups.map((g) => (
+                        <div key={g.id} className="flex items-center gap-2 px-2.5 py-1.5 bg-gray-50 border border-gray-200 rounded-md">
+                          <span className="inline-block w-2 h-2 rounded-full" style={{ backgroundColor: g.color }} />
+                          <span className="text-xs font-medium text-gray-800">{g.name}</span>
+                          <span className="text-[10px] text-gray-500">{g.route_count ?? 0}経路 / {g.follower_count ?? 0}友</span>
+                          <button
+                            onClick={() => { setInflowGroupForm({ name: g.name, color: g.color }); setEditingInflowGroup(g); setShowInflowGroupModal(true); }}
+                            className="text-[10px] text-blue-500 hover:text-blue-700"
+                          >編集</button>
+                          <button
+                            onClick={async () => {
+                              if (!confirm(`グループ「${g.name}」を削除しますか？経路自体は残り、所属がクリアされます。`)) return;
+                              await fetch("/api/line/inflow-groups", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: g.id }) });
+                              await fetchInflowGroups();
+                              await fetchInflowRoutes();
+                            }}
+                            className="text-[10px] text-red-400 hover:text-red-600"
+                          >削除</button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 {inflowRoutes.length === 0 ? (
                   <div className="bg-white rounded-lg border border-gray-200 p-16 text-center text-gray-400">
                     <p className="text-lg mb-2">流入経路がありません</p>
@@ -5764,7 +6012,7 @@ export default function LineDashboard() {
                                 <div className="flex items-center gap-1">
                                   <button
                                     onClick={() => {
-                                      setInflowForm({ name: route.name, code: route.code, url: route.url ?? "", description: route.description ?? "" });
+                                      setInflowForm({ name: route.name, code: route.code, url: route.url ?? "", description: route.description ?? "", group_id: route.group_id ?? "" });
                                       setEditingInflow(route);
                                       setShowInflowModal(true);
                                     }}

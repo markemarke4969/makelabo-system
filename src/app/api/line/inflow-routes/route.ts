@@ -122,13 +122,27 @@ export async function POST(request: NextRequest) {
     code: body.code,
     url: body.url || null,
     description: body.description || null,
+    group_id: body.group_id || null,
   };
 
-  const { data, error } = await supabase
+  let { data, error } = await supabase
     .from("line_inflow_routes")
     .insert(insertBody)
     .select("id")
     .single();
+
+  // group_id カラム未作成の環境への fallback
+  if (error && /group_id/.test(error.message)) {
+    const { group_id: _gid, ...fallback } = insertBody as Record<string, unknown>;
+    void _gid;
+    const retry = await supabase
+      .from("line_inflow_routes")
+      .insert(fallback)
+      .select("id")
+      .single();
+    data = retry.data;
+    error = retry.error;
+  }
 
   if (error) {
     console.error("[inflow-routes POST] error:", error);
@@ -164,7 +178,7 @@ export async function POST(request: NextRequest) {
     return Response.json({ error: error.message, code: pgCode }, { status: 500 });
   }
 
-  return Response.json({ ok: true, id: data.id });
+  return Response.json({ ok: true, id: data?.id });
 }
 
 export async function PUT(request: NextRequest) {
@@ -182,6 +196,7 @@ export async function PUT(request: NextRequest) {
   if (body.url !== undefined) updates.url = body.url;
   if (body.description !== undefined) updates.description = body.description;
   if (body.is_active !== undefined) updates.is_active = body.is_active;
+  if (body.group_id !== undefined) updates.group_id = body.group_id || null;
 
   const { error } = await supabase
     .from("line_inflow_routes")

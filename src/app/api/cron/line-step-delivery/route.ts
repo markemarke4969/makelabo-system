@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { buildLineMessage, pushLineMessages } from "@/lib/line";
+import { buildReplacerContext, buildBranchEvalContext, defaultContext } from "@/lib/line-replacer";
 
 export const maxDuration = 300;
 
@@ -102,13 +103,15 @@ async function runStepDelivery(): Promise<{
       continue;
     }
 
-    // 6. フォロワーの display_name 取得
-    const { data: follower } = await supabase
-      .from("line_followers")
-      .select("display_name")
-      .eq("id", enr.follower_id)
-      .maybeSingle();
-    const displayName = (follower?.display_name as string) ?? "ゲスト";
+    // 6. 置換コンテキスト + 条件分岐コンテキストを構築
+    const [replacerCtx, branchCtx] = await Promise.all([
+      buildReplacerContext(supabase, { id: enr.follower_id }).catch(() => defaultContext()),
+      buildBranchEvalContext(supabase, { id: enr.follower_id }).catch(() => ({
+        label_ids: [],
+        inflow_route_id: null,
+        custom_fields: {},
+      })),
+    ]);
 
     // 7. メッセージ送信
     let maxSentStep = enr.last_sent_step;
@@ -117,7 +120,7 @@ async function runStepDelivery(): Promise<{
         msgType: "text",
         body: msg.body,
       };
-      const lineMsg = buildLineMessage(payload, displayName);
+      const lineMsg = buildLineMessage(payload, replacerCtx, branchCtx);
       if (!lineMsg) {
         maxSentStep = Math.max(maxSentStep, msg.step_order);
         continue;

@@ -1,4 +1,12 @@
 import crypto from "crypto";
+import {
+  replaceVariables,
+  defaultContext,
+  evaluateBranchCondition,
+  type ReplacerContext,
+  type BranchCondition,
+  type BranchEvalContext,
+} from "./line-replacer";
 
 export function getLineConfig() {
   const channelSecret = process.env.LINE_CHANNEL_SECRET;
@@ -34,15 +42,63 @@ export async function getProfile(userId: string, accessToken: string) {
 /**
  * line_step_messages.payload（ダッシュボード保存形式）を LINE Messaging API のメッセージオブジェクトに変換
  * 非対応・情報不足のものは null を返す
+ *
+ * 第2引数は後方互換のため文字列（display_name）も許容。
+ * 置換文字の完全サポートを使うには ReplacerContext を渡す。
+ * 条件分岐メッセージ（msgType: "branch"）を評価するには第3引数に BranchEvalContext を渡す。
  */
 export function buildLineMessage(
   payload: Record<string, unknown> | null | undefined,
-  displayName = "ゲスト",
+  displayNameOrContext: string | ReplacerContext = "ゲスト",
+  branchCtx?: BranchEvalContext,
 ): Record<string, unknown> | null {
   if (!payload || typeof payload !== "object") return null;
   const p = payload as Record<string, unknown>;
-  const replaceVars = (s: string) => s.replace(/\{display_name\}/g, displayName);
+  const ctx: ReplacerContext =
+    typeof displayNameOrContext === "string"
+      ? defaultContext(displayNameOrContext)
+      : displayNameOrContext;
+  const replaceVars = (s: string) => replaceVariables(s ?? "", ctx);
   const type = (p.msgType as string) ?? "text";
+
+  // 条件分岐メッセージ: branches[].condition にマッチした最初のサブメッセージを返す
+  // 2 種類の payload 形式に対応:
+  //   (A) 正規形式: { branches: [{ condition, message }], defaultMessage }
+  //   (B) 簡易形式: { branches: [{ label_ids, body }], defaultBody }
+  if (type === "branch") {
+    const rawBranches = (p.branches as Array<Record<string, unknown>>) ?? [];
+    const evalCtx: BranchEvalContext =
+      branchCtx ?? { label_ids: [], inflow_route_id: null, custom_fields: ctx.custom_fields };
+    for (const b of rawBranches) {
+      if (!b) continue;
+      const hasCondition = "condition" in b;
+      const hasMessage = "message" in b;
+      const labelIdsRaw = (b.label_ids as unknown) ?? null;
+      const bodyRaw = (b.body as unknown) ?? null;
+
+      const condition: BranchCondition | null = hasCondition
+        ? ((b.condition as BranchCondition | null) ?? null)
+        : labelIdsRaw
+          ? { label_ids: Array.isArray(labelIdsRaw) ? (labelIdsRaw as string[]) : [] }
+          : null;
+      const subMessage: Record<string, unknown> | null = hasMessage
+        ? ((b.message as Record<string, unknown>) ?? null)
+        : bodyRaw != null
+          ? { msgType: "text", body: String(bodyRaw) }
+          : null;
+      if (!subMessage) continue;
+      if (evaluateBranchCondition(condition, evalCtx)) {
+        return buildLineMessage(subMessage, ctx, evalCtx);
+      }
+    }
+    const fallback =
+      (p.defaultMessage as Record<string, unknown> | undefined) ??
+      (typeof p.defaultBody === "string" && p.defaultBody
+        ? { msgType: "text", body: p.defaultBody }
+        : null);
+    if (fallback) return buildLineMessage(fallback, ctx, evalCtx);
+    return null;
+  }
 
   if (type === "text") {
     const body = p.body as string | undefined;
@@ -141,8 +197,8 @@ export function buildLineMessage(
       }
       return {
         thumbnailImageUrl: hasAnyImage ? (c.imageUrl || undefined) : undefined,
-        title: hasAnyTitle ? (c.title ?? "").slice(0, 40) || "　" : undefined,
-        text: (c.text ?? " ").slice(0, 60) || " ",
+        title: hasAnyTitle ? replaceVars(c.title ?? "").slice(0, 40) || "　" : undefined,
+        text: replaceVars(c.text ?? " ").slice(0, 60) || " ",
         actions: [action],
       };
     });

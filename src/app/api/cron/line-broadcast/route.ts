@@ -7,6 +7,7 @@ import {
   evalCondition,
 } from "@/lib/delivery-conditions";
 import { fireTrigger } from "@/lib/action-rules";
+import { buildReplacerContext, buildBranchEvalContext, defaultContext } from "@/lib/line-replacer";
 
 export const maxDuration = 300;
 
@@ -193,11 +194,22 @@ async function processSequence(seq: SequenceRow): Promise<{
     const chunk = recipients.slice(i, i + PUSH_CONCURRENCY);
     const results = await Promise.all(
       chunk.map(async (f) => {
+        const [replacerCtx, branchCtx] = await Promise.all([
+          buildReplacerContext(supabase, { id: f.id }).catch(() =>
+            defaultContext(f.display_name ?? "ゲスト"),
+          ),
+          buildBranchEvalContext(supabase, { id: f.id }).catch(() => ({
+            label_ids: [],
+            inflow_route_id: (f.inflow_route_id as string | null) ?? null,
+            custom_fields: {},
+          })),
+        ]);
         const lineMessages = stepMessages
           .map((m) =>
             buildLineMessage(
               (m.payload as Record<string, unknown>) ?? { msgType: "text", body: m.body },
-              f.display_name ?? "ゲスト",
+              replacerCtx,
+              branchCtx,
             ),
           )
           .filter((x): x is Record<string, unknown> => x !== null);

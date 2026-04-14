@@ -329,9 +329,6 @@ export default function MatchingResult() {
 
   const { type } = result;
   const heroEmoji = doubutsu?.profile.emoji ?? type.emoji;
-  const heroHeadline = doubutsu
-    ? `${type.name}の${doubutsu.result.animal}タイプ`
-    : type.headline;
 
   return (
     <div className="min-h-screen px-4 py-6">
@@ -342,8 +339,10 @@ export default function MatchingResult() {
             {userName ? `${userName}さんの` : "あなたの"}副業適性タイプ
           </p>
           <div className="text-7xl mb-5">{heroEmoji}</div>
+
+          {/* 1. キャラクター名（大・ゴールド） */}
           <p
-            className="font-extrabold text-white mb-4 leading-tight tracking-wide"
+            className="font-extrabold text-white mb-3 leading-tight tracking-wide"
             style={{ fontSize: "28px" }}
           >
             あなたは
@@ -355,9 +354,18 @@ export default function MatchingResult() {
             </span>
             タイプです
           </p>
-          <h1 className="text-2xl font-bold text-white/90 mb-3 leading-tight">
-            {heroHeadline}
-          </h1>
+
+          {/* 2. タイプ名（小・サブテキスト） */}
+          <p className="text-base font-medium text-gray-300 mb-1 leading-tight">
+            {type.name}
+          </p>
+
+          {/* 3. 動物タイプ（さらに小さく） */}
+          {doubutsu && (
+            <p className="text-xs text-gray-500 mb-3 leading-tight">
+              動物タイプ（{doubutsu.result.animal}）
+            </p>
+          )}
           {doubutsu && (
             <p className="text-xs text-gray-500 tracking-wide mb-3">
               {doubutsu.profile.groupLabel} ／ {doubutsu.result.color} ／ 運命数

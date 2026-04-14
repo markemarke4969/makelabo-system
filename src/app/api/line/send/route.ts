@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { buildLineMessage, pushLineMessages } from "@/lib/line";
+import { buildReplacerContext, buildBranchEvalContext, defaultContext } from "@/lib/line-replacer";
 
 export async function POST(request: NextRequest) {
   const body = await request.json();
@@ -72,22 +73,21 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // フォロワー名を取得（変数置換用）
-  let displayName = "ゲスト";
-  {
-    const { data: follower } = await supabase
-      .from("line_followers")
-      .select("display_name")
-      .eq("line_user_id", line_user_id)
-      .maybeSingle();
-    if (follower?.display_name) displayName = follower.display_name;
-  }
+  // 置換コンテキスト + 条件分岐評価コンテキストを構築
+  const [replacerCtx, branchCtx] = await Promise.all([
+    buildReplacerContext(supabase, { line_user_id }).catch(() => defaultContext()),
+    buildBranchEvalContext(supabase, { line_user_id }).catch(() => ({
+      label_ids: [],
+      inflow_route_id: null,
+      custom_fields: {},
+    })),
+  ]);
 
   // リッチメッセージモード
   if (hasRichMessages) {
     const builtMessages: Array<Record<string, unknown>> = [];
     for (const rm of richMessages) {
-      const built = buildLineMessage(rm, displayName);
+      const built = buildLineMessage(rm, replacerCtx, branchCtx);
       if (built) builtMessages.push(built);
     }
     if (builtMessages.length === 0) {
@@ -115,9 +115,11 @@ export async function POST(request: NextRequest) {
   }
 
   // LINE Push Message API（テキスト/スタンプ）
+  const builtText =
+    !isSticker ? buildLineMessage({ msgType: "text", body: message }, replacerCtx, branchCtx) : null;
   const lineMessage = isSticker
     ? { type: "sticker", packageId: String(packageId), stickerId: String(stickerId) }
-    : { type: "text", text: message };
+    : builtText ?? { type: "text", text: message };
 
   const res = await fetch("https://api.line.me/v2/bot/message/push", {
     method: "POST",
