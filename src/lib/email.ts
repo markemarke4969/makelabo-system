@@ -3,16 +3,17 @@
  * SDK は入れず fetch のみで完結させる。
  *
  * 必要な環境変数:
- *   RESEND_API_KEY         - Resend API キー
- *   NEWSLETTER_FROM_EMAIL  - 送信元メールアドレス（例: "Makelabo <info@example.com>"）
+ *   RESEND_API_KEY - Resend API キー
+ *
+ * 送信元 (from) は呼び出し側から必ず渡す（アカウント単位で設定）。
  */
 
 export interface SendEmailInput {
   to: string;
   subject: string;
+  from: string;
   text?: string;
   html?: string;
-  from?: string;
 }
 
 export interface SendEmailResult {
@@ -27,8 +28,10 @@ export async function sendEmail(input: SendEmailInput): Promise<SendEmailResult>
   if (!apiKey) {
     return { ok: false, error: "RESEND_API_KEY が未設定です" };
   }
-  const from =
-    input.from ?? process.env.NEWSLETTER_FROM_EMAIL ?? "onboarding@resend.dev";
+  if (!input.from) {
+    return { ok: false, error: "送信元アドレス(from)が未指定です" };
+  }
+  const from = input.from;
 
   // text 本文から最小限の HTML を生成（指定があればそちらを優先）
   const html =

@@ -56,6 +56,8 @@ interface LineAccount {
   project_id?: string | null;
   role?: "main" | "standby" | "banned" | null;
   greeting_message?: string | null;
+  newsletter_from_email?: string | null;
+  newsletter_from_name?: string | null;
 }
 
 interface Label {
@@ -548,6 +550,8 @@ export default function LineDashboard() {
     project_id: "",
     role: "main" as "main" | "standby",
     greeting_message: DEFAULT_GREETING_MESSAGE,
+    newsletter_from_email: "",
+    newsletter_from_name: "",
   });
   const [editingId, setEditingId] = useState<string | null>(null);
 
@@ -1323,7 +1327,7 @@ export default function LineDashboard() {
   };
 
   const resetForm = () => {
-    setForm({ account_name: "", channel_id: "", basic_id: "", channel_secret: "", channel_access_token: "", group_name: "", project_id: "", role: "main", greeting_message: DEFAULT_GREETING_MESSAGE });
+    setForm({ account_name: "", channel_id: "", basic_id: "", channel_secret: "", channel_access_token: "", group_name: "", project_id: "", role: "main", greeting_message: DEFAULT_GREETING_MESSAGE, newsletter_from_email: "", newsletter_from_name: "" });
     setEditingId(null);
     setSaveMsg(null);
   };
@@ -1339,6 +1343,8 @@ export default function LineDashboard() {
       project_id: acc.project_id ?? "",
       role: acc.role === "standby" ? "standby" : "main",
       greeting_message: acc.greeting_message && acc.greeting_message.trim() !== "" ? acc.greeting_message : DEFAULT_GREETING_MESSAGE,
+      newsletter_from_email: acc.newsletter_from_email ?? "",
+      newsletter_from_name: acc.newsletter_from_name ?? "",
     });
     setEditingId(acc.id);
     setSaveMsg(null);
@@ -6166,6 +6172,45 @@ export default function LineDashboard() {
                       <p className="text-[10px] text-gray-400 mt-1">
                         LINE Official Account Manager側の挨拶メッセージをOFFにしてください。`{"{display_name}"}`で友だち名に置換されます。
                       </p>
+                    </div>
+                    <div className="md:col-span-2 border-t border-gray-200 pt-4 mt-2">
+                      <h4 className="text-sm font-bold text-gray-800 mb-1">メール送信設定</h4>
+                      <p className="text-[11px] text-gray-500 mb-3">
+                        メルマガ送信時の From に使われます。未設定だとこのアカウントではメルマガを送信できません。
+                        <br />
+                        ※ 送信元ドメインは Resend 側で認証済みである必要があります。
+                      </p>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <div>
+                          <label className="text-xs text-gray-500 block mb-1 font-medium">送信元名（表示名）</label>
+                          <input
+                            type="text"
+                            value={form.newsletter_from_name}
+                            onChange={(e) => setForm({ ...form, newsletter_from_name: e.target.value })}
+                            placeholder="まり公式"
+                            className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-xs text-gray-500 block mb-1 font-medium">送信元メールアドレス</label>
+                          <input
+                            type="email"
+                            value={form.newsletter_from_email}
+                            onChange={(e) => setForm({ ...form, newsletter_from_email: e.target.value })}
+                            placeholder="mari@example.com"
+                            className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                          />
+                        </div>
+                      </div>
+                      {(form.newsletter_from_email || form.newsletter_from_name) && (
+                        <p className="text-[10px] text-gray-500 mt-2">
+                          プレビュー: <span className="font-mono text-gray-700">
+                            {form.newsletter_from_name
+                              ? `"${form.newsletter_from_name}" <${form.newsletter_from_email || "(未入力)"}>`
+                              : form.newsletter_from_email || "(未入力)"}
+                          </span>
+                        </p>
+                      )}
                     </div>
                   </div>
                   {saveMsg && (

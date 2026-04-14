@@ -29,6 +29,12 @@ export async function dispatchNewsletter(newsletterId: string): Promise<Dispatch
     return { ok: true, sent: 0, failed: 0, skipped: 0, error: "already sent" };
   }
 
+  // アカウントの送信元設定を取得
+  const fromAddress = await resolveAccountFrom(nl.account_id);
+  if (!fromAddress.ok) {
+    return { ok: false, sent: 0, failed: 0, skipped: 0, error: fromAddress.error };
+  }
+
   // email フィールド定義を取得
   const { data: emailField } = await supabase
     .from("line_custom_fields")
@@ -103,7 +109,7 @@ export async function dispatchNewsletter(newsletterId: string): Promise<Dispatch
     const text = replaceVariables(nl.body_text ?? "", ctx);
     const html = nl.body_html ? replaceVariables(nl.body_html, ctx) : undefined;
 
-    const res = await sendEmail({ to: email, subject, text, html });
+    const res = await sendEmail({ to: email, from: fromAddress.from, subject, text, html });
     if (res.ok) {
       sent++;
       await supabase.from("line_newsletter_logs").insert({
@@ -135,4 +141,45 @@ export async function dispatchNewsletter(newsletterId: string): Promise<Dispatch
     .eq("id", newsletterId);
 
   return { ok: true, sent, failed, skipped };
+}
+
+/**
+ * line_accounts.newsletter_from_email / newsletter_from_name から
+ * Resend の from 文字列を組み立てる。
+ *   name + email  → `"まり公式" <mari@example.com>`
+ *   email のみ    → `mari@example.com`
+ * 未設定の場合は ok:false を返す（呼び出し側で送信中止）。
+ */
+async function resolveAccountFrom(
+  accountId: string,
+): Promise<{ ok: true; from: string } | { ok: false; error: string }> {
+  type AccountRow = {
+    newsletter_from_email: string | null;
+    newsletter_from_name: string | null;
+  };
+  let { data, error } = await supabase
+    .from("line_accounts")
+    .select("newsletter_from_email, newsletter_from_name")
+    .eq("id", accountId)
+    .maybeSingle<AccountRow>();
+
+  // カラム未作成の環境への fallback（設定未反映扱い）
+  if (error && /newsletter_from_/.test(error.message)) {
+    data = null;
+    error = null;
+  }
+  if (error) {
+    return { ok: false, error: `アカウント設定取得失敗: ${error.message}` };
+  }
+
+  const email = data?.newsletter_from_email?.trim() ?? "";
+  if (!email) {
+    return {
+      ok: false,
+      error: "このアカウントに送信元メールアドレスが未設定です。アカウント管理 → メール送信設定から登録してください",
+    };
+  }
+  const name = data?.newsletter_from_name?.trim() ?? "";
+  const safeName = name.replace(/"/g, "'");
+  return { ok: true, from: name ? `"${safeName}" <${email}>` : email };
 }

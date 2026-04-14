@@ -4,19 +4,28 @@ import { supabase } from "@/lib/supabase";
 export async function GET(request: NextRequest) {
   const projectId = request.nextUrl.searchParams.get("project_id");
 
-  const buildQuery = (includeGreeting: boolean) => {
-    const cols = includeGreeting
-      ? "id, channel_id, account_name, basic_id, is_active, group_name, project_id, role, greeting_message"
-      : "id, channel_id, account_name, basic_id, is_active, group_name, project_id, role";
+  const buildQuery = (opts: { greeting: boolean; newsletter: boolean }) => {
+    const base = "id, channel_id, account_name, basic_id, is_active, group_name, project_id, role";
+    const cols = [
+      base,
+      opts.greeting ? "greeting_message" : null,
+      opts.newsletter ? "newsletter_from_email, newsletter_from_name" : null,
+    ]
+      .filter(Boolean)
+      .join(", ");
     let q = supabase.from("line_accounts").select(cols).order("created_at", { ascending: false });
     if (projectId) q = q.eq("project_id", projectId);
     return q;
   };
 
-  let { data, error } = await buildQuery(true);
-  // greeting_message カラム未作成の場合は fallback
+  let { data, error } = await buildQuery({ greeting: true, newsletter: true });
+  // newsletter_from_* カラム未作成への fallback
+  if (error && /newsletter_from_/.test(error.message)) {
+    ({ data, error } = await buildQuery({ greeting: true, newsletter: false }));
+  }
+  // greeting_message カラム未作成への fallback
   if (error && /greeting_message/.test(error.message)) {
-    ({ data, error } = await buildQuery(false));
+    ({ data, error } = await buildQuery({ greeting: false, newsletter: false }));
   }
 
   if (error) {
@@ -29,27 +38,40 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   const body = await request.json();
 
-  const { data, error } = await supabase
+  const insertBody: Record<string, unknown> = {
+    account_name: body.account_name || null,
+    channel_id: body.channel_id,
+    basic_id: body.basic_id || null,
+    channel_secret: body.channel_secret,
+    channel_access_token: body.channel_access_token,
+    group_name: body.group_name || null,
+    project_id: body.project_id || null,
+    role: body.role || "main",
+    greeting_message: body.greeting_message || null,
+    newsletter_from_email: body.newsletter_from_email || null,
+    newsletter_from_name: body.newsletter_from_name || null,
+  };
+
+  let { data, error } = await supabase
     .from("line_accounts")
-    .insert({
-      account_name: body.account_name || null,
-      channel_id: body.channel_id,
-      basic_id: body.basic_id || null,
-      channel_secret: body.channel_secret,
-      channel_access_token: body.channel_access_token,
-      group_name: body.group_name || null,
-      project_id: body.project_id || null,
-      role: body.role || "main",
-      greeting_message: body.greeting_message || null,
-    })
+    .insert(insertBody)
     .select("id")
     .single();
+
+  // newsletter_from_* カラム未作成への fallback
+  if (error && /newsletter_from_/.test(error.message)) {
+    const { newsletter_from_email: _a, newsletter_from_name: _b, ...rest } =
+      insertBody as Record<string, unknown>;
+    void _a;
+    void _b;
+    ({ data, error } = await supabase.from("line_accounts").insert(rest).select("id").single());
+  }
 
   if (error) {
     return Response.json({ error: error.message }, { status: 500 });
   }
 
-  return Response.json({ ok: true, id: data.id });
+  return Response.json({ ok: true, id: data?.id });
 }
 
 export async function PUT(request: NextRequest) {
@@ -72,11 +94,22 @@ export async function PUT(request: NextRequest) {
   if (body.is_active !== undefined) updates.is_active = body.is_active;
   if (body.role !== undefined) updates.role = body.role || null;
   if (body.greeting_message !== undefined) updates.greeting_message = body.greeting_message || null;
+  if (body.newsletter_from_email !== undefined) updates.newsletter_from_email = body.newsletter_from_email || null;
+  if (body.newsletter_from_name !== undefined) updates.newsletter_from_name = body.newsletter_from_name || null;
 
   let { error } = await supabase
     .from("line_accounts")
     .update(updates)
     .eq("id", body.id);
+
+  // newsletter_from_* カラム未作成時の fallback
+  if (error && /newsletter_from_/.test(error.message)) {
+    const { newsletter_from_email: _a, newsletter_from_name: _b, ...rest } =
+      updates as Record<string, unknown>;
+    void _a;
+    void _b;
+    ({ error } = await supabase.from("line_accounts").update(rest).eq("id", body.id));
+  }
 
   // greeting_message カラム未作成時の fallback
   if (error && /greeting_message/.test(error.message)) {
