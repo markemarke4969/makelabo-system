@@ -340,7 +340,7 @@ export default function MatchingResult() {
           </p>
           <div className="text-7xl mb-5">{heroEmoji}</div>
 
-          {/* 1. キャラクター名（大・ゴールド） */}
+          {/* 1. キャラクター名＋動物（大・ゴールド） */}
           <p
             className="font-extrabold text-white mb-3 leading-tight tracking-wide"
             style={{ fontSize: "28px" }}
@@ -352,20 +352,15 @@ export default function MatchingResult() {
             >
               『{type.characterName}』
             </span>
-            タイプです
+            タイプ
+            {doubutsu && <>の{doubutsu.result.animal}</>}
+            です
           </p>
 
           {/* 2. タイプ名（小・サブテキスト） */}
-          <p className="text-base font-medium text-gray-300 mb-1 leading-tight">
+          <p className="text-base font-medium text-gray-300 mb-3 leading-tight">
             {type.name}
           </p>
-
-          {/* 3. 動物タイプ（さらに小さく） */}
-          {doubutsu && (
-            <p className="text-xs text-gray-500 mb-3 leading-tight">
-              動物タイプ（{doubutsu.result.animal}）
-            </p>
-          )}
           <div className="flex justify-center gap-2 mb-4 flex-wrap">
             {(doubutsu?.profile.traits ?? type.traits).map((trait) => (
               <span
