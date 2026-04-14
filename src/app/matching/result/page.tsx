@@ -43,6 +43,12 @@ const AVOID_LABELS: Record<string, string> = {
   c: "成果が出るまで時間がかかること",
   d: "難しくて理解できないこと",
 };
+const CREDIT_CARD_LABELS: Record<string, string> = {
+  a: "クレジットカードを複数枚持っている",
+  b: "クレジットカードを1枚持っている",
+  c: "クレジットカードを持っていない",
+  d: "過去に債務整理・自己破産の経験がある",
+};
 
 const LOADING_MESSAGES = [
   "あなたの回答を分析中...",
@@ -265,8 +271,9 @@ export default function MatchingResult() {
       type: res.type.name,
       income: INCOME_LABELS[answers[2]] || "不明",
       asset: ASSET_LABELS[answers[3]] || "不明",
-      experience: EXPERIENCE_LABELS[answers[7]] || "不明",
-      avoid: AVOID_LABELS[answers[10]] || "不明",
+      experience: EXPERIENCE_LABELS[answers[8]] || "不明",
+      avoid: AVOID_LABELS[answers[11]] || "不明",
+      creditCard: CREDIT_CARD_LABELS[answers[6]] || "不明",
     })
       .then((json) => {
         if (json) setAiDiagnosis(json);

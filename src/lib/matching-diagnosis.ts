@@ -1,7 +1,7 @@
 // ========================================
 // 副業マッチング診断ロジック
 // ========================================
-// 12問の質問で適性をスコアリングし、6タイプに分類
+// 13問の質問で適性をスコアリングし、6タイプに分類
 // ※ 結果ページでは特定の商材名を出さない（クローザーがブラックボックスで案内）
 
 // ========================================
@@ -186,6 +186,16 @@ export const MATCHING_QUESTIONS: MatchingQuestion[] = [
   },
   {
     id: 7,
+    question: "クレジットカードについて教えてください",
+    options: [
+      { label: "クレジットカードを複数枚持っている", value: "a", score: {} },
+      { label: "クレジットカードを1枚持っている", value: "b", score: {} },
+      { label: "クレジットカードを持っていない", value: "c", score: {} },
+      { label: "過去に債務整理・自己破産の経験がある", value: "d", score: {} },
+    ],
+  },
+  {
+    id: 8,
     question: "今取り組んでいる（取り組んだことがある）副業は？",
     options: [
       { label: "投資系（株・FX・仮想通貨など）", value: "a", score: { fx_auto: 2, fx_signal: 2, fx_discretion: 2 } },
@@ -195,7 +205,7 @@ export const MATCHING_QUESTIONS: MatchingQuestion[] = [
     ],
   },
   {
-    id: 8,
+    id: 9,
     question: "副業の経験年数は？",
     options: [
       { label: "未経験", value: "a", score: { fx_auto: 2, keiba: 2, qoo10: 1 } },
@@ -205,7 +215,7 @@ export const MATCHING_QUESTIONS: MatchingQuestion[] = [
     ],
   },
   {
-    id: 9,
+    id: 10,
     question: "10万円の臨時収入が入ったら？",
     options: [
       { label: "すぐ貯金する", value: "a", score: { qoo10: 3, tsukushi: 2 } },
@@ -215,7 +225,7 @@ export const MATCHING_QUESTIONS: MatchingQuestion[] = [
     ],
   },
   {
-    id: 10,
+    id: 11,
     question: "パソコン作業はどれくらい得意？",
     options: [
       { label: "ほぼ毎日使っている", value: "a", score: { shopee: 2, qoo10: 2, fx_discretion: 2 } },
@@ -225,7 +235,7 @@ export const MATCHING_QUESTIONS: MatchingQuestion[] = [
     ],
   },
   {
-    id: 11,
+    id: 12,
     question: "副業で一番避けたいことは？",
     options: [
       { label: "大きな損失を出すこと", value: "a", score: { qoo10: 3, tsukushi: 3, fx_signal: 1 } },
@@ -235,7 +245,7 @@ export const MATCHING_QUESTIONS: MatchingQuestion[] = [
     ],
   },
   {
-    id: 12,
+    id: 13,
     question: "副業を本格的に始めたいタイミングは？",
     options: [
       { label: "できれば今すぐにでも", value: "a", score: { tsukushi: 2, fx_auto: 2, keiba: 2, fx_discretion: 1 } },

@@ -19,6 +19,7 @@ function buildPrompt(userData: Record<string, string>): string {
 資産額：${userData.asset}
 副業経験：${userData.experience}
 避けたいこと：${userData.avoid}
+クレジットカード状況：${userData.creditCard}
 
 【出力形式】
 以下3セクションをJSON形式で返してください。
@@ -31,6 +32,7 @@ function buildPrompt(userData: Record<string, string>): string {
 }
 
 【厳守事項】
+- クレジットカード状況が"過去に債務整理・自己破産の経験がある"の場合、strengthSectionで"初期資金が少なくても着実に始められる強み"を特に強調すること
 - 特定の副業名・商材名は絶対に出さない
 - JSONのみ返す。前置き・後書き不要
 - 各セクション400文字以上必ず書く

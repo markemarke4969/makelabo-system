@@ -8,6 +8,7 @@ export interface GenerateDiagnosisInput {
   asset: string;
   experience: string;
   avoid: string;
+  creditCard: string;
 }
 
 export interface DiagnosisResult {

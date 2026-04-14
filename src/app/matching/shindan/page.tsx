@@ -37,7 +37,7 @@ export default function MatchingShindan() {
 
   const questionIcons = [
     "💼", "⏰", "💰", "🏦", "📈", "📦",
-    "🔧", "📅", "🎁", "💻", "⚠️", "🚀",
+    "💳", "🔧", "📅", "🎁", "💻", "⚠️", "🚀",
   ];
 
   const infoComplete =
@@ -131,7 +131,7 @@ export default function MatchingShindan() {
               をAIがマッチング
             </h1>
             <p className="text-gray-400 text-sm leading-relaxed">
-              12問の簡単な質問に答えるだけ。
+              13問の簡単な質問に答えるだけ。
               <br />
               AIがあなたの性格・ライフスタイルから
               <br />
