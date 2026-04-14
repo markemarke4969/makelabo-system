@@ -354,9 +354,6 @@ export default function MatchingShindan() {
                   )}
                 </select>
               </div>
-              <p className="text-xs text-gray-500 mt-1">
-                動物占いによる性格分析に使用します
-              </p>
             </div>
           </div>
 
