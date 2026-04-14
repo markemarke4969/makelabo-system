@@ -83,7 +83,11 @@
       "Bash(git -C \"C:/Users/lmsml/makelabo-system/app\" status -s)",
       "Bash(npx eslint:*)",
       "Bash(cat .env.local)",
-      "Bash(cat .env.example)"
+      "Bash(cat .env.example)",
+      "Bash(gh api:*)",
+      "WebFetch(domain:utage-system.com)",
+      "Bash(find:*)",
+      "Bash(python3 -c \" import json, sys data = json.load\\(sys.stdin\\) for s in data[:3]: print\\(f\\\\\"ID: {s['id']}, Name: {s['name']}, Kind: {s.get\\('kind','?'\\)}, Status: {s['status']}\\\\\"\\) for m in s.get\\('messages', s.get\\('line_step_messages', []\\)\\)[:2]: print\\(f\\\\\" msg: delay={m.get\\('delay_minutes'\\)}, timing={m.get\\('timing_mode','N/A'\\)}, days={m.get\\('delivery_days','N/A'\\)}, time={m.get\\('delivery_time','N/A'\\)}\\\\\"\\) \")"
     ]
   }
 }

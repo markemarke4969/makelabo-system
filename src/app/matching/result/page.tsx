@@ -14,6 +14,41 @@ import {
   getDoubutsuProfile,
   type DoubutsuProfile,
 } from "@/lib/doubutsu-profile";
+import {
+  generateDiagnosis,
+  type DiagnosisResult as AIDiagnosisResult,
+} from "@/lib/generateDiagnosis";
+
+const INCOME_LABELS: Record<string, string> = {
+  a: "20万円未満",
+  b: "20〜40万円",
+  c: "40〜60万円",
+  d: "60万円以上",
+};
+const ASSET_LABELS: Record<string, string> = {
+  a: "100万円未満",
+  b: "100〜500万円",
+  c: "500〜1,000万円",
+  d: "1,000万円以上",
+};
+const EXPERIENCE_LABELS: Record<string, string> = {
+  a: "未経験",
+  b: "半年未満",
+  c: "半年〜2年",
+  d: "2年以上",
+};
+const AVOID_LABELS: Record<string, string> = {
+  a: "大きな損失を出すこと",
+  b: "毎日の作業に追われること",
+  c: "成果が出るまで時間がかかること",
+  d: "難しくて理解できないこと",
+};
+
+const LOADING_MESSAGES = [
+  "あなたの回答を分析中...",
+  "動物占いデータと照合中...",
+  "あなただけの診断結果を生成中...",
+];
 
 // ========================================
 // 簡易グラフコンポーネント（SVG）
@@ -142,8 +177,11 @@ export default function MatchingResult() {
     result: DoubutsuResult;
     profile: DoubutsuProfile;
   } | null>(null);
-  const [animalReading, setAnimalReading] = useState<string>("");
-  const [animalReadingLoading, setAnimalReadingLoading] = useState(false);
+  const [aiDiagnosis, setAiDiagnosis] = useState<AIDiagnosisResult | null>(
+    null,
+  );
+  const [aiLoading, setAiLoading] = useState(false);
+  const [loadingMsgIndex, setLoadingMsgIndex] = useState(0);
 
   // 初期資金（Q6の回答から推定）
   const [initialFund, setInitialFund] = useState(300000);
@@ -204,36 +242,50 @@ export default function MatchingResult() {
     setInitialFund(fundMap[q6Answer] || 300000);
 
     // 動物占い
+    let animalName = "";
+    let animalTraits = "";
     if (data.birthday) {
       const dResult = diagnoseDoubutsuFromISO(data.birthday);
       if (dResult) {
         const profile = getDoubutsuProfile(dResult.animal);
         setDoubutsu({ result: dResult, profile });
-
-        // Claude APIで動物占い × 副業タイプのクロスリーディングを生成
-        setAnimalReadingLoading(true);
-        fetch("/api/matching/animal-reading", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            animal: dResult.animal,
-            animalTraits: profile.traits.join("・"),
-            matchingTypeName: res.type.name,
-            matchingTypeId: res.type.id,
-          }),
-        })
-          .then((r) => r.json())
-          .then((json) => {
-            if (json.text) setAnimalReading(json.text);
-          })
-          .catch(() => {})
-          .finally(() => setAnimalReadingLoading(false));
+        animalName = dResult.animal;
+        animalTraits = profile.traits.join("・");
       }
     }
+
+    // Claude APIで3セクションをまとめて生成
+    const answers: string[] = data.answers || [];
+    setAiLoading(true);
+    generateDiagnosis({
+      name: data.name || "あなた",
+      age: data.ageGroup || "不明",
+      animal: animalName || "（未判定）",
+      animalDescription: animalTraits || "",
+      type: res.type.name,
+      income: INCOME_LABELS[answers[2]] || "不明",
+      asset: ASSET_LABELS[answers[3]] || "不明",
+      experience: EXPERIENCE_LABELS[answers[7]] || "不明",
+      avoid: AVOID_LABELS[answers[10]] || "不明",
+    })
+      .then((json) => {
+        if (json) setAiDiagnosis(json);
+      })
+      .finally(() => setAiLoading(false));
 
     setLoading(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // ローディング中のメッセージをローテーション
+  useEffect(() => {
+    if (!aiLoading) return;
+    setLoadingMsgIndex(0);
+    const id = setInterval(() => {
+      setLoadingMsgIndex((i) => (i + 1) % LOADING_MESSAGES.length);
+    }, 2000);
+    return () => clearInterval(id);
+  }, [aiLoading]);
 
   const handleBooking = async () => {
     if (!diagnosisId || !bookingDate || !bookingTime) return;
@@ -305,25 +357,38 @@ export default function MatchingResult() {
           <p className="text-gray-400 text-sm">{type.description}</p>
         </div>
 
-        {/* 性格診断・副業適性について */}
+        {/* ①あなたの本質的な強み（Claude API生成） */}
         <div className="rounded-2xl bg-white/5 border border-white/10 p-6 mb-6">
           <h2 className="text-base font-bold text-blue-400 mb-4 flex items-center gap-2">
             <span className="text-lg">📖</span>
-            <span>あなたの性格タイプについて</span>
+            <span>あなたの本質的な強み</span>
           </h2>
-          <div className="space-y-4">
-            {type.longDescription.split("\n\n").map((p, i) => (
-              <p
-                key={i}
-                className="text-gray-200 text-[15px] leading-[1.9] tracking-wide"
-              >
-                {p}
+          {aiLoading ? (
+            <div className="flex items-center gap-3 py-4">
+              <div className="w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+              <p className="text-sm text-gray-400">
+                {LOADING_MESSAGES[loadingMsgIndex]}
               </p>
-            ))}
-          </div>
+            </div>
+          ) : aiDiagnosis ? (
+            <div className="space-y-4">
+              {aiDiagnosis.strengthSection.split("\n\n").map((p, i) => (
+                <p
+                  key={i}
+                  className="text-gray-200 text-[15px] leading-[1.9] tracking-wide"
+                >
+                  {p}
+                </p>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-gray-500">
+              診断結果の生成に失敗しました。時間をおいてお試しください。
+            </p>
+          )}
         </div>
 
-        {/* 動物占い × 副業スタイル（Claude API生成） */}
+        {/* ②動物タイプのあなたへ（Claude API生成） */}
         {doubutsu && (
           <div className="rounded-2xl bg-white/5 border border-white/10 p-6 mb-6">
             <h2 className="text-base font-bold text-blue-400 mb-4 flex items-center gap-2">
@@ -332,16 +397,16 @@ export default function MatchingResult() {
                 {doubutsu.result.animal}タイプのあなたへ
               </span>
             </h2>
-            {animalReadingLoading ? (
+            {aiLoading ? (
               <div className="flex items-center gap-3 py-4">
                 <div className="w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
                 <p className="text-sm text-gray-400">
-                  AIがあなた専用の分析を作成中...
+                  {LOADING_MESSAGES[loadingMsgIndex]}
                 </p>
               </div>
-            ) : animalReading ? (
+            ) : aiDiagnosis ? (
               <div className="space-y-4">
-                {animalReading.split("\n\n").map((p, i) => (
+                {aiDiagnosis.animalSection.split("\n\n").map((p, i) => (
                   <p
                     key={i}
                     className="text-gray-200 text-[15px] leading-[1.9] tracking-wide"
@@ -369,14 +434,34 @@ export default function MatchingResult() {
             <FutureGraph initialFund={initialFund} />
           </div>
 
-          {/* このまま何もしなかった場合 */}
+          {/* ③今のあなたに潜むリスク（Claude API生成） */}
           <div className="mb-4 p-4 rounded-xl bg-red-500/5 border border-red-500/15">
             <p className="text-red-400 text-xs font-bold mb-2 flex items-center gap-1">
-              <span>⚠️</span> 現在の延長線上
+              <span>⚠️</span> 今のあなたに潜むリスク
             </p>
-            <p className="text-gray-300 text-sm leading-relaxed">
-              副業を始めないまま1年が過ぎると、物価上昇や増税の影響で実質的な可処分所得は減り続けます。今の{initialFund.toLocaleString()}円も、インフレにより1年後には実質{Math.round(initialFund * 0.97).toLocaleString()}円の価値に。「いつかやろう」と思っている間に、同世代との収入格差は広がり、将来への不安は増す一方です。
-            </p>
+            {aiLoading ? (
+              <div className="flex items-center gap-3 py-2">
+                <div className="w-4 h-4 border-2 border-red-400 border-t-transparent rounded-full animate-spin" />
+                <p className="text-xs text-gray-400">
+                  {LOADING_MESSAGES[loadingMsgIndex]}
+                </p>
+              </div>
+            ) : aiDiagnosis ? (
+              <div className="space-y-3">
+                {aiDiagnosis.riskSection.split("\n\n").map((p, i) => (
+                  <p
+                    key={i}
+                    className="text-gray-300 text-sm leading-relaxed"
+                  >
+                    {p}
+                  </p>
+                ))}
+              </div>
+            ) : (
+              <p className="text-gray-300 text-sm leading-relaxed">
+                副業を始めないまま1年が過ぎると、物価上昇や増税の影響で実質的な可処分所得は減り続けます。今の{initialFund.toLocaleString()}円も、インフレにより1年後には実質{Math.round(initialFund * 0.97).toLocaleString()}円の価値に。
+              </p>
+            )}
           </div>
 
           {/* 適性を活かした場合 */}
