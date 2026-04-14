@@ -63,9 +63,9 @@ function FutureGraph({ initialFund }: { initialFund: number }) {
   const months = [0, 3, 6, 9, 12];
   // 副業あり：初期資金が月10%ずつ成長
   const withSide = months.map((m) => Math.round(initialFund * Math.pow(1.1, m)));
-  // 副業なし：インフレで年3%目減り（月0.25%）
+  // 副業なし：インフレで年率3%目減り（初期資金 × 0.97^(経過月数/12)）
   const withoutSide = months.map((m) =>
-    Math.round(initialFund * Math.pow(0.9975, m)),
+    Math.round(initialFund * Math.pow(0.97, m / 12)),
   );
   const maxVal = Math.max(...withSide, initialFund * 1.2);
   const w = 320;
