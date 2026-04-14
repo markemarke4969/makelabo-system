@@ -49,6 +49,17 @@ const CREDIT_CARD_LABELS: Record<string, string> = {
   c: "クレジットカードを持っていない",
   d: "過去に債務整理・自己破産の経験がある",
 };
+const OCCUPATION_LABELS: Record<string, string> = {
+  office_clerical: "会社員（事務系）",
+  office_engineer: "会社員（技術・エンジニア系）",
+  office_sales: "会社員（営業・販売系）",
+  medical_care: "医療・介護・福祉系",
+  construction_mfg: "建設・製造・物流系",
+  self_employed: "自営業・経営者",
+  homemaker: "主婦・主夫",
+  student: "学生",
+  other: "その他・無職",
+};
 
 const LOADING_MESSAGES = [
   "あなたの回答を分析中...",
@@ -274,6 +285,7 @@ export default function MatchingResult() {
       experience: EXPERIENCE_LABELS[answers[8]] || "不明",
       avoid: AVOID_LABELS[answers[11]] || "不明",
       creditCard: CREDIT_CARD_LABELS[answers[6]] || "不明",
+      occupation: OCCUPATION_LABELS[data.occupation] || "未回答",
     })
       .then((json) => {
         if (json) setAiDiagnosis(json);
@@ -361,35 +373,35 @@ export default function MatchingResult() {
               </span>
             ))}
           </div>
-          <p className="text-gray-400 text-sm">{type.description}</p>
+          <p className="text-gray-400 text-base">{type.description}</p>
         </div>
 
         {/* ①あなたの本質的な強み（Claude API生成） */}
-        <div className="rounded-2xl bg-white/5 border border-white/10 p-6 mb-6">
-          <h2 className="text-base font-bold text-blue-400 mb-4 flex items-center gap-2">
-            <span className="text-lg">📖</span>
+        <div className="rounded-2xl bg-white/5 border border-white/10 p-7 mb-6">
+          <h2 className="text-lg font-bold text-blue-400 mb-5 flex items-center gap-2">
+            <span className="text-xl">📖</span>
             <span>あなたの本質的な強み</span>
           </h2>
           {aiLoading ? (
             <div className="flex items-center gap-3 py-4">
               <div className="w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
-              <p className="text-sm text-gray-400">
+              <p className="text-base text-gray-400">
                 {LOADING_MESSAGES[loadingMsgIndex]}
               </p>
             </div>
           ) : aiDiagnosis ? (
-            <div className="space-y-4">
+            <div className="space-y-6">
               {aiDiagnosis.strengthSection.split("\n\n").map((p, i) => (
                 <p
                   key={i}
-                  className="text-gray-200 text-[15px] leading-[1.9] tracking-wide"
+                  className="text-gray-200 text-[17px] leading-[2] tracking-wide"
                 >
                   {p}
                 </p>
               ))}
             </div>
           ) : (
-            <p className="text-sm text-gray-500">
+            <p className="text-base text-gray-500">
               診断結果の生成に失敗しました。時間をおいてお試しください。
             </p>
           )}
@@ -397,9 +409,9 @@ export default function MatchingResult() {
 
         {/* ②動物タイプのあなたへ（Claude API生成） */}
         {doubutsu && (
-          <div className="rounded-2xl bg-white/5 border border-white/10 p-6 mb-6">
-            <h2 className="text-base font-bold text-blue-400 mb-4 flex items-center gap-2">
-              <span className="text-lg">🔮</span>
+          <div className="rounded-2xl bg-white/5 border border-white/10 p-7 mb-6">
+            <h2 className="text-lg font-bold text-blue-400 mb-5 flex items-center gap-2">
+              <span className="text-xl">🔮</span>
               <span>
                 {doubutsu.result.animal}タイプのあなたへ
               </span>
@@ -407,16 +419,16 @@ export default function MatchingResult() {
             {aiLoading ? (
               <div className="flex items-center gap-3 py-4">
                 <div className="w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
-                <p className="text-sm text-gray-400">
+                <p className="text-base text-gray-400">
                   {LOADING_MESSAGES[loadingMsgIndex]}
                 </p>
               </div>
             ) : aiDiagnosis ? (
-              <div className="space-y-4">
+              <div className="space-y-6">
                 {aiDiagnosis.animalSection.split("\n\n").map((p, i) => (
                   <p
                     key={i}
-                    className="text-gray-200 text-[15px] leading-[1.9] tracking-wide"
+                    className="text-gray-200 text-[17px] leading-[2] tracking-wide"
                   >
                     {p}
                   </p>
@@ -442,41 +454,41 @@ export default function MatchingResult() {
           </div>
 
           {/* ③今のあなたに潜むリスク（Claude API生成） */}
-          <div className="mb-4 p-4 rounded-xl bg-red-500/5 border border-red-500/15">
-            <p className="text-red-400 text-xs font-bold mb-2 flex items-center gap-1">
-              <span>⚠️</span> 今のあなたに潜むリスク
+          <div className="mb-5 p-5 rounded-xl bg-red-500/5 border border-red-500/15">
+            <p className="text-red-400 text-sm font-bold mb-3 flex items-center gap-1.5">
+              <span className="text-base">⚠️</span> 今のあなたに潜むリスク
             </p>
             {aiLoading ? (
               <div className="flex items-center gap-3 py-2">
                 <div className="w-4 h-4 border-2 border-red-400 border-t-transparent rounded-full animate-spin" />
-                <p className="text-xs text-gray-400">
+                <p className="text-base text-gray-400">
                   {LOADING_MESSAGES[loadingMsgIndex]}
                 </p>
               </div>
             ) : aiDiagnosis ? (
-              <div className="space-y-3">
+              <div className="space-y-5">
                 {aiDiagnosis.riskSection.split("\n\n").map((p, i) => (
                   <p
                     key={i}
-                    className="text-gray-300 text-sm leading-relaxed"
+                    className="text-gray-200 text-base leading-[1.95] tracking-wide"
                   >
                     {p}
                   </p>
                 ))}
               </div>
             ) : (
-              <p className="text-gray-300 text-sm leading-relaxed">
+              <p className="text-gray-200 text-base leading-[1.95] tracking-wide">
                 副業を始めないまま1年が過ぎると、物価上昇や増税の影響で実質的な可処分所得は減り続けます。今の{initialFund.toLocaleString()}円も、インフレにより1年後には実質{Math.round(initialFund * 0.97).toLocaleString()}円の価値に。
               </p>
             )}
           </div>
 
           {/* 適性を活かした場合 */}
-          <div className="p-4 rounded-xl bg-green-500/5 border border-green-500/15">
-            <p className="text-green-400 text-xs font-bold mb-2 flex items-center gap-1">
-              <span>✨</span> 適性を活かした場合
+          <div className="p-5 rounded-xl bg-green-500/5 border border-green-500/15">
+            <p className="text-green-400 text-sm font-bold mb-3 flex items-center gap-1.5">
+              <span className="text-base">✨</span> 適性を活かした場合
             </p>
-            <p className="text-gray-300 text-sm leading-relaxed">
+            <p className="text-gray-200 text-base leading-[1.95] tracking-wide">
               {userName ? `${userName}さん` : "あなた"}の「{type.name}」としての強みを正しい方向に活かせば、3ヶ月後には最初の成果が見え始め、半年後には安定した副収入の柱を築ける可能性があります。あなたの性格に合ったやり方だからこそ、無理なく続けられ、1年後には資産{Math.round(initialFund * Math.pow(1.1, 12)).toLocaleString()}円も現実的な目標です。
             </p>
           </div>

@@ -19,6 +19,7 @@ export default function MatchingShindan() {
   // 基本情報
   const [name, setName] = useState("");
   const [gender, setGender] = useState("");
+  const [occupation, setOccupation] = useState("");
   const [ageGroup, setAgeGroup] = useState("");
   const [familyStatus, setFamilyStatus] = useState("");
   const [birthYear, setBirthYear] = useState(1990);
@@ -78,6 +79,7 @@ export default function MatchingShindan() {
       name,
       birthday,
       gender,
+      occupation,
       ageGroup,
       familyStatus,
       answers: allAnswers,
@@ -221,6 +223,40 @@ export default function MatchingShindan() {
                     }`}
                   >
                     {g.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* 職業（任意） */}
+            <div>
+              <label className="block text-sm font-medium text-gray-300 mb-2">
+                職業 <span className="text-gray-500 text-xs">（任意）</span>
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                {[
+                  { value: "office_clerical", label: "会社員（事務系）" },
+                  { value: "office_engineer", label: "会社員（技術・エンジニア系）" },
+                  { value: "office_sales", label: "会社員（営業・販売系）" },
+                  { value: "medical_care", label: "医療・介護・福祉系" },
+                  { value: "construction_mfg", label: "建設・製造・物流系" },
+                  { value: "self_employed", label: "自営業・経営者" },
+                  { value: "homemaker", label: "主婦・主夫" },
+                  { value: "student", label: "学生" },
+                  { value: "other", label: "その他・無職" },
+                ].map((o) => (
+                  <button
+                    key={o.value}
+                    onClick={() =>
+                      setOccupation(occupation === o.value ? "" : o.value)
+                    }
+                    className={`py-2.5 px-2 rounded-xl text-xs font-medium transition-all leading-tight ${
+                      occupation === o.value
+                        ? "bg-blue-500 text-white"
+                        : "bg-white/5 border border-white/15 text-gray-300 hover:bg-white/10"
+                    }`}
+                  >
+                    {o.label}
                   </button>
                 ))}
               </div>

@@ -9,6 +9,7 @@ export interface GenerateDiagnosisInput {
   experience: string;
   avoid: string;
   creditCard: string;
+  occupation: string;
 }
 
 export interface DiagnosisResult {

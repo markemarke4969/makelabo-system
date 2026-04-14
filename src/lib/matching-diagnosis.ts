@@ -1,7 +1,7 @@
 // ========================================
 // 副業マッチング診断ロジック
 // ========================================
-// 13問の質問で適性をスコアリングし、6タイプに分類
+// 13問の質問を2軸（アプローチ軸×志向軸）でスコアリングし、16タイプに分類
 // ※ 結果ページでは特定の商材名を出さない（クローザーがブラックボックスで案内）
 
 // ========================================
@@ -25,7 +25,30 @@ export const PRODUCTS: Product[] = [
 ];
 
 // ========================================
-// タイプ定義
+// 軸定義（MBTI風：2軸×各4値 = 16組合せ）
+// ========================================
+// 軸1：アプローチ軸（analytical / intuitive / cautious / builder）
+// 軸2：志向軸（stable / steady / speed / leader）
+export const AXIS1_KEYS = ["analytical", "intuitive", "cautious", "builder"] as const;
+export const AXIS2_KEYS = ["stable", "steady", "speed", "leader"] as const;
+export type Axis1 = (typeof AXIS1_KEYS)[number];
+export type Axis2 = (typeof AXIS2_KEYS)[number];
+
+export const AXIS1_LABELS: Record<Axis1, string> = {
+  analytical: "分析派",
+  intuitive: "直感型",
+  cautious: "慎重派",
+  builder: "仕組み構築型",
+};
+export const AXIS2_LABELS: Record<Axis2, string> = {
+  stable: "安定志向型",
+  steady: "コツコツ継続型",
+  speed: "スピード重視型",
+  leader: "リーダー",
+};
+
+// ========================================
+// タイプ定義（16タイプ）
 // ========================================
 export interface MatchingType {
   id: string;
@@ -39,71 +62,169 @@ export interface MatchingType {
 }
 
 export const MATCHING_TYPES: MatchingType[] = [
+  // analytical × *
   {
-    id: "steady",
-    name: "堅実コツコツ型",
-    emoji: "🏗️",
-    headline: "地に足のついた堅実コツコツ型",
-    description: "リスクを抑えて着実に利益を積み上げるのが得意なタイプです。",
-    longDescription:
-      "あなたは「確実に手元に残る利益」に最も価値を感じるタイプです。一発逆転よりも、毎月安定して積み上がっていく実感のほうが、はるかにモチベーションになります。\n\n周囲が「もっと攻めたほうがいい」と言っても、あなたの内側にある判断基準はブレません。その芯の強さこそが、あなた最大の武器です。短期的に派手な成果を出す人を見て焦ることがあるかもしれませんが、本当に長期で結果を出し続けるのは、あなたのように「負けない戦い方」ができる人です。\n\n一方で、慎重すぎるがゆえに最初の一歩が遅れがちという面も。「もう少し調べてから」「もう少し準備してから」と言いながら、気づけば半年、1年と時間だけが過ぎていく——そんな経験に心当たりはありませんか？\n\nあなたに合っているのは、仕組みがすでに出来上がっていて、最初のステップが明確に見えるビジネスモデルです。ゼロから何かを生み出すより、すでに勝ちパターンが確立された型に乗って、それを自分のペースで積み重ねていくほうが、あなたの力は何倍にもなります。\n\n堅実なあなただからこそ、正しい方向さえ見つかれば、あとは時間が最大の味方になります。派手さはなくても、半年後に振り返った時に一番確実に結果が出ているのは、間違いなくこのタイプです。",
-    traits: ["慎重", "計画的", "安定志向"],
+    id: "analytical_stable",
+    name: "分析派安定志向型",
+    emoji: "📊",
+    headline: "数字で選ぶ分析派安定志向型",
+    description: "論理とリスク管理で確実な成果を積み上げるタイプです。",
+    longDescription: "データと根拠を重視し、安定した成果を着実に築くタイプ。",
+    traits: ["論理的", "堅実", "分析力"],
+    recommendedProducts: ["fx_signal", "qoo10"],
+  },
+  {
+    id: "analytical_steady",
+    name: "分析派コツコツ継続型",
+    emoji: "📈",
+    headline: "データ重視の分析派コツコツ継続型",
+    description: "地道な検証と継続で成果を伸ばすタイプです。",
+    longDescription: "分析と継続力を武器に、時間をかけて精度を高めるタイプ。",
+    traits: ["論理的", "継続力", "検証重視"],
+    recommendedProducts: ["fx_signal", "qoo10"],
+  },
+  {
+    id: "analytical_speed",
+    name: "分析派スピード重視型",
+    emoji: "⚡",
+    headline: "瞬時に判断する分析派スピード重視型",
+    description: "分析スピードと決断力で素早く成果を掴むタイプです。",
+    longDescription: "素早い情報処理と即断即決で機会を逃さないタイプ。",
+    traits: ["論理的", "決断力", "瞬発力"],
+    recommendedProducts: ["fx_signal", "fx_discretion"],
+  },
+  {
+    id: "analytical_leader",
+    name: "分析派リーダー型",
+    emoji: "🎯",
+    headline: "戦略立案型の分析派リーダー",
+    description: "ロジックで仕組みや人を動かすタイプです。",
+    longDescription: "戦略と統率力で大きな成果を狙うタイプ。",
+    traits: ["戦略的", "統率力", "先見性"],
+    recommendedProducts: ["fx_discretion", "shopee"],
+  },
+  // intuitive × *
+  {
+    id: "intuitive_stable",
+    name: "直感型安定志向型",
+    emoji: "🌿",
+    headline: "勘と堅実さの直感型安定志向型",
+    description: "感覚を活かしつつリスクを抑えるタイプです。",
+    longDescription: "直感と慎重さを併せ持ち、無理なく続けられるタイプ。",
+    traits: ["感覚派", "堅実", "バランス"],
     recommendedProducts: ["qoo10", "tsukushi"],
   },
   {
-    id: "global",
-    name: "グローバル開拓型",
-    emoji: "🌏",
-    headline: "世界を舞台にするグローバル開拓型",
-    description: "新しい市場や未知の領域に可能性を感じるタイプです。",
-    longDescription:
-      "あなたは「まだ誰もやっていない場所」に可能性を感じるタイプです。すでに飽和した市場でレッドオーシャンの戦いをするより、成長途上の新しいフィールドでブルーオーシャンを見つけるほうが、あなたの本能が喜びます。\n\n好奇心の強さがあなたの最大のエンジンです。新しい情報に触れた時のワクワク感、まだ見ぬ可能性を想像する時の高揚感——それが行動の原動力になるからこそ、人より一歩早くチャンスを掴めるポテンシャルがあります。\n\nただし、興味の幅が広いぶん、一つのことに集中し続けるのが苦手という側面も。「面白そう」と思って始めたものの、途中で次の新しいことに目移りしてしまう。結果として、どれも中途半端に——そんなパターンに覚えはないでしょうか？\n\nあなたに最適なのは、成長市場の波に乗りながらも、仕組みやツールがしっかりサポートしてくれるビジネスモデルです。あなたの開拓者精神をシステムが支えてくれれば、飽きる前に成果が出て、成果が出るからまた続けられる——そういう好循環が生まれます。\n\nあなたの「好奇心」と「行動力」は、正しいフィールドに置けば、想像以上の結果を生み出す力になります。大切なのは、どこで戦うかを間違えないこと。それさえ見つかれば、あなたのポテンシャルは一気に花開きます。",
-    traits: ["好奇心旺盛", "チャレンジ精神", "グローバル志向"],
-    recommendedProducts: ["shopee"],
+    id: "intuitive_steady",
+    name: "直感型コツコツ継続型",
+    emoji: "🌱",
+    headline: "ひらめきを積み上げる直感型コツコツ継続型",
+    description: "ひらめきを日々の積み重ねに変えるタイプです。",
+    longDescription: "感覚的な発想を継続力で形にするタイプ。",
+    traits: ["感覚派", "継続力", "素直"],
+    recommendedProducts: ["shopee", "qoo10"],
   },
   {
-    id: "auto",
-    name: "完全自動・効率型",
-    emoji: "⚡",
-    headline: "仕組みで稼ぐ完全自動・効率型",
-    description: "自分の時間を最大限に活かしながら収入を得たいタイプです。",
-    longDescription:
-      "あなたは「自分が動かなくても回る仕組み」に最も魅力を感じるタイプです。同じ1時間を使うなら、その1時間分だけ稼ぐのではなく、一度の仕組み作りで何十時間分もの成果を生み出したい——そんな合理的な発想を持っています。\n\n本業が忙しくて副業に割ける時間が限られている方、あるいは家族との時間やプライベートも大切にしたい方に多いのがこのタイプ。決して「楽をしたい」のではなく、「限られたリソースで最大の成果を出したい」という、とても合理的な考え方の持ち主です。\n\nあなたの強みは、物事の本質を見抜く力と、無駄を嫌う効率思考。どんなに良い話でも「結局、自分の手を動かし続けないといけないんでしょ？」と感じるものには興味が湧かない。逆に、仕組みとして美しく動くものには、強く心を惹かれるはずです。\n\nただし、「自動」という言葉に惹かれるあまり、中身をよく理解しないまま飛びついてしまうリスクもあります。自動だからこそ、最初の選択——何を、どう動かすか——が決定的に重要です。ここを間違えると、自動で損失が積み上がることにもなりかねません。\n\nだからこそ、あなたに必要なのは「最初の一歩だけプロと一緒に正しく設計する」こと。そこさえ固まれば、あとはあなたの時間を一切奪わずに資産が育っていきます。仕組みに任せる勇気と、最初の設計だけ本気で取り組む姿勢。この2つが揃えば、あなたは最も効率よく結果を出せるタイプです。",
-    traits: ["効率重視", "時間を大切にする", "仕組み志向"],
+    id: "intuitive_speed",
+    name: "直感型スピード重視型",
+    emoji: "🚀",
+    headline: "勘で即行動する直感型スピード重視型",
+    description: "ひらめき即実行でチャンスを掴むタイプです。",
+    longDescription: "直感と行動力でチャンスを最短距離で掴むタイプ。",
+    traits: ["感覚派", "行動力", "大胆"],
+    recommendedProducts: ["keiba", "shopee"],
+  },
+  {
+    id: "intuitive_leader",
+    name: "直感型リーダー型",
+    emoji: "🔥",
+    headline: "巻き込む力の直感型リーダー",
+    description: "直感と巻き込み力で周囲を動かすタイプです。",
+    longDescription: "人を引きつけ大きなうねりを作るタイプ。",
+    traits: ["感覚派", "統率力", "カリスマ"],
+    recommendedProducts: ["shopee", "fx_discretion"],
+  },
+  // cautious × *
+  {
+    id: "cautious_stable",
+    name: "慎重派安定志向型",
+    emoji: "🛡️",
+    headline: "ど安定の慎重派安定志向型",
+    description: "リスク最小で着実な成果を重視するタイプです。",
+    longDescription: "堅実さを何より重んじ、確実な一歩を積み上げるタイプ。",
+    traits: ["慎重", "堅実", "安定志向"],
+    recommendedProducts: ["tsukushi", "qoo10"],
+  },
+  {
+    id: "cautious_steady",
+    name: "慎重派コツコツ継続型",
+    emoji: "🏗️",
+    headline: "地に足のついた慎重派コツコツ継続型",
+    description: "確実な手順を踏んで成果を積み上げるタイプです。",
+    longDescription: "手堅さと継続力で長く勝ち続けるタイプ。",
+    traits: ["慎重", "継続力", "真面目"],
+    recommendedProducts: ["tsukushi", "qoo10"],
+  },
+  {
+    id: "cautious_speed",
+    name: "慎重派スピード重視型",
+    emoji: "🏃",
+    headline: "準備してから一気に動く慎重派スピード重視型",
+    description: "下準備を固めてから素早く動くタイプです。",
+    longDescription: "慎重さと瞬発力のバランスで外さないタイプ。",
+    traits: ["慎重", "瞬発力", "合理性"],
+    recommendedProducts: ["fx_signal", "tsukushi"],
+  },
+  {
+    id: "cautious_leader",
+    name: "慎重派リーダー型",
+    emoji: "🧱",
+    headline: "手堅くまとめる慎重派リーダー",
+    description: "信頼と堅実さで人を引っ張るタイプです。",
+    longDescription: "慎重な判断力で組織や仕組みを支えるタイプ。",
+    traits: ["慎重", "統率力", "信頼性"],
+    recommendedProducts: ["qoo10", "shopee"],
+  },
+  // builder × *
+  {
+    id: "builder_stable",
+    name: "仕組み構築型安定志向型",
+    emoji: "⚙️",
+    headline: "自動化と安定の仕組み構築型安定志向型",
+    description: "自動化と堅実運用を両立するタイプです。",
+    longDescription: "仕組みを作って手離れよく安定収入を狙うタイプ。",
+    traits: ["仕組み志向", "堅実", "効率"],
+    recommendedProducts: ["fx_auto", "qoo10"],
+  },
+  {
+    id: "builder_steady",
+    name: "仕組み構築型コツコツ継続型",
+    emoji: "🔧",
+    headline: "改善し続ける仕組み構築型コツコツ継続型",
+    description: "自動化と継続改善で力を発揮するタイプです。",
+    longDescription: "仕組みを磨きながら資産を積み上げていくタイプ。",
+    traits: ["仕組み志向", "継続力", "工夫好き"],
+    recommendedProducts: ["fx_auto", "tsukushi"],
+  },
+  {
+    id: "builder_speed",
+    name: "仕組み構築型スピード重視型",
+    emoji: "💫",
+    headline: "仕組みで加速する仕組み構築型スピード重視型",
+    description: "スピードを仕組みで再現するタイプです。",
+    longDescription: "自動化で時間を買いつつ一気に伸ばすタイプ。",
+    traits: ["仕組み志向", "瞬発力", "効率"],
     recommendedProducts: ["fx_auto", "keiba"],
   },
   {
-    id: "analyst",
-    name: "データ分析型",
-    emoji: "📊",
-    headline: "数字で判断するデータ分析型",
-    description: "データや根拠に基づいて冷静に行動するのが得意なタイプです。",
-    longDescription:
-      "あなたは「なんとなく」では絶対に動けない、根拠とロジックを何より重視するタイプです。感覚や勘よりも、数字やデータの裏付けがあると安心して行動できる——そんな冷静さが最大の武器です。\n\n周囲が「とりあえずやってみよう」と動く場面でも、あなたはまず情報を集め、分析し、自分なりの仮説を立ててから行動します。そのプロセスがあるからこそ、あなたの判断はブレにくく、一度決めたことを最後までやり切る力があります。\n\n一方で、分析にこだわりすぎて「分析のための分析」に陥ることも。データを集めれば集めるほど新しい疑問が生まれ、結局「まだ足りない」と感じて動けない。完璧な情報が揃う日は永遠に来ないのに、つい「もう少し調べてから」と先延ばしにしてしまう——そんな経験はありませんか？\n\nあなたに向いているのは、判断基準が明確で、あなたの分析力をそのまま活かせるビジネスモデルです。完全に自動化されたものだと物足りなさを感じるかもしれませんが、全てを自分で判断するのは負荷が大きすぎる。その中間——プロのロジックをベースにしながら、あなたの分析力で精度をさらに高められるスタイルが最適です。\n\nあなたの論理的思考力は、正しい仕組みの中に置かれた時に最大の力を発揮します。必要なのは「もっと情報を集めること」ではなく、「すでに十分な判断材料がある」と認識すること。あなたのレベルの分析力があれば、あとは動くだけで結果はついてきます。",
-    traits: ["論理的", "分析好き", "根拠重視"],
-    recommendedProducts: ["fx_signal"],
-  },
-  {
-    id: "challenger",
-    name: "チャレンジャー型",
-    emoji: "🔥",
-    headline: "自分の腕で勝負するチャレンジャー型",
-    description: "スキルを磨いて大きな成果を手にしたいタイプです。",
-    longDescription:
-      "あなたは「人に任せるより自分でやりたい」「結果は自分の実力で掴み取りたい」——そんな強い意志を持ったタイプです。楽な道よりも、自分のスキルがそのまま収入に直結する世界のほうが燃える。他人と同じことをやるのも面白くない。あなたの中には、常に「もっと上へ」という向上心が燃えています。\n\n勝負強さと負けず嫌いはあなたの最大のエンジンです。「自分にはできる」という根拠のない自信が、困難な場面でもあなたを前に進ませてきたはず。そしてその自信は、これまでの人生で何度も成功体験に裏打ちされてきたものではないでしょうか。\n\nただし、実力主義だからこそ、うまくいかない時に「自分が悪い」と全てを背負い込みやすい面もあります。また、プライドの高さから、人に助けを求めるのが苦手。独学で遠回りしているのに気づかない——あるいは気づいていても認めたくない——そんなこともあるかもしれません。\n\nあなたに最適なのは、スキルアップの余地があり、上達すればするほどリターンが大きくなるビジネスモデルです。ただし、独学で全てをカバーしようとすると、あなたの実力が発揮されるまでに無駄な時間がかかります。プロのメンターから最短ルートを学んだ上で、あなた自身のセンスと判断力を掛け合わせる——これが最も効率的な成長パターンです。\n\nあなたの「自分の力で勝ちたい」という気持ちは、正しい方向に向ければ、とんでもない成果を生み出す可能性を秘めています。大切なのは、その力を発揮できるフィールドを間違えないこと。それだけです。",
-    traits: ["向上心", "負けず嫌い", "スキル志向"],
-    recommendedProducts: ["fx_discretion"],
-  },
-  {
-    id: "high_return",
-    name: "ハイリターン志向型",
-    emoji: "🚀",
-    headline: "大きく狙うハイリターン志向型",
-    description: "リスクを取ってでも人生を変えるリターンを求めるタイプです。",
-    longDescription:
-      "あなたは「小さく稼ぐ」ことにあまり魅力を感じない、スケールの大きな発想を持つタイプです。月に数万円の副収入よりも、人生のステージそのものを変えるような成果を本気で狙いたい——そんな野心があなたの原動力です。\n\nその大胆さは周囲から見れば無謀に映ることもありますが、あなたにとっては合理的な選択です。「どうせ時間と労力を使うなら、リターンが大きいほうがいい」というシンプルな原則に基づいているのですから。\n\nただし、リスクを取れる胆力がある反面、冷静さを失いやすいのも事実です。大きなチャンスが目の前に現れると、細かいリスク分析をすっ飛ばして飛び込んでしまう。そして一度大きな損失を出すと、それを取り返そうとしてさらに大きなリスクを取る——この負のスパイラルに入ると、あなたの「大胆さ」が最大の敵になります。\n\nあなたに必要なのは、攻めの姿勢を活かしながらも、感情とは別のところに冷静な判断軸を持つことです。あなたの攻撃力にプロの守備力を組み合わせれば、大きなリターンを「再現可能な形」で狙えるようになります。\n\nあなたのように「人生を変えたい」と本気で思える人は、実はそう多くありません。その覚悟自体が才能です。あとは、その覚悟を正しい方向に向けるだけ。間違った方向に全力で走るのが一番もったいない。正しいフィールドを見つけさえすれば、あなたの爆発力は想像を超える結果を生み出します。",
-    traits: ["大胆", "行動力", "野心的"],
-    recommendedProducts: ["keiba", "fx_discretion"],
+    id: "builder_leader",
+    name: "仕組み構築型リーダー",
+    emoji: "👑",
+    headline: "自動化で動かす仕組み構築型リーダー",
+    description: "自動化と統率力で仕組みを動かすタイプです。",
+    longDescription: "仕組みを設計し大きなスケールで成果を狙うタイプ。",
+    traits: ["仕組み志向", "統率力", "野心"],
+    recommendedProducts: ["fx_auto", "fx_discretion"],
   },
 ];
 
@@ -122,66 +243,66 @@ export interface MatchingQuestion {
   options: MatchingOption[];
 }
 
-// スコアキー = 商材ID
+// スコアキー：商材ID（keiba等） + 軸キー（ax1_analytical / ax2_stable 等）を併用
 export const MATCHING_QUESTIONS: MatchingQuestion[] = [
   {
     id: 1,
     question: "今の働き方に一番近いのは？",
     options: [
-      { label: "会社員（フルタイム）", value: "a", score: { fx_auto: 3, keiba: 3, fx_signal: 1 } },
-      { label: "パート・派遣", value: "b", score: { qoo10: 2, tsukushi: 2, fx_signal: 2 } },
-      { label: "自営業・フリーランス", value: "c", score: { shopee: 2, fx_discretion: 2, qoo10: 1 } },
-      { label: "現在お仕事をされていない", value: "d", score: { fx_discretion: 3, shopee: 2, qoo10: 2 } },
+      { label: "会社員（フルタイム）", value: "a", score: { fx_auto: 3, keiba: 3, fx_signal: 1, ax1_builder: 2, ax2_stable: 2 } },
+      { label: "パート・派遣", value: "b", score: { qoo10: 2, tsukushi: 2, fx_signal: 2, ax1_cautious: 2, ax2_steady: 2 } },
+      { label: "自営業・フリーランス", value: "c", score: { shopee: 2, fx_discretion: 2, qoo10: 1, ax1_analytical: 1, ax2_leader: 2 } },
+      { label: "現在お仕事をされていない", value: "d", score: { fx_discretion: 3, shopee: 2, qoo10: 2, ax1_intuitive: 2, ax2_speed: 1 } },
     ],
   },
   {
     id: 2,
     question: "副業に使える時間は1日どれくらい？",
     options: [
-      { label: "30分以内", value: "a", score: { fx_auto: 3, keiba: 3 } },
-      { label: "1〜2時間", value: "b", score: { fx_signal: 3, qoo10: 2, tsukushi: 2 } },
-      { label: "3時間以上", value: "c", score: { fx_discretion: 3, shopee: 3, qoo10: 1 } },
-      { label: "できるだけ時間をかけたくない", value: "d", score: { fx_auto: 3, keiba: 3 } },
+      { label: "30分以内", value: "a", score: { fx_auto: 3, keiba: 3, ax1_builder: 3, ax2_speed: 2 } },
+      { label: "1〜2時間", value: "b", score: { fx_signal: 3, qoo10: 2, tsukushi: 2, ax1_cautious: 2, ax2_steady: 2 } },
+      { label: "3時間以上", value: "c", score: { fx_discretion: 3, shopee: 3, qoo10: 1, ax1_analytical: 2, ax2_leader: 2 } },
+      { label: "できるだけ時間をかけたくない", value: "d", score: { fx_auto: 3, keiba: 3, ax1_builder: 3, ax2_speed: 2 } },
     ],
   },
   {
     id: 3,
     question: "現在の月収はどれくらいですか？",
     options: [
-      { label: "20万円未満", value: "a", score: { tsukushi: 2, qoo10: 2 } },
-      { label: "20〜40万円", value: "b", score: { fx_signal: 1, shopee: 1, qoo10: 1 } },
-      { label: "40〜60万円", value: "c", score: { fx_auto: 2, fx_signal: 2, keiba: 1 } },
-      { label: "60万円以上", value: "d", score: { fx_discretion: 2, keiba: 2, fx_auto: 1 } },
+      { label: "20万円未満", value: "a", score: { tsukushi: 2, qoo10: 2, ax1_cautious: 1, ax2_steady: 1 } },
+      { label: "20〜40万円", value: "b", score: { fx_signal: 1, shopee: 1, qoo10: 1, ax1_cautious: 1, ax2_steady: 1 } },
+      { label: "40〜60万円", value: "c", score: { fx_auto: 2, fx_signal: 2, keiba: 1, ax1_analytical: 1, ax2_speed: 1 } },
+      { label: "60万円以上", value: "d", score: { fx_discretion: 2, keiba: 2, fx_auto: 1, ax1_analytical: 1, ax2_leader: 2 } },
     ],
   },
   {
     id: 4,
     question: "現在の貯蓄・資産額はどれくらいですか？",
     options: [
-      { label: "100万円未満", value: "a", score: { tsukushi: 3, qoo10: 2 } },
-      { label: "100〜500万円", value: "b", score: { qoo10: 2, fx_signal: 2, shopee: 1 } },
-      { label: "500〜1,000万円", value: "c", score: { fx_auto: 2, shopee: 2, keiba: 1 } },
-      { label: "1,000万円以上", value: "d", score: { fx_discretion: 2, keiba: 2, fx_auto: 2 } },
+      { label: "100万円未満", value: "a", score: { tsukushi: 3, qoo10: 2, ax1_cautious: 2, ax2_stable: 2 } },
+      { label: "100〜500万円", value: "b", score: { qoo10: 2, fx_signal: 2, shopee: 1, ax1_cautious: 1, ax2_stable: 1 } },
+      { label: "500〜1,000万円", value: "c", score: { fx_auto: 2, shopee: 2, keiba: 1, ax1_analytical: 1, ax2_speed: 1 } },
+      { label: "1,000万円以上", value: "d", score: { fx_discretion: 2, keiba: 2, fx_auto: 2, ax2_leader: 2, ax2_speed: 1 } },
     ],
   },
   {
     id: 5,
     question: "副業で今の収入にどれくらいプラスしたいですか？",
     options: [
-      { label: "月3〜5万円", value: "a", score: { qoo10: 3, tsukushi: 3 } },
-      { label: "月10〜30万円", value: "b", score: { shopee: 2, fx_signal: 2, tsukushi: 2 } },
-      { label: "月50万円以上", value: "c", score: { fx_discretion: 3, keiba: 2, fx_auto: 1 } },
-      { label: "月100万円以上を目指したい", value: "d", score: { keiba: 3, fx_discretion: 3 } },
+      { label: "月3〜5万円", value: "a", score: { qoo10: 3, tsukushi: 3, ax1_cautious: 2, ax2_steady: 3 } },
+      { label: "月10〜30万円", value: "b", score: { shopee: 2, fx_signal: 2, tsukushi: 2, ax1_analytical: 1, ax2_steady: 2 } },
+      { label: "月50万円以上", value: "c", score: { fx_discretion: 3, keiba: 2, fx_auto: 1, ax1_intuitive: 1, ax2_speed: 2 } },
+      { label: "月100万円以上を目指したい", value: "d", score: { keiba: 3, fx_discretion: 3, ax1_intuitive: 2, ax2_leader: 3 } },
     ],
   },
   {
     id: 6,
     question: "副業を始める際に使えるお金は？",
     options: [
-      { label: "5万円以内", value: "a", score: { tsukushi: 3, qoo10: 3 } },
-      { label: "10〜30万円くらい", value: "b", score: { shopee: 2, fx_signal: 2, qoo10: 1 } },
-      { label: "50万円以上", value: "c", score: { fx_auto: 3, fx_discretion: 2, keiba: 2 } },
-      { label: "金額より確実性を重視したい", value: "d", score: { tsukushi: 2, qoo10: 2, fx_signal: 1 } },
+      { label: "5万円以内", value: "a", score: { tsukushi: 3, qoo10: 3, ax1_cautious: 2, ax2_stable: 2 } },
+      { label: "10〜30万円くらい", value: "b", score: { shopee: 2, fx_signal: 2, qoo10: 1, ax1_analytical: 1, ax2_steady: 1 } },
+      { label: "50万円以上", value: "c", score: { fx_auto: 3, fx_discretion: 2, keiba: 2, ax1_builder: 1, ax2_leader: 1 } },
+      { label: "金額より確実性を重視したい", value: "d", score: { tsukushi: 2, qoo10: 2, fx_signal: 1, ax1_cautious: 2, ax2_stable: 2 } },
     ],
   },
   {
@@ -198,60 +319,60 @@ export const MATCHING_QUESTIONS: MatchingQuestion[] = [
     id: 8,
     question: "今取り組んでいる（取り組んだことがある）副業は？",
     options: [
-      { label: "投資系（株・FX・仮想通貨など）", value: "a", score: { fx_auto: 2, fx_signal: 2, fx_discretion: 2 } },
-      { label: "物販・転売", value: "b", score: { shopee: 3, qoo10: 2, tsukushi: 2 } },
-      { label: "アフィリエイト・ブログ・クライアントワーク", value: "c", score: { fx_signal: 1, shopee: 1, qoo10: 1 } },
-      { label: "副業経験はまだない", value: "d", score: { fx_auto: 2, keiba: 2, tsukushi: 1, qoo10: 1 } },
+      { label: "投資系（株・FX・仮想通貨など）", value: "a", score: { fx_auto: 2, fx_signal: 2, fx_discretion: 2, ax1_analytical: 2, ax1_builder: 1 } },
+      { label: "物販・転売", value: "b", score: { shopee: 3, qoo10: 2, tsukushi: 2, ax1_intuitive: 2, ax2_steady: 1 } },
+      { label: "アフィリエイト・ブログ・クライアントワーク", value: "c", score: { fx_signal: 1, shopee: 1, qoo10: 1, ax1_analytical: 1, ax1_intuitive: 1 } },
+      { label: "副業経験はまだない", value: "d", score: { fx_auto: 2, keiba: 2, tsukushi: 1, qoo10: 1, ax1_cautious: 2, ax2_stable: 1 } },
     ],
   },
   {
     id: 9,
     question: "副業の経験年数は？",
     options: [
-      { label: "未経験", value: "a", score: { fx_auto: 2, keiba: 2, qoo10: 1 } },
-      { label: "半年未満", value: "b", score: { tsukushi: 2, qoo10: 2, fx_signal: 1 } },
-      { label: "半年〜2年", value: "c", score: { shopee: 2, fx_signal: 2, fx_discretion: 1 } },
-      { label: "2年以上", value: "d", score: { fx_discretion: 3, shopee: 2 } },
+      { label: "未経験", value: "a", score: { fx_auto: 2, keiba: 2, qoo10: 1, ax1_cautious: 2, ax2_stable: 2 } },
+      { label: "半年未満", value: "b", score: { tsukushi: 2, qoo10: 2, fx_signal: 1, ax1_cautious: 1, ax2_steady: 1 } },
+      { label: "半年〜2年", value: "c", score: { shopee: 2, fx_signal: 2, fx_discretion: 1, ax1_analytical: 1, ax2_steady: 1 } },
+      { label: "2年以上", value: "d", score: { fx_discretion: 3, shopee: 2, ax1_builder: 2, ax2_leader: 2 } },
     ],
   },
   {
     id: 10,
     question: "10万円の臨時収入が入ったら？",
     options: [
-      { label: "すぐ貯金する", value: "a", score: { qoo10: 3, tsukushi: 2 } },
-      { label: "自分へのご褒美に使う", value: "b", score: { shopee: 1, keiba: 1, fx_signal: 1 } },
-      { label: "投資に回す", value: "c", score: { fx_auto: 2, fx_discretion: 2, keiba: 3 } },
-      { label: "副業の資金に充てる", value: "d", score: { shopee: 2, qoo10: 2, tsukushi: 2 } },
+      { label: "すぐ貯金する", value: "a", score: { qoo10: 3, tsukushi: 2, ax1_cautious: 2, ax2_stable: 3 } },
+      { label: "自分へのご褒美に使う", value: "b", score: { shopee: 1, keiba: 1, fx_signal: 1, ax1_intuitive: 2, ax2_speed: 1 } },
+      { label: "投資に回す", value: "c", score: { fx_auto: 2, fx_discretion: 2, keiba: 3, ax1_analytical: 2, ax2_leader: 2 } },
+      { label: "副業の資金に充てる", value: "d", score: { shopee: 2, qoo10: 2, tsukushi: 2, ax1_builder: 1, ax2_steady: 2 } },
     ],
   },
   {
     id: 11,
     question: "パソコン作業はどれくらい得意？",
     options: [
-      { label: "ほぼ毎日使っている", value: "a", score: { shopee: 2, qoo10: 2, fx_discretion: 2 } },
-      { label: "スマホ中心だがPCもある", value: "b", score: { fx_auto: 2, fx_signal: 2, keiba: 1 } },
-      { label: "スマホだけで完結したい", value: "c", score: { fx_auto: 3, keiba: 3 } },
-      { label: "パソコンに苦手意識がある", value: "d", score: { fx_auto: 3, keiba: 2, tsukushi: 1 } },
+      { label: "ほぼ毎日使っている", value: "a", score: { shopee: 2, qoo10: 2, fx_discretion: 2, ax1_analytical: 2 } },
+      { label: "スマホ中心だがPCもある", value: "b", score: { fx_auto: 2, fx_signal: 2, keiba: 1, ax1_builder: 1 } },
+      { label: "スマホだけで完結したい", value: "c", score: { fx_auto: 3, keiba: 3, ax1_builder: 3, ax2_stable: 1 } },
+      { label: "パソコンに苦手意識がある", value: "d", score: { fx_auto: 3, keiba: 2, tsukushi: 1, ax1_builder: 3, ax2_stable: 2 } },
     ],
   },
   {
     id: 12,
     question: "副業で一番避けたいことは？",
     options: [
-      { label: "大きな損失を出すこと", value: "a", score: { qoo10: 3, tsukushi: 3, fx_signal: 1 } },
-      { label: "毎日の作業に追われること", value: "b", score: { fx_auto: 3, keiba: 3 } },
-      { label: "成果が出るまで時間がかかること", value: "c", score: { keiba: 2, fx_discretion: 2, tsukushi: 2 } },
-      { label: "難しくて理解できないこと", value: "d", score: { tsukushi: 2, qoo10: 2, fx_auto: 1 } },
+      { label: "大きな損失を出すこと", value: "a", score: { qoo10: 3, tsukushi: 3, fx_signal: 1, ax1_cautious: 3, ax2_stable: 3 } },
+      { label: "毎日の作業に追われること", value: "b", score: { fx_auto: 3, keiba: 3, ax1_builder: 3, ax2_speed: 2 } },
+      { label: "成果が出るまで時間がかかること", value: "c", score: { keiba: 2, fx_discretion: 2, tsukushi: 2, ax1_intuitive: 1, ax2_speed: 3 } },
+      { label: "難しくて理解できないこと", value: "d", score: { tsukushi: 2, qoo10: 2, fx_auto: 1, ax1_cautious: 2, ax2_stable: 2 } },
     ],
   },
   {
     id: 13,
     question: "副業を本格的に始めたいタイミングは？",
     options: [
-      { label: "できれば今すぐにでも", value: "a", score: { tsukushi: 2, fx_auto: 2, keiba: 2, fx_discretion: 1 } },
-      { label: "1ヶ月以内には動き出したい", value: "b", score: { qoo10: 2, shopee: 2, fx_signal: 2 } },
-      { label: "じっくり準備してから", value: "c", score: { shopee: 2, fx_discretion: 2 } },
-      { label: "良い機会があれば", value: "d", score: { fx_auto: 2, keiba: 2, qoo10: 1 } },
+      { label: "できれば今すぐにでも", value: "a", score: { tsukushi: 2, fx_auto: 2, keiba: 2, fx_discretion: 1, ax1_intuitive: 2, ax2_speed: 2 } },
+      { label: "1ヶ月以内には動き出したい", value: "b", score: { qoo10: 2, shopee: 2, fx_signal: 2, ax1_analytical: 1, ax2_speed: 1 } },
+      { label: "じっくり準備してから", value: "c", score: { shopee: 2, fx_discretion: 2, ax1_cautious: 2, ax2_stable: 2 } },
+      { label: "良い機会があれば", value: "d", score: { fx_auto: 2, keiba: 2, qoo10: 1, ax1_intuitive: 1, ax2_steady: 1 } },
     ],
   },
 ];
@@ -264,42 +385,48 @@ export interface MatchingResult {
   scores: Record<string, number>;
   topProducts: Product[];
   allProductScores: { product: Product; score: number }[];
+  axis1: Axis1;
+  axis2: Axis2;
 }
 
 // ========================================
-// タイプ判定ロジック
+// タイプ判定ロジック（16タイプ：軸1×軸2）
 // ========================================
-function determineType(scores: Record<string, number>): MatchingType {
-  let bestType = MATCHING_TYPES[0];
-  let bestScore = -1;
-
-  for (const type of MATCHING_TYPES) {
-    const typeScore = type.recommendedProducts.reduce(
-      (sum, pid) => sum + (scores[pid] || 0),
-      0,
-    );
-    if (typeScore > bestScore) {
-      bestScore = typeScore;
-      bestType = type;
+function pickTopAxis<T extends string>(
+  scores: Record<string, number>,
+  keys: readonly T[],
+  prefix: "ax1_" | "ax2_",
+): T {
+  let top = keys[0];
+  let topScore = -Infinity;
+  for (const k of keys) {
+    const s = scores[prefix + k] ?? 0;
+    if (s > topScore) {
+      topScore = s;
+      top = k;
     }
   }
+  return top;
+}
 
-  return bestType;
+function determineType(scores: Record<string, number>): {
+  type: MatchingType;
+  axis1: Axis1;
+  axis2: Axis2;
+} {
+  const axis1 = pickTopAxis(scores, AXIS1_KEYS, "ax1_");
+  const axis2 = pickTopAxis(scores, AXIS2_KEYS, "ax2_");
+  const typeId = `${axis1}_${axis2}`;
+  const type =
+    MATCHING_TYPES.find((t) => t.id === typeId) ?? MATCHING_TYPES[0];
+  return { type, axis1, axis2 };
 }
 
 // ========================================
 // 診断結果を算出
 // ========================================
 export function calculateMatching(answers: string[]): MatchingResult {
-  const scores: Record<string, number> = {
-    keiba: 0,
-    shopee: 0,
-    qoo10: 0,
-    tsukushi: 0,
-    fx_auto: 0,
-    fx_signal: 0,
-    fx_discretion: 0,
-  };
+  const scores: Record<string, number> = {};
 
   answers.forEach((answer, index) => {
     const question = MATCHING_QUESTIONS[index];
@@ -311,7 +438,7 @@ export function calculateMatching(answers: string[]): MatchingResult {
     }
   });
 
-  const type = determineType(scores);
+  const { type, axis1, axis2 } = determineType(scores);
 
   const allProductScores = PRODUCTS.map((p) => ({
     product: p,
@@ -320,5 +447,5 @@ export function calculateMatching(answers: string[]): MatchingResult {
 
   const topProducts = allProductScores.slice(0, 2).map((ps) => ps.product);
 
-  return { type, scores, topProducts, allProductScores };
+  return { type, scores, topProducts, allProductScores, axis1, axis2 };
 }

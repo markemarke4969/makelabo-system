@@ -13,6 +13,7 @@ function buildPrompt(userData: Record<string, string>): string {
 【入力情報】
 名前：${userData.name}
 年代：${userData.age}
+職業：${userData.occupation}
 動物占いタイプ：${userData.animal}（${userData.animalDescription}）
 副業適性タイプ：${userData.type}
 月収：${userData.income}
@@ -33,6 +34,7 @@ function buildPrompt(userData: Record<string, string>): string {
 
 【厳守事項】
 - クレジットカード状況が"過去に債務整理・自己破産の経験がある"の場合、strengthSectionで"初期資金が少なくても着実に始められる強み"を特に強調すること
+- 職業が医療・介護・福祉系または建設・製造・物流系の場合、その職業特性（シフト勤務・体力仕事など）を文章に自然に織り込み、スキマ時間や自動化との親和性を強調すること
 - 特定の副業名・商材名は絶対に出さない
 - JSONのみ返す。前置き・後書き不要
 - 各セクション400文字以上必ず書く
