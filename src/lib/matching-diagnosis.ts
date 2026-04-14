@@ -1,7 +1,7 @@
 // ========================================
 // 副業マッチング診断ロジック
 // ========================================
-// 13問の質問を2軸（アプローチ軸×志向軸）でスコアリングし、16タイプに分類
+// 12問の質問を2軸（アプローチ軸×志向軸）でスコアリングし、16タイプに分類
 // ※ 結果ページでは特定の商材名を出さない（クローザーがブラックボックスで案内）
 
 // ========================================
@@ -264,16 +264,6 @@ export interface MatchingQuestion {
 export const MATCHING_QUESTIONS: MatchingQuestion[] = [
   {
     id: 1,
-    question: "今の働き方に一番近いのは？",
-    options: [
-      { label: "会社員（フルタイム）", value: "a", score: { fx_auto: 3, keiba: 3, fx_signal: 1, ax1_builder: 2, ax2_stable: 2 } },
-      { label: "パート・派遣", value: "b", score: { qoo10: 2, tsukushi: 2, fx_signal: 2, ax1_cautious: 2, ax2_steady: 2 } },
-      { label: "自営業・フリーランス", value: "c", score: { shopee: 2, fx_discretion: 2, qoo10: 1, ax1_analytical: 1, ax2_leader: 2 } },
-      { label: "現在お仕事をされていない", value: "d", score: { fx_discretion: 3, shopee: 2, qoo10: 2, ax1_intuitive: 2, ax2_speed: 1 } },
-    ],
-  },
-  {
-    id: 2,
     question: "副業に使える時間は1日どれくらい？",
     options: [
       { label: "30分以内", value: "a", score: { fx_auto: 3, keiba: 3, ax1_builder: 3, ax2_speed: 2 } },
@@ -283,7 +273,7 @@ export const MATCHING_QUESTIONS: MatchingQuestion[] = [
     ],
   },
   {
-    id: 3,
+    id: 2,
     question: "現在の月収はどれくらいですか？",
     options: [
       { label: "20万円未満", value: "a", score: { tsukushi: 2, qoo10: 2, ax1_cautious: 1, ax2_steady: 1 } },
@@ -293,7 +283,7 @@ export const MATCHING_QUESTIONS: MatchingQuestion[] = [
     ],
   },
   {
-    id: 4,
+    id: 3,
     question: "現在の貯蓄・資産額はどれくらいですか？",
     options: [
       { label: "100万円未満", value: "a", score: { tsukushi: 3, qoo10: 2, ax1_cautious: 2, ax2_stable: 2 } },
@@ -303,7 +293,7 @@ export const MATCHING_QUESTIONS: MatchingQuestion[] = [
     ],
   },
   {
-    id: 5,
+    id: 4,
     question: "副業で今の収入にどれくらいプラスしたいですか？",
     options: [
       { label: "月3〜5万円", value: "a", score: { qoo10: 3, tsukushi: 3, ax1_cautious: 2, ax2_steady: 3 } },
@@ -313,7 +303,7 @@ export const MATCHING_QUESTIONS: MatchingQuestion[] = [
     ],
   },
   {
-    id: 6,
+    id: 5,
     question: "副業を始める際に使えるお金は？",
     options: [
       { label: "5万円以内", value: "a", score: { tsukushi: 3, qoo10: 3, ax1_cautious: 2, ax2_stable: 2 } },
@@ -323,7 +313,7 @@ export const MATCHING_QUESTIONS: MatchingQuestion[] = [
     ],
   },
   {
-    id: 7,
+    id: 6,
     question: "クレジットカードについて教えてください",
     options: [
       { label: "クレジットカードを複数枚持っている", value: "a", score: {} },
@@ -333,7 +323,7 @@ export const MATCHING_QUESTIONS: MatchingQuestion[] = [
     ],
   },
   {
-    id: 8,
+    id: 7,
     question: "今取り組んでいる（取り組んだことがある）副業は？",
     options: [
       { label: "投資系（株・FX・仮想通貨など）", value: "a", score: { fx_auto: 2, fx_signal: 2, fx_discretion: 2, ax1_analytical: 2, ax1_builder: 1 } },
@@ -343,7 +333,7 @@ export const MATCHING_QUESTIONS: MatchingQuestion[] = [
     ],
   },
   {
-    id: 9,
+    id: 8,
     question: "副業の経験年数は？",
     options: [
       { label: "未経験", value: "a", score: { fx_auto: 2, keiba: 2, qoo10: 1, ax1_cautious: 2, ax2_stable: 2 } },
@@ -353,7 +343,7 @@ export const MATCHING_QUESTIONS: MatchingQuestion[] = [
     ],
   },
   {
-    id: 10,
+    id: 9,
     question: "10万円の臨時収入が入ったら？",
     options: [
       { label: "すぐ貯金する", value: "a", score: { qoo10: 3, tsukushi: 2, ax1_cautious: 2, ax2_stable: 3 } },
@@ -363,7 +353,7 @@ export const MATCHING_QUESTIONS: MatchingQuestion[] = [
     ],
   },
   {
-    id: 11,
+    id: 10,
     question: "パソコン作業はどれくらい得意？",
     options: [
       { label: "ほぼ毎日使っている", value: "a", score: { shopee: 2, qoo10: 2, fx_discretion: 2, ax1_analytical: 2 } },
@@ -373,7 +363,7 @@ export const MATCHING_QUESTIONS: MatchingQuestion[] = [
     ],
   },
   {
-    id: 12,
+    id: 11,
     question: "副業で一番避けたいことは？",
     options: [
       { label: "大きな損失を出すこと", value: "a", score: { qoo10: 3, tsukushi: 3, fx_signal: 1, ax1_cautious: 3, ax2_stable: 3 } },
@@ -383,7 +373,7 @@ export const MATCHING_QUESTIONS: MatchingQuestion[] = [
     ],
   },
   {
-    id: 13,
+    id: 12,
     question: "副業を本格的に始めたいタイミングは？",
     options: [
       { label: "できれば今すぐにでも", value: "a", score: { tsukushi: 2, fx_auto: 2, keiba: 2, fx_discretion: 1, ax1_intuitive: 2, ax2_speed: 2 } },

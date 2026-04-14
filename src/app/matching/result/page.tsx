@@ -63,9 +63,9 @@ function FutureGraph({ initialFund }: { initialFund: number }) {
   const months = [0, 3, 6, 9, 12];
   // 副業あり：初期資金が月10%ずつ成長
   const withSide = months.map((m) => Math.round(initialFund * Math.pow(1.1, m)));
-  // 副業なし：インフレで年率3%目減り（初期資金 × 0.97^(経過月数/12)）
+  // 副業なし：インフレ・物価上昇による実質価値目減り（初期資金 × 0.85^(経過月数/12)）
   const withoutSide = months.map((m) =>
-    Math.round(initialFund * Math.pow(0.97, m / 12)),
+    Math.round(initialFund * Math.pow(0.85, m / 12)),
   );
   const maxVal = Math.max(...withSide, initialFund * 1.2);
   const w = 320;
@@ -167,6 +167,11 @@ function FutureGraph({ initialFund }: { initialFund: number }) {
           <span className="text-xs text-gray-400">何もしない場合</span>
         </div>
       </div>
+      <p className="text-[10px] text-gray-500 mt-2 text-center leading-relaxed px-2">
+        ※何もしない場合はインフレ・物価上昇による
+        <br />
+        実質的な資産目減りを考慮した試算です
+      </p>
     </div>
   );
 }
@@ -237,15 +242,15 @@ export default function MatchingResult() {
     const res = calculateMatching(data.answers);
     setResult(res);
 
-    // 初期資金をQ6の回答から推定
-    const q6Answer = data.answers[5];
+    // 初期資金をQ5（副業を始める際に使えるお金）の回答から推定
+    const q5Answer = data.answers[4];
     const fundMap: Record<string, number> = {
       a: 50000,
       b: 200000,
       c: 500000,
       d: 300000,
     };
-    setInitialFund(fundMap[q6Answer] || 300000);
+    setInitialFund(fundMap[q5Answer] || 300000);
 
     // 動物占い
     let animalName = "";
@@ -269,11 +274,11 @@ export default function MatchingResult() {
       animal: animalName || "（未判定）",
       animalDescription: animalTraits || "",
       type: res.type.name,
-      income: INCOME_LABELS[answers[2]] || "不明",
-      asset: ASSET_LABELS[answers[3]] || "不明",
-      experience: EXPERIENCE_LABELS[answers[8]] || "不明",
-      avoid: AVOID_LABELS[answers[11]] || "不明",
-      creditCard: CREDIT_CARD_LABELS[answers[6]] || "不明",
+      income: INCOME_LABELS[answers[1]] || "不明",
+      asset: ASSET_LABELS[answers[2]] || "不明",
+      experience: EXPERIENCE_LABELS[answers[7]] || "不明",
+      avoid: AVOID_LABELS[answers[10]] || "不明",
+      creditCard: CREDIT_CARD_LABELS[answers[5]] || "不明",
     })
       .then((json) => {
         if (json) setAiDiagnosis(json);
@@ -476,7 +481,7 @@ export default function MatchingResult() {
               </div>
             ) : (
               <p className="text-gray-200 text-base leading-[1.95] tracking-wide">
-                副業を始めないまま1年が過ぎると、物価上昇や増税の影響で実質的な可処分所得は減り続けます。今の{initialFund.toLocaleString()}円も、インフレにより1年後には実質{Math.round(initialFund * 0.97).toLocaleString()}円の価値に。
+                副業を始めないまま1年が過ぎると、物価上昇や増税の影響で実質的な可処分所得は減り続けます。今の{initialFund.toLocaleString()}円も、インフレにより1年後には実質{Math.round(initialFund * 0.85).toLocaleString()}円の価値に。
               </p>
             )}
           </div>
