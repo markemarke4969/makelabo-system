@@ -233,7 +233,15 @@ export default function MatchingShindan() {
               <label className="block text-sm font-medium text-gray-300 mb-2">
                 職業 <span className="text-gray-500 text-xs">（任意）</span>
               </label>
-              <div className="grid grid-cols-2 gap-2">
+              <select
+                value={occupation}
+                onChange={(e) => setOccupation(e.target.value)}
+                aria-label="職業"
+                className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/15 text-white focus:outline-none focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/25 transition-all appearance-none"
+              >
+                <option value="" className="bg-slate-800">
+                  選択してください（任意）
+                </option>
                 {[
                   { value: "office_clerical", label: "会社員（事務系）" },
                   { value: "office_engineer", label: "会社員（技術・エンジニア系）" },
@@ -245,21 +253,11 @@ export default function MatchingShindan() {
                   { value: "student", label: "学生" },
                   { value: "other", label: "その他・無職" },
                 ].map((o) => (
-                  <button
-                    key={o.value}
-                    onClick={() =>
-                      setOccupation(occupation === o.value ? "" : o.value)
-                    }
-                    className={`py-2.5 px-2 rounded-xl text-xs font-medium transition-all leading-tight ${
-                      occupation === o.value
-                        ? "bg-blue-500 text-white"
-                        : "bg-white/5 border border-white/15 text-gray-300 hover:bg-white/10"
-                    }`}
-                  >
+                  <option key={o.value} value={o.value} className="bg-slate-800">
                     {o.label}
-                  </button>
+                  </option>
                 ))}
-              </div>
+              </select>
             </div>
 
             {/* 年代 */}
