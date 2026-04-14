@@ -366,12 +366,6 @@ export default function MatchingResult() {
               動物タイプ（{doubutsu.result.animal}）
             </p>
           )}
-          {doubutsu && (
-            <p className="text-xs text-gray-500 tracking-wide mb-3">
-              {doubutsu.profile.groupLabel} ／ {doubutsu.result.color} ／ 運命数
-              {doubutsu.result.destinyNumber}
-            </p>
-          )}
           <div className="flex justify-center gap-2 mb-4 flex-wrap">
             {(doubutsu?.profile.traits ?? type.traits).map((trait) => (
               <span
