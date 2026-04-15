@@ -31,6 +31,27 @@ interface StepMsgRow {
   delay_minutes: number;
   body: string | null;
   payload: Record<string, unknown> | null;
+  timing_mode: "immediate" | "absolute" | "relative" | null;
+  delivery_days: number | null;
+  delivery_time: string | null;
+}
+
+// timing_mode=absolute の場合は、基準日(enrolled_at の日付) + delivery_days の delivery_time が due
+// それ以外は delay_minutes 経過ベース
+function isDue(enrolledAt: string, m: StepMsgRow, nowMs: number): boolean {
+  const mode = m.timing_mode ?? "immediate";
+  if (mode === "absolute" && m.delivery_time) {
+    const base = new Date(enrolledAt);
+    const days = m.delivery_days ?? 0;
+    const [hh, mm] = (m.delivery_time || "09:00").split(":").map((v) => Number(v) || 0);
+    const target = new Date(base);
+    target.setDate(target.getDate() + days);
+    target.setHours(hh, mm, 0, 0);
+    return nowMs >= target.getTime();
+  }
+  // immediate / relative / 旧データは delay_minutes で判定
+  const elapsedMinutes = (nowMs - new Date(enrolledAt).getTime()) / (1000 * 60);
+  return m.delay_minutes <= elapsedMinutes;
 }
 
 async function runStepDelivery(): Promise<{
@@ -61,14 +82,36 @@ async function runStepDelivery(): Promise<{
 
   for (const enr of rows) {
     // 2. シーケンスのステップメッセージ（last_sent_step より大きいもの）を取得
-    const { data: msgs } = await supabase
-      .from("line_step_messages")
-      .select("id, step_order, delay_minutes, body, payload")
-      .eq("sequence_id", enr.sequence_id)
-      .gt("step_order", enr.last_sent_step)
-      .order("step_order", { ascending: true });
-
-    const steps = (msgs ?? []) as StepMsgRow[];
+    // timing_mode 系カラム未作成の環境への fallback 付き
+    let steps: StepMsgRow[] = [];
+    {
+      const r = await supabase
+        .from("line_step_messages")
+        .select("id, step_order, delay_minutes, body, payload, timing_mode, delivery_days, delivery_time")
+        .eq("sequence_id", enr.sequence_id)
+        .gt("step_order", enr.last_sent_step)
+        .order("step_order", { ascending: true });
+      if (r.error && /(timing_mode|delivery_days|delivery_time)/.test(r.error.message)) {
+        const fb = await supabase
+          .from("line_step_messages")
+          .select("id, step_order, delay_minutes, body, payload")
+          .eq("sequence_id", enr.sequence_id)
+          .gt("step_order", enr.last_sent_step)
+          .order("step_order", { ascending: true });
+        steps = ((fb.data ?? []) as Array<Record<string, unknown>>).map((m) => ({
+          id: m.id as string,
+          step_order: m.step_order as number,
+          delay_minutes: (m.delay_minutes as number) ?? 0,
+          body: (m.body as string) ?? null,
+          payload: (m.payload as Record<string, unknown>) ?? null,
+          timing_mode: null,
+          delivery_days: null,
+          delivery_time: null,
+        }));
+      } else {
+        steps = (r.data ?? []) as StepMsgRow[];
+      }
+    }
     if (steps.length === 0) {
       // 全ステップ送信済み → completed
       await supabase
@@ -79,13 +122,11 @@ async function runStepDelivery(): Promise<{
       continue;
     }
 
-    // 3. enrolled_at からの経過分を計算
-    const enrolledAt = new Date(enr.enrolled_at).getTime();
+    // 3. 現在時刻
     const nowMs = Date.now();
-    const elapsedMinutes = (nowMs - enrolledAt) / (1000 * 60);
 
-    // 4. due なメッセージ（delay_minutes <= elapsedMinutes）を抽出
-    const dueMessages = steps.filter((m) => m.delay_minutes <= elapsedMinutes);
+    // 4. due なメッセージを timing_mode 別に判定
+    const dueMessages = steps.filter((m) => isDue(enr.enrolled_at, m, nowMs));
     if (dueMessages.length === 0) continue;
 
     // 5. アクセストークン取得

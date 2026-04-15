@@ -1,6 +1,10 @@
 {
   "crons": [
     {
+      "path": "/api/cron/line-tick",
+      "schedule": "*/5 * * * *"
+    },
+    {
       "path": "/api/line/health-check",
       "schedule": "0 9 * * *"
     }
