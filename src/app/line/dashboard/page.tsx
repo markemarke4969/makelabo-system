@@ -520,6 +520,10 @@ export default function LineDashboard() {
   const [friendCustomValues, setFriendCustomValues] = useState<FriendCustomValue[]>([]);
   const [friendInflowRouteName, setFriendInflowRouteName] = useState<string | null>(null);
 
+  // チャット右パネル: テンプレート送信
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string>("");
+  const [sendingTemplate, setSendingTemplate] = useState(false);
+
   // テスト配信先アカウント（is_test=true のフォロワー）
   const [testFollowers, setTestFollowers] = useState<Follower[]>([]);
 
@@ -3927,14 +3931,72 @@ export default function LineDashboard() {
                   <div className="px-4 py-3">
                     <span className="text-xs font-medium text-gray-500 block mb-2">LINE テンプレートを送る</span>
                     <div className="flex gap-2">
-                      <select className="flex-1 border border-gray-200 rounded-md px-2 py-1.5 text-xs bg-white focus:border-blue-400 focus:outline-none">
-                        <option>テンプレートを選択</option>
+                      <select
+                        value={selectedTemplateId}
+                        onChange={(e) => setSelectedTemplateId(e.target.value)}
+                        className="flex-1 border border-gray-200 rounded-md px-2 py-1.5 text-xs bg-white focus:border-blue-400 focus:outline-none"
+                      >
+                        <option value="">
+                          {templates.length === 0 ? "テンプレートがありません" : "テンプレートを選択"}
+                        </option>
                         {templates.map((tpl) => (
-                          <option key={tpl.id} value={tpl.id}>{tpl.title}</option>
+                          <option key={tpl.id} value={tpl.id}>
+                            {tpl.name || tpl.title || "（名称未設定）"}
+                          </option>
                         ))}
                       </select>
-                      <button className="px-3 py-1.5 bg-[#06C755] hover:bg-[#05a648] text-white text-xs font-medium rounded-md transition">送信</button>
+                      <button
+                        disabled={!selectedTemplateId || sendingTemplate}
+                        onClick={async () => {
+                          if (!selectedTemplateId || !selectedUser) return;
+                          const tpl = templates.find((t) => t.id === selectedTemplateId);
+                          if (!tpl) return;
+                          const payloadList = (tpl.messages ?? [])
+                            .map((m) => {
+                              // payload が空の場合は msg_type/body から最小限を合成
+                              const p = (m.payload as Record<string, unknown> | null) ?? {};
+                              if (p && Object.keys(p).length > 0) return p;
+                              return { msgType: m.msg_type || "text", body: m.body ?? "" };
+                            })
+                            .filter((p) => p && (p.msgType || p.body));
+                          if (payloadList.length === 0) {
+                            alert("このテンプレートには送信可能なメッセージがありません");
+                            return;
+                          }
+                          setSendingTemplate(true);
+                          try {
+                            const res = await fetch("/api/line/send", {
+                              method: "POST",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({
+                                line_user_id: selectedUser.line_user_id,
+                                account_id: selectedAccount?.id,
+                                messages: payloadList,
+                              }),
+                            });
+                            if (!res.ok) {
+                              const data = await res.json().catch(() => ({}));
+                              alert(`送信失敗: ${data.error ?? res.status}`);
+                              return;
+                            }
+                            setSelectedTemplateId("");
+                            fetchMessages(selectedUser.line_user_id);
+                          } catch (e) {
+                            alert(`送信エラー: ${(e as Error).message}`);
+                          } finally {
+                            setSendingTemplate(false);
+                          }
+                        }}
+                        className="px-3 py-1.5 bg-[#06C755] hover:bg-[#05a648] disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-medium rounded-md transition"
+                      >
+                        {sendingTemplate ? "送信中..." : "送信"}
+                      </button>
                     </div>
+                    {templates.length === 0 && (
+                      <p className="text-[10px] text-gray-400 mt-1.5">
+                        左メニューの「テンプレート管理」から作成してください
+                      </p>
+                    )}
                   </div>
                 </div>
               </>
