@@ -120,17 +120,19 @@ export default function MatchingShindan() {
       <div className="min-h-screen flex items-center justify-center px-4 py-8">
         <div className="w-full max-w-md animate-fade-in">
           <div className="text-center mb-8">
-            <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-[#E6F4EC] border border-[#4CAF82]/30 text-[#4CAF82] text-xs font-bold mb-6">
-              <span className="w-2 h-2 rounded-full bg-[#4CAF82] animate-pulse" />
+            <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-blue-500/10 border border-blue-500/20 text-blue-400 text-xs font-medium mb-6">
+              <span className="w-2 h-2 rounded-full bg-blue-400 animate-pulse" />
               AI診断
             </div>
-            <h1 className="text-[32px] font-extrabold text-[#333333] mb-3 leading-tight">
+            <h1 className="text-3xl font-bold text-white mb-3 leading-tight">
               あなたに最適な
               <br />
-              <span className="text-[#4CAF82]">副業</span>
+              <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-cyan-400">
+                副業
+              </span>
               をAIがマッチング
             </h1>
-            <p className="text-[#888888] text-sm leading-relaxed">
+            <p className="text-gray-400 text-sm leading-relaxed">
               12問の簡単な質問に答えるだけ。
               <br />
               AIがあなたの性格・ライフスタイルから
@@ -147,21 +149,21 @@ export default function MatchingShindan() {
             ].map((item) => (
               <div
                 key={item.text}
-                className="flex items-center gap-3 px-4 py-3.5 m-card-soft"
+                className="flex items-center gap-3 px-4 py-3 rounded-xl bg-white/5 border border-white/10"
               >
                 <span className="text-xl">{item.icon}</span>
-                <span className="text-sm text-[#333333] font-medium">{item.text}</span>
+                <span className="text-sm text-gray-300">{item.text}</span>
               </div>
             ))}
           </div>
 
           <button
             onClick={() => setPhase("info")}
-            className="m-cta w-full py-4 text-base active:scale-[0.98]"
+            className="w-full py-4 rounded-xl font-bold text-white text-base bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 transition-all shadow-lg shadow-blue-500/25 active:scale-[0.98]"
           >
             無料で診断スタート
           </button>
-          <p className="text-center text-xs text-[#888888] mt-3">
+          <p className="text-center text-xs text-gray-500 mt-3">
             個人情報は厳重に管理されます
           </p>
         </div>
@@ -177,34 +179,34 @@ export default function MatchingShindan() {
       <div className="min-h-screen flex items-center justify-center px-4 py-8">
         <div className="w-full max-w-md animate-fade-in">
           <div className="text-center mb-6">
-            <p className="text-[#4CAF82] text-sm font-bold mb-2">STEP 1</p>
-            <h2 className="text-2xl font-extrabold text-[#333333] mb-2">
+            <p className="text-blue-400 text-sm font-medium mb-2">STEP 1</p>
+            <h2 className="text-xl font-bold text-white mb-2">
               基本情報を入力
             </h2>
-            <p className="text-[#888888] text-xs">
+            <p className="text-gray-400 text-xs">
               より精度の高い診断結果をお届けします
             </p>
           </div>
 
-          <div className="m-card p-6 space-y-5">
+          <div className="rounded-2xl bg-white/5 border border-white/10 p-6 space-y-5">
             {/* 氏名 */}
             <div>
-              <label className="block text-sm font-bold text-[#333333] mb-2">
-                お名前 <span className="text-[#FF6B35]">*</span>
+              <label className="block text-sm font-medium text-gray-300 mb-2">
+                お名前 <span className="text-red-400">*</span>
               </label>
               <input
                 type="text"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="山田 太郎"
-                className="m-input w-full"
+                className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/15 text-white placeholder-gray-500 focus:outline-none focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/25 transition-all"
               />
             </div>
 
             {/* 性別 */}
             <div>
-              <label className="block text-sm font-bold text-[#333333] mb-2">
-                性別 <span className="text-[#FF6B35]">*</span>
+              <label className="block text-sm font-medium text-gray-300 mb-2">
+                性別 <span className="text-red-400">*</span>
               </label>
               <div className="grid grid-cols-2 gap-2">
                 {[
@@ -214,7 +216,11 @@ export default function MatchingShindan() {
                   <button
                     key={g.value}
                     onClick={() => setGender(g.value)}
-                    className={`m-pill py-3 text-sm ${gender === g.value ? "m-pill-active" : ""}`}
+                    className={`py-3 rounded-xl text-sm font-medium transition-all ${
+                      gender === g.value
+                        ? "bg-blue-500 text-white"
+                        : "bg-white/5 border border-white/15 text-gray-300 hover:bg-white/10"
+                    }`}
                   >
                     {g.label}
                   </button>
@@ -224,16 +230,18 @@ export default function MatchingShindan() {
 
             {/* 職業（任意・プルダウン） */}
             <div>
-              <label className="block text-sm font-bold text-[#333333] mb-2">
-                職業 <span className="text-[#888888] text-xs font-normal">（任意）</span>
+              <label className="block text-sm font-medium text-gray-300 mb-2">
+                職業 <span className="text-gray-500 text-xs">（任意）</span>
               </label>
               <select
                 value={occupation}
                 onChange={(e) => setOccupation(e.target.value)}
                 aria-label="職業"
-                className="m-select w-full appearance-none"
+                className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/15 text-white focus:outline-none focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/25 transition-all appearance-none"
               >
-                <option value="">選択してください（任意）</option>
+                <option value="" className="bg-slate-800">
+                  選択してください（任意）
+                </option>
                 {[
                   { value: "office_clerical", label: "会社員（事務系）" },
                   { value: "office_engineer", label: "会社員（技術・エンジニア系）" },
@@ -245,7 +253,7 @@ export default function MatchingShindan() {
                   { value: "student", label: "学生" },
                   { value: "other", label: "その他・無職" },
                 ].map((o) => (
-                  <option key={o.value} value={o.value}>
+                  <option key={o.value} value={o.value} className="bg-slate-800">
                     {o.label}
                   </option>
                 ))}
@@ -254,15 +262,19 @@ export default function MatchingShindan() {
 
             {/* 年代 */}
             <div>
-              <label className="block text-sm font-bold text-[#333333] mb-2">
-                年代 <span className="text-[#FF6B35]">*</span>
+              <label className="block text-sm font-medium text-gray-300 mb-2">
+                年代 <span className="text-red-400">*</span>
               </label>
               <div className="grid grid-cols-3 gap-2">
                 {["10代", "20代", "30代", "40代", "50代", "60代以上"].map((age) => (
                   <button
                     key={age}
                     onClick={() => setAgeGroup(age)}
-                    className={`m-pill py-2.5 text-sm ${ageGroup === age ? "m-pill-active" : ""}`}
+                    className={`py-2.5 rounded-xl text-sm font-medium transition-all ${
+                      ageGroup === age
+                        ? "bg-blue-500 text-white"
+                        : "bg-white/5 border border-white/15 text-gray-300 hover:bg-white/10"
+                    }`}
                   >
                     {age}
                   </button>
@@ -272,8 +284,8 @@ export default function MatchingShindan() {
 
             {/* 家族構成 */}
             <div>
-              <label className="block text-sm font-bold text-[#333333] mb-2">
-                家族構成 <span className="text-[#FF6B35]">*</span>
+              <label className="block text-sm font-medium text-gray-300 mb-2">
+                家族構成 <span className="text-red-400">*</span>
               </label>
               <div className="grid grid-cols-2 gap-2">
                 {[
@@ -285,7 +297,11 @@ export default function MatchingShindan() {
                   <button
                     key={f.value}
                     onClick={() => setFamilyStatus(f.value)}
-                    className={`m-pill py-2.5 text-sm ${familyStatus === f.value ? "m-pill-active" : ""}`}
+                    className={`py-2.5 rounded-xl text-sm font-medium transition-all ${
+                      familyStatus === f.value
+                        ? "bg-blue-500 text-white"
+                        : "bg-white/5 border border-white/15 text-gray-300 hover:bg-white/10"
+                    }`}
                   >
                     {f.label}
                   </button>
@@ -295,18 +311,18 @@ export default function MatchingShindan() {
 
             {/* 生年月日 */}
             <div>
-              <label className="block text-sm font-bold text-[#333333] mb-2">
+              <label className="block text-sm font-medium text-gray-300 mb-2">
                 生年月日
               </label>
               <div className="grid grid-cols-3 gap-2">
                 <select
                   value={birthYear}
                   onChange={(e) => setBirthYear(Number(e.target.value))}
-                  className="m-select appearance-none"
+                  className="px-3 py-3 rounded-xl bg-white/5 border border-white/15 text-white focus:outline-none focus:border-blue-500/50 transition-all appearance-none"
                   aria-label="年"
                 >
                   {yearOptions.map((y) => (
-                    <option key={y} value={y}>
+                    <option key={y} value={y} className="bg-slate-800">
                       {y}年
                     </option>
                   ))}
@@ -314,11 +330,11 @@ export default function MatchingShindan() {
                 <select
                   value={birthMonth}
                   onChange={(e) => setBirthMonth(Number(e.target.value))}
-                  className="m-select appearance-none"
+                  className="px-3 py-3 rounded-xl bg-white/5 border border-white/15 text-white focus:outline-none focus:border-blue-500/50 transition-all appearance-none"
                   aria-label="月"
                 >
                   {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => (
-                    <option key={m} value={m}>
+                    <option key={m} value={m} className="bg-slate-800">
                       {m}月
                     </option>
                   ))}
@@ -326,12 +342,12 @@ export default function MatchingShindan() {
                 <select
                   value={birthDay}
                   onChange={(e) => setBirthDay(Number(e.target.value))}
-                  className="m-select appearance-none"
+                  className="px-3 py-3 rounded-xl bg-white/5 border border-white/15 text-white focus:outline-none focus:border-blue-500/50 transition-all appearance-none"
                   aria-label="日"
                 >
                   {Array.from({ length: daysInMonth }, (_, i) => i + 1).map(
                     (d) => (
-                      <option key={d} value={d}>
+                      <option key={d} value={d} className="bg-slate-800">
                         {d}日
                       </option>
                     ),
@@ -344,14 +360,14 @@ export default function MatchingShindan() {
           <div className="flex gap-3 mt-6">
             <button
               onClick={() => setPhase("intro")}
-              className="m-cta-sub px-6 py-3.5 text-sm"
+              className="px-6 py-3.5 rounded-xl border border-white/15 text-gray-400 text-sm hover:bg-white/5 transition-all"
             >
               戻る
             </button>
             <button
               onClick={() => setPhase("questions")}
               disabled={!infoComplete}
-              className="m-cta flex-1 py-3.5 text-base active:scale-[0.98]"
+              className="flex-1 py-3.5 rounded-xl font-bold text-white text-base bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 transition-all shadow-lg shadow-blue-500/25 active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed"
             >
               次へ進む
             </button>
@@ -369,28 +385,25 @@ export default function MatchingShindan() {
   return (
     <div className="min-h-screen flex flex-col">
       <div
-        className="sticky top-0 z-10 px-4 py-3 border-b border-[#4CAF82]/15"
+        className="sticky top-0 z-10 px-4 py-3 border-b border-white/10"
         style={{
-          background: "rgba(250, 250, 248, 0.95)",
+          background: "rgba(15, 23, 42, 0.95)",
           backdropFilter: "blur(8px)",
         }}
       >
         <div className="max-w-md mx-auto">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-sm text-[#888888] font-medium">
+            <span className="text-sm text-gray-400">
               質問 {currentQ + 1} / {totalQuestions}
             </span>
-            <span className="text-sm font-bold text-[#4CAF82]">
+            <span className="text-sm font-medium text-blue-400">
               {progress}%
             </span>
           </div>
-          <div className="w-full h-2.5 bg-[#E6F4EC] rounded-full overflow-hidden">
+          <div className="w-full h-2 bg-white/10 rounded-full overflow-hidden">
             <div
-              className="h-full rounded-full transition-all duration-500 ease-out"
-              style={{
-                width: `${progress}%`,
-                background: "linear-gradient(90deg, #4CAF82 0%, #66C999 100%)",
-              }}
+              className="h-full rounded-full transition-all duration-500 ease-out bg-gradient-to-r from-blue-500 to-cyan-500"
+              style={{ width: `${progress}%` }}
             />
           </div>
         </div>
@@ -401,20 +414,20 @@ export default function MatchingShindan() {
           {currentQ > 0 && (
             <button
               onClick={handleBack}
-              className="text-[#888888] text-sm mb-4 flex items-center gap-1 hover:text-[#4CAF82] transition-colors font-medium"
+              className="text-gray-500 text-sm mb-4 flex items-center gap-1 hover:text-blue-400 transition-colors"
             >
               ← 前の質問
             </button>
           )}
 
-          <div className="m-card p-6">
+          <div className="rounded-2xl bg-white/5 border border-white/10 p-6">
             <div className="text-center mb-6">
-              <span className="text-4xl">
+              <span className="text-3xl">
                 {questionIcons[currentQ % questionIcons.length]}
               </span>
             </div>
 
-            <h2 className="text-xl font-extrabold text-[#333333] text-center mb-6 leading-relaxed">
+            <h2 className="text-lg font-bold text-white text-center mb-6 leading-relaxed">
               {question.question}
             </h2>
 
@@ -424,7 +437,7 @@ export default function MatchingShindan() {
                   key={option.value}
                   onClick={() => handleAnswer(option.value)}
                   disabled={saving}
-                  className="w-full text-left px-5 py-4 bg-white hover:bg-[#E6F4EC] border-2 border-[#E5E7E3] hover:border-[#4CAF82] rounded-2xl transition-all text-base text-[#333333] font-semibold disabled:opacity-50 active:scale-[0.98]"
+                  className="w-full text-left px-5 py-4 bg-white/5 hover:bg-blue-500/10 border border-white/10 hover:border-blue-500/40 rounded-xl transition-all text-base text-gray-300 hover:text-white font-medium disabled:opacity-50 active:scale-[0.98]"
                 >
                   {option.label}
                 </button>
@@ -434,8 +447,8 @@ export default function MatchingShindan() {
 
           {saving && (
             <div className="text-center mt-6">
-              <div className="w-8 h-8 border-2 border-[#4CAF82] border-t-transparent rounded-full animate-spin mx-auto mb-3" />
-              <p className="text-sm text-[#888888] font-medium">
+              <div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
+              <p className="text-sm text-gray-400">
                 AIが診断結果を生成中...
               </p>
             </div>

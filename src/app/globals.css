@@ -185,120 +185,12 @@ body {
 }
 
 /* ========================================
-   Matching Theme (副業マッチング診断) - Light Green×Orange
+   Matching Theme (副業マッチング診断)
    ======================================== */
-.matching-theme {
-  --m-bg: #FAFAF8;
-  --m-surface: #FFFFFF;
-  --m-card: #F5F9F7;
-  --m-primary: #4CAF82;
-  --m-primary-soft: #E6F4EC;
-  --m-accent: #FF8C42;
-  --m-accent-2: #FF6B35;
-  --m-text: #333333;
-  --m-subtext: #888888;
-  --m-border: rgba(76, 175, 130, 0.18);
-  --m-cta-gradient: linear-gradient(135deg, #FF8C42 0%, #FF6B35 100%);
-  --m-cta-shadow: 0 8px 20px rgba(255, 107, 53, 0.28);
-  font-family: 'Hiragino Maru Gothic ProN', 'Kosugi Maru', 'Zen Maru Gothic',
-    'M PLUS Rounded 1c', 'Quicksand', 'Nunito', 'BIZ UDPGothic',
-    'Noto Sans JP', system-ui, sans-serif;
-}
-
 @keyframes matching-fade-in {
   from { transform: translateY(12px); opacity: 0; }
   to { transform: translateY(0); opacity: 1; }
 }
 .matching-theme .animate-fade-in {
   animation: matching-fade-in 0.4s ease-out forwards;
-}
-
-/* CTA ボタン（オレンジグラデ + 丸） */
-.matching-theme .m-cta {
-  background: var(--m-cta-gradient);
-  color: #fff;
-  border: none;
-  border-radius: 50px;
-  font-weight: 700;
-  box-shadow: var(--m-cta-shadow);
-  transition: transform 0.2s ease, box-shadow 0.2s ease, opacity 0.2s ease;
-}
-.matching-theme .m-cta:hover:not(:disabled) {
-  transform: translateY(-1px);
-  box-shadow: 0 10px 24px rgba(255, 107, 53, 0.36);
-}
-.matching-theme .m-cta:active:not(:disabled) {
-  transform: translateY(0);
-}
-.matching-theme .m-cta:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-  box-shadow: none;
-}
-
-/* サブボタン（グリーン枠） */
-.matching-theme .m-cta-sub {
-  background: #FFFFFF;
-  color: var(--m-primary);
-  border: 2px solid var(--m-primary);
-  border-radius: 50px;
-  font-weight: 700;
-  transition: all 0.2s ease;
-}
-.matching-theme .m-cta-sub:hover:not(:disabled) {
-  background: var(--m-primary-soft);
-}
-
-/* カード */
-.matching-theme .m-card {
-  background: var(--m-surface);
-  border: 1px solid var(--m-border);
-  border-radius: 20px;
-  box-shadow: 0 4px 16px rgba(76, 175, 130, 0.08);
-}
-.matching-theme .m-card-soft {
-  background: var(--m-card);
-  border: 1px solid var(--m-border);
-  border-radius: 20px;
-}
-
-/* インプット */
-.matching-theme .m-input,
-.matching-theme .m-select {
-  background: #FFFFFF;
-  border: 1.5px solid #E5E7E3;
-  border-radius: 14px;
-  color: var(--m-text);
-  padding: 0.75rem 1rem;
-  font-size: 1rem;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
-}
-.matching-theme .m-input::placeholder {
-  color: #B5B5B0;
-}
-.matching-theme .m-input:focus,
-.matching-theme .m-select:focus {
-  outline: none;
-  border-color: var(--m-primary);
-  box-shadow: 0 0 0 3px rgba(76, 175, 130, 0.18);
-}
-
-/* チョイスピル（性別・年代などの選択） */
-.matching-theme .m-pill {
-  background: #FFFFFF;
-  border: 1.5px solid #E5E7E3;
-  border-radius: 14px;
-  color: var(--m-text);
-  font-weight: 600;
-  transition: all 0.15s ease;
-}
-.matching-theme .m-pill:hover {
-  border-color: var(--m-primary);
-  background: var(--m-primary-soft);
-}
-.matching-theme .m-pill-active {
-  background: var(--m-primary);
-  border-color: var(--m-primary);
-  color: #FFFFFF;
-  box-shadow: 0 4px 12px rgba(76, 175, 130, 0.28);
 }
