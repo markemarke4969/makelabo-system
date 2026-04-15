@@ -174,22 +174,24 @@ async function handleFollow(event: LineEvent, account: LineAccountRow) {
     console.error("[LINE Webhook] follower upsert失敗:", error.message);
   }
 
-  // 流入経路の紐付け: 直近30分以内の未消費クリックで最新のものを同一案件内から探す
+  // 流入経路の紐付け: 直近60分以内の未消費クリックで最新のものを同一案件内から探す
   // LINE webhook には流入情報が来ないため時間窓ヒューリスティックで対応。
   // 既に inflow_route_id が入っている follower（再フォロー等）は上書きしない。
   if (upserted && !upserted.inflow_route_id && account.project_id) {
     try {
-      const since = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+      const since = new Date(Date.now() - 60 * 60 * 1000).toISOString();
       const { data: routesOfProject } = await supabase
         .from("line_inflow_routes")
         .select("id")
         .eq("project_id", account.project_id);
       const routeIds = (routesOfProject ?? []).map((r) => r.id as string);
 
-      if (routeIds.length > 0) {
+      if (routeIds.length === 0) {
+        console.log(`[LINE Webhook] 流入紐付けスキップ: project=${account.project_id} に流入経路なし`);
+      } else {
         const { data: recentClick } = await supabase
           .from("line_inflow_clicks")
-          .select("id, inflow_route_id")
+          .select("id, inflow_route_id, clicked_at")
           .in("inflow_route_id", routeIds)
           .is("follower_id", null)
           .gte("clicked_at", since)
@@ -207,7 +209,11 @@ async function handleFollow(event: LineEvent, account: LineAccountRow) {
             .update({ follower_id: upserted.id })
             .eq("id", recentClick.id);
           console.log(
-            `[LINE Webhook] 流入紐付け: follower=${upserted.id} ← click=${recentClick.id} (route=${recentClick.inflow_route_id})`,
+            `[LINE Webhook] 流入紐付け成功: follower=${upserted.id} ← click=${recentClick.id} (route=${recentClick.inflow_route_id}, clicked_at=${recentClick.clicked_at})`,
+          );
+        } else {
+          console.log(
+            `[LINE Webhook] 流入紐付けなし: follower=${upserted.id} project=${account.project_id} routes=${routeIds.length} since=${since}（60分以内の未消費クリックなし）`,
           );
         }
       }

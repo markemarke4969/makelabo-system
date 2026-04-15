@@ -356,8 +356,6 @@ export default function LineDashboard() {
   const [showTemplateModal, setShowTemplateModal] = useState(false);
   const [editingTemplate, setEditingTemplate] = useState<Template | null>(null);
   const [templateForm, setTemplateForm] = useState<{ name: string; messages: BroadcastMessage[] }>({ name: "", messages: [] });
-  const [showTemplatePopup, setShowTemplatePopup] = useState(false);
-
   // Custom Fields
   interface CustomField { id: string; field_key: string; field_label: string; field_type: string; options: unknown; sort_order: number; }
   const [customFields, setCustomFields] = useState<CustomField[]>([]);
@@ -516,6 +514,12 @@ export default function LineDashboard() {
   const [userDetailTarget, setUserDetailTarget] = useState<Follower | null>(null);
   const [userDetailForm, setUserDetailForm] = useState({ display_name: "", memo: "", is_test: false });
 
+  // 友だち詳細モーダル（チャット画面からの閲覧用 - 読み取り専用 + カスタム値/ラベル/流入経路/送信履歴）
+  const [showFriendDetailModal, setShowFriendDetailModal] = useState(false);
+  interface FriendCustomValue { field_id: string; value: string | null; field_key: string; field_label: string; }
+  const [friendCustomValues, setFriendCustomValues] = useState<FriendCustomValue[]>([]);
+  const [friendInflowRouteName, setFriendInflowRouteName] = useState<string | null>(null);
+
   // テスト配信先アカウント（is_test=true のフォロワー）
   const [testFollowers, setTestFollowers] = useState<Follower[]>([]);
 
@@ -557,7 +561,6 @@ export default function LineDashboard() {
 
   const chatEndRef = useRef<HTMLDivElement>(null);
   const emojiPopupRef = useRef<HTMLDivElement>(null);
-  const templatePopupRef = useRef<HTMLDivElement>(null);
   const labelPickerRef = useRef<HTMLDivElement>(null);
 
   // Close popups on outside click
@@ -566,16 +569,63 @@ export default function LineDashboard() {
       if (showEmojiPopup && emojiPopupRef.current && !emojiPopupRef.current.contains(e.target as Node)) {
         setShowEmojiPopup(false);
       }
-      if (showTemplatePopup && templatePopupRef.current && !templatePopupRef.current.contains(e.target as Node)) {
-        setShowTemplatePopup(false);
-      }
       if (showLabelPicker && labelPickerRef.current && !labelPickerRef.current.contains(e.target as Node)) {
         setShowLabelPicker(false);
       }
     };
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [showEmojiPopup, showTemplatePopup, showLabelPicker]);
+  }, [showEmojiPopup, showLabelPicker]);
+
+  // 友だち詳細モーダル: 開いたときにカスタム値と流入経路名を取得
+  useEffect(() => {
+    if (!showFriendDetailModal || !selectedUser) {
+      setFriendCustomValues([]);
+      setFriendInflowRouteName(null);
+      return;
+    }
+    (async () => {
+      try {
+        const r = await fetch(`/api/line/custom-fields?follower_id=${selectedUser.id}`);
+        if (r.ok) {
+          const rows = (await r.json()) as Array<{
+            field_id: string;
+            value: string | null;
+            line_custom_fields?: { field_key?: string; field_label?: string } | null;
+          }>;
+          setFriendCustomValues(
+            rows.map((r0) => ({
+              field_id: r0.field_id,
+              value: r0.value,
+              field_key: r0.line_custom_fields?.field_key ?? "",
+              field_label: r0.line_custom_fields?.field_label ?? "",
+            })),
+          );
+        } else {
+          setFriendCustomValues([]);
+        }
+      } catch {
+        setFriendCustomValues([]);
+      }
+      try {
+        const routeId = (selectedUser as unknown as { inflow_route_id?: string | null }).inflow_route_id ?? null;
+        if (routeId && selectedAccount?.id) {
+          const r = await fetch(`/api/line/inflow-routes?account_id=${selectedAccount.id}`);
+          if (r.ok) {
+            const list = (await r.json()) as Array<{ id: string; name: string }>;
+            const hit = list.find((x) => x.id === routeId);
+            setFriendInflowRouteName(hit?.name ?? null);
+          } else {
+            setFriendInflowRouteName(null);
+          }
+        } else {
+          setFriendInflowRouteName(null);
+        }
+      } catch {
+        setFriendInflowRouteName(null);
+      }
+    })();
+  }, [showFriendDetailModal, selectedUser, selectedAccount?.id]);
 
   // ============================================================
   // API
@@ -1281,11 +1331,6 @@ export default function LineDashboard() {
     setShowTemplateModal(true);
   };
 
-  const insertTemplate = (body: string) => {
-    setChatInput((prev) => prev + body);
-    setShowTemplatePopup(false);
-  };
-
   // Feature 7: Insert emoji
   const insertEmoji = (emoji: string) => {
     setChatInput((prev) => prev + emoji);
@@ -1489,7 +1534,6 @@ export default function LineDashboard() {
       }
       setChatInput("");
       setShowEmojiPopup(false);
-      setShowTemplatePopup(false);
       fetchMessages(selectedUser.line_user_id);
     } catch {
       alert("送信エラー");
@@ -2119,15 +2163,43 @@ export default function LineDashboard() {
                           placeholder="テキストを入力"
                           className="w-full border border-gray-200 rounded-md px-3 py-2 text-sm resize-none focus:border-blue-400 focus:outline-none"
                         />
-                        <div className="text-[10px] text-gray-400 mt-1 space-y-0.5">
-                          <p>① 置き換え文字（クリックで挿入）:</p>
-                          <div className="flex flex-wrap gap-1">
-                            {["{display_name}","{label_names}","{inflow_route_name}","{followed_at}","{days_since_follow}","{today}","{field:email}","{field:phone}"].map((v) => (
-                              <button key={v} type="button" onClick={() => updateMsg(mi, { body: (msg.body ?? "") + v })} className="px-1.5 py-0.5 bg-gray-100 hover:bg-blue-100 text-gray-600 hover:text-blue-700 rounded border border-gray-200 text-[10px] font-mono">
-                                {v}
-                              </button>
-                            ))}
+                        <div className="text-[10px] text-gray-400 mt-1 space-y-1">
+                          <div>
+                            <p className="mb-1">① 標準置き換え文字（クリックで挿入）:</p>
+                            <div className="flex flex-wrap gap-1">
+                              {["{display_name}","{label_names}","{inflow_route_name}","{followed_at}","{days_since_follow}","{today}"].map((v) => (
+                                <button key={v} type="button" onClick={() => updateMsg(mi, { body: (msg.body ?? "") + v })} className="px-1.5 py-0.5 bg-gray-100 hover:bg-blue-100 text-gray-600 hover:text-blue-700 rounded border border-gray-200 text-[10px] font-mono">
+                                  {v}
+                                </button>
+                              ))}
+                            </div>
                           </div>
+                          {customFields.length > 0 && (
+                            <div>
+                              <p className="mb-1">② 独自置き換え文字（カスタムフィールド）:</p>
+                              <div className="flex flex-wrap gap-1">
+                                {customFields.map((cf) => {
+                                  const v = `{field:${cf.field_key}}`;
+                                  return (
+                                    <button
+                                      key={cf.id}
+                                      type="button"
+                                      onClick={() => updateMsg(mi, { body: (msg.body ?? "") + v })}
+                                      title={cf.field_label}
+                                      className="px-1.5 py-0.5 bg-purple-50 hover:bg-purple-100 text-purple-700 rounded border border-purple-200 text-[10px] font-mono"
+                                    >
+                                      {v}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
+                          {customFields.length === 0 && (
+                            <p className="text-gray-300 italic">
+                              独自変数を使うには「カスタムフィールド管理」でフィールドを登録してください
+                            </p>
+                          )}
                         </div>
                       </div>
                     )}
@@ -2882,7 +2954,6 @@ export default function LineDashboard() {
     { key: "followers", label: "LINE 友だち", icon: Icons.users },
     { key: "step", label: "ステップ配信", icon: Icons.step },
     { key: "schedule", label: "予約配信", icon: Icons.schedule },
-    { key: "friend-page", label: "友だち追加ページ", icon: Icons.friendAdd },
     { key: "labels", label: "ラベル管理", icon: Icons.label },
     { key: "actions", label: "アクション管理", icon: Icons.settings },
     { key: "templates", label: "テンプレート管理", icon: Icons.document },
@@ -3559,45 +3630,10 @@ export default function LineDashboard() {
                       <button onClick={() => imageInputRef.current?.click()} className="p-1.5 hover:bg-gray-100 rounded-md text-gray-500 transition" title="画像添付">{Icons.image}</button>
                       <button onClick={() => videoInputRef.current?.click()} className="p-1.5 hover:bg-gray-100 rounded-md text-gray-500 transition" title="動画添付">{Icons.video}</button>
 
-                      {/* Template popup trigger */}
-                      <div className="relative" ref={templatePopupRef}>
-                        <button
-                          onClick={() => { setShowTemplatePopup(!showTemplatePopup); setShowEmojiPopup(false); }}
-                          className={`p-1.5 hover:bg-gray-100 rounded-md transition ${showTemplatePopup ? "bg-blue-50 text-blue-600" : "text-gray-500"}`}
-                          title="定型文"
-                        >
-                          {Icons.template}
-                        </button>
-                        {showTemplatePopup && (
-                          <div className="absolute bottom-full left-0 mb-1 w-64 bg-white rounded-lg shadow-xl border border-gray-200 z-30 max-h-64 overflow-y-auto">
-                            <div className="px-3 py-2 border-b border-gray-100 text-xs font-medium text-gray-500">定型文を選択</div>
-                            {templates.length === 0 ? (
-                              <div className="px-3 py-4 text-center text-xs text-gray-400">
-                                テンプレートがありません。<br />サイドバーの「テンプレート管理」から作成してください。
-                              </div>
-                            ) : (
-                              templates.map((tpl) => {
-                                const firstBody = tpl.messages?.[0]?.body || (tpl.messages?.[0]?.payload as Record<string, unknown>)?.body as string || tpl.body || "";
-                                return (
-                                  <button
-                                    key={tpl.id}
-                                    onClick={() => insertTemplate(String(firstBody))}
-                                    className="w-full text-left px-3 py-2.5 hover:bg-blue-50 border-b border-gray-50 transition"
-                                  >
-                                    <div className="text-sm font-medium text-gray-800 truncate">{tpl.name || tpl.title}</div>
-                                    <div className="text-xs text-gray-400 truncate mt-0.5">{String(firstBody)}</div>
-                                  </button>
-                                );
-                              })
-                            )}
-                          </div>
-                        )}
-                      </div>
-
                       {/* Emoji popup trigger */}
                       <div className="relative" ref={emojiPopupRef}>
                         <button
-                          onClick={() => { setShowEmojiPopup(!showEmojiPopup); setShowTemplatePopup(false); setShowStickerPopup(false); }}
+                          onClick={() => { setShowEmojiPopup(!showEmojiPopup); setShowStickerPopup(false); }}
                           className={`p-1.5 hover:bg-gray-100 rounded-md transition ${showEmojiPopup ? "bg-blue-50 text-blue-600" : "text-gray-500"}`}
                           title="絵文字"
                         >
@@ -3638,7 +3674,7 @@ export default function LineDashboard() {
                       {/* Sticker popup trigger */}
                       <div className="relative" ref={stickerPopupRef}>
                         <button
-                          onClick={() => { setShowStickerPopup(!showStickerPopup); setShowEmojiPopup(false); setShowTemplatePopup(false); }}
+                          onClick={() => { setShowStickerPopup(!showStickerPopup); setShowEmojiPopup(false); }}
                           className={`p-1.5 hover:bg-gray-100 rounded-md transition ${showStickerPopup ? "bg-blue-50 text-blue-600" : "text-gray-500"}`}
                           title="スタンプ"
                         >
@@ -3772,8 +3808,12 @@ export default function LineDashboard() {
 
                   {/* アクションボタン */}
                   <div className="flex gap-2 px-4 py-3 border-b border-gray-200">
-                    <button className="flex-1 py-1.5 bg-red-500 hover:bg-red-600 text-white text-xs font-medium rounded-md transition">新規</button>
-                    <button className="flex-1 py-1.5 bg-blue-500 hover:bg-blue-600 text-white text-xs font-medium rounded-md transition">友だち詳細</button>
+                    <button
+                      onClick={() => setShowFriendDetailModal(true)}
+                      className="flex-1 py-1.5 bg-blue-500 hover:bg-blue-600 text-white text-xs font-medium rounded-md transition"
+                    >
+                      友だち詳細
+                    </button>
                   </div>
 
                   {/* ステータス */}
@@ -6483,6 +6523,110 @@ export default function LineDashboard() {
                   保存
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 友だち詳細モーダル（チャット画面から閲覧） */}
+      {showFriendDetailModal && selectedUser && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 sticky top-0 bg-white z-10">
+              <h3 className="font-bold text-gray-800">友だち詳細</h3>
+              <button onClick={() => setShowFriendDetailModal(false)} className="text-gray-400 hover:text-gray-600">{Icons.close}</button>
+            </div>
+            <div className="p-5 space-y-5">
+              {/* プロフィール */}
+              <div className="flex items-center gap-3">
+                {selectedUser.picture_url ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={selectedUser.picture_url} alt="" className="w-16 h-16 rounded-full object-cover" />
+                ) : (
+                  <div className="w-16 h-16 rounded-full bg-gray-200 flex items-center justify-center text-gray-400">{Icons.user}</div>
+                )}
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-bold text-gray-800 truncate">{selectedUser.display_name ?? "名前なし"}</div>
+                  <div className="text-[10px] text-gray-400 font-mono truncate">{selectedUser.line_user_id}</div>
+                  <div className="mt-1"><StatusBadge status={selectedUser.status} /></div>
+                </div>
+              </div>
+
+              {/* 基本情報 */}
+              <div className="bg-gray-50 rounded-lg p-3 space-y-1.5">
+                <div className="flex justify-between text-xs"><span className="text-gray-500">友だち追加日</span><span className="text-gray-700">{fmtShort(selectedUser.followed_at)}</span></div>
+                <div className="flex justify-between text-xs"><span className="text-gray-500">登録日</span><span className="text-gray-700">{fmtShort(selectedUser.created_at)}</span></div>
+                <div className="flex justify-between text-xs"><span className="text-gray-500">流入経路</span><span className="text-gray-700">{friendInflowRouteName ?? "未紐付け"}</span></div>
+              </div>
+
+              {/* ラベル */}
+              <div>
+                <h4 className="text-xs font-bold text-gray-600 mb-2">付与ラベル</h4>
+                <div className="flex flex-wrap gap-1.5">
+                  {labels.filter((l) => l.assigned_users.includes(selectedUser.line_user_id)).length === 0 ? (
+                    <span className="text-xs text-gray-400">なし</span>
+                  ) : (
+                    labels
+                      .filter((l) => l.assigned_users.includes(selectedUser.line_user_id))
+                      .map((l) => (
+                        <span key={l.id} className="px-2 py-1 text-xs rounded-full text-white" style={{ backgroundColor: l.color }}>
+                          {l.name}
+                        </span>
+                      ))
+                  )}
+                </div>
+              </div>
+
+              {/* カスタムフィールド値 */}
+              <div>
+                <h4 className="text-xs font-bold text-gray-600 mb-2">カスタムフィールド</h4>
+                {friendCustomValues.length === 0 ? (
+                  <div className="text-xs text-gray-400">値が登録されていません</div>
+                ) : (
+                  <div className="border border-gray-200 rounded-lg overflow-hidden">
+                    <table className="w-full text-xs">
+                      <tbody>
+                        {friendCustomValues.map((v) => (
+                          <tr key={v.field_id} className="border-b border-gray-100 last:border-b-0">
+                            <td className="px-3 py-2 text-gray-500 bg-gray-50 w-1/3">
+                              <div className="font-medium">{v.field_label || v.field_key}</div>
+                              <div className="text-[10px] font-mono text-gray-400">{`{field:${v.field_key}}`}</div>
+                            </td>
+                            <td className="px-3 py-2 text-gray-800 break-all">{v.value || <span className="text-gray-300">―</span>}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+
+              {/* 送信履歴（最新20件 - チャットに表示されているもの） */}
+              <div>
+                <h4 className="text-xs font-bold text-gray-600 mb-2">送信履歴（最新20件）</h4>
+                {messages.length === 0 ? (
+                  <div className="text-xs text-gray-400">履歴がありません</div>
+                ) : (
+                  <div className="border border-gray-200 rounded-lg max-h-60 overflow-y-auto">
+                    {messages.slice(-20).reverse().map((m) => (
+                      <div key={m.id} className="px-3 py-2 border-b border-gray-100 last:border-b-0 text-xs">
+                        <div className="flex items-center justify-between mb-0.5">
+                          <span className={`font-medium ${m.direction === "outgoing" ? "text-blue-600" : "text-gray-700"}`}>
+                            {m.direction === "outgoing" ? "→ 送信" : "← 受信"}
+                          </span>
+                          <span className="text-gray-400">{fmtShort(m.sent_at)}</span>
+                        </div>
+                        <div className="text-gray-700 break-all line-clamp-2">
+                          {m.message_text || `[${m.message_type}]`}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 px-5 py-4 border-t border-gray-200 sticky bottom-0 bg-white">
+              <button onClick={() => setShowFriendDetailModal(false)} className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition">閉じる</button>
             </div>
           </div>
         </div>
