@@ -4141,14 +4141,21 @@ export default function LineDashboard() {
               <h1 className="text-base font-bold text-gray-800">ステップ配信</h1>
             </header>
             <main className="flex-1 overflow-y-auto p-6">
-              {/* 左上の新規追加ボタン */}
+              {/* 左上の新規追加 / アクション追加ボタン */}
               {!showStepCreator && (
-                <div className="max-w-5xl mb-4">
+                <div className="max-w-5xl mb-4 flex gap-2">
                   <button
                     onClick={() => { setStepCreatorForm(emptyBroadcast); setEditingSequenceId(null); setShowStepCreator(true); }}
                     className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded-md transition"
                   >
                     {Icons.plus} 新規追加
+                  </button>
+                  <button
+                    onClick={() => { setAccountSubView("actions"); openNewActionRule(); }}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-purple-600 hover:bg-purple-700 text-white text-xs font-medium rounded-md transition"
+                    title="ラベル付与・シーケンス移動・Webhook等のアクションを追加"
+                  >
+                    {Icons.plus} アクション追加
                   </button>
                 </div>
               )}
