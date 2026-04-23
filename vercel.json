@@ -2,7 +2,7 @@
   "crons": [
     {
       "path": "/api/cron/line-tick",
-      "schedule": "*/5 * * * *"
+      "schedule": "0 9 * * *"
     },
     {
       "path": "/api/line/health-check",
