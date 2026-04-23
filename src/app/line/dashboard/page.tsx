@@ -352,6 +352,36 @@ export default function LineDashboard() {
   const [chatSearch, setChatSearch] = useState("");
   const [memoText, setMemoText] = useState("");
   const [showAddAccount, setShowAddAccount] = useState(false);
+
+  // アカウント登録ウィザード
+  interface WizardForm {
+    step: 1 | 2 | 3;
+    project_id: string;
+    group_name: string;
+    role: "main" | "standby";
+    account_name: string;
+    channel_id: string;
+    channel_secret: string;
+    channel_access_token: string;
+    basic_id: string;
+  }
+  const emptyWizard: WizardForm = {
+    step: 1,
+    project_id: "",
+    group_name: "",
+    role: "main",
+    account_name: "",
+    channel_id: "",
+    channel_secret: "",
+    channel_access_token: "",
+    basic_id: "",
+  };
+  const [showWizard, setShowWizard] = useState(false);
+  const [wizard, setWizard] = useState<WizardForm>(emptyWizard);
+  const [wizardTesting, setWizardTesting] = useState(false);
+  const [wizardTestResult, setWizardTestResult] = useState<{ ok: boolean; text: string; displayName?: string; basicId?: string } | null>(null);
+  const [wizardSaving, setWizardSaving] = useState(false);
+
   const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>({});
   const [needsAction, setNeedsAction] = useState<Set<string>>(new Set());
   const [soundEnabled, setSoundEnabled] = useState(true);
@@ -3782,8 +3812,19 @@ export default function LineDashboard() {
         {/* ============================================================ */}
         {mainView === "accounts" && (
           <>
-            <header className="bg-white border-b border-gray-200 px-4 md:px-6 py-3 flex items-center flex-shrink-0">
+            <header className="bg-white border-b border-gray-200 px-4 md:px-6 py-3 flex items-center justify-between flex-shrink-0">
               <h1 className="text-base font-bold text-gray-800">アカウント一覧</h1>
+              <button
+                onClick={() => {
+                  setWizard({ ...emptyWizard, project_id: project?.id ?? "" });
+                  setWizardTestResult(null);
+                  setShowWizard(true);
+                }}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded-md transition"
+              >
+                {Icons.plus}
+                新規登録
+              </button>
             </header>
 
             <main className="flex-1 overflow-y-auto p-4 md:p-6">
@@ -3841,6 +3882,312 @@ export default function LineDashboard() {
                   </div>
                 </div>
               )}
+
+              {/* ============================================================ */}
+              {/* アカウント登録ウィザード */}
+              {/* ============================================================ */}
+              {showWizard && (() => {
+                const closeWizard = () => { setShowWizard(false); setWizard(emptyWizard); setWizardTestResult(null); };
+                const existingGroups = Array.from(new Set(
+                  accounts.filter((a) => a.group_name).map((a) => a.group_name as string),
+                )).sort();
+
+                const goNext = () => setWizard({ ...wizard, step: Math.min(3, wizard.step + 1) as 1 | 2 | 3 });
+                const goBack = () => setWizard({ ...wizard, step: Math.max(1, wizard.step - 1) as 1 | 2 | 3 });
+
+                const step1Ready = !!wizard.project_id && !!wizard.group_name && !!wizard.role;
+                const step2Ready = !!wizard.channel_id.trim() && !!wizard.channel_secret.trim() && !!wizard.channel_access_token.trim();
+
+                const runConnectionTest = async () => {
+                  setWizardTesting(true);
+                  setWizardTestResult(null);
+                  try {
+                    const res = await fetch("/api/line/accounts/validate-token", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ channel_access_token: wizard.channel_access_token }),
+                    });
+                    const data = await res.json();
+                    if (res.ok && data.ok) {
+                      setWizardTestResult({
+                        ok: true,
+                        text: `接続成功: ${data.displayName ?? "Bot"}${data.basicId ? ` (@${data.basicId})` : ""}`,
+                        displayName: data.displayName,
+                        basicId: data.basicId,
+                      });
+                      const patch: Partial<WizardForm> = {};
+                      if (!wizard.account_name.trim() && data.displayName) patch.account_name = data.displayName;
+                      if (!wizard.basic_id.trim() && data.basicId) patch.basic_id = data.basicId;
+                      if (Object.keys(patch).length > 0) setWizard({ ...wizard, ...patch });
+                    } else {
+                      setWizardTestResult({
+                        ok: false,
+                        text: `接続失敗 (HTTP ${data.status ?? "?"}): ${data.hint ?? data.detail ?? "エラー"}`,
+                      });
+                    }
+                  } catch (e) {
+                    setWizardTestResult({ ok: false, text: `通信エラー: ${(e as Error).message}` });
+                  } finally {
+                    setWizardTesting(false);
+                  }
+                };
+
+                const finishRegistration = async () => {
+                  setWizardSaving(true);
+                  try {
+                    const res = await fetch("/api/line/accounts", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        project_id: wizard.project_id,
+                        group_name: wizard.group_name,
+                        role: wizard.role,
+                        account_name: wizard.account_name || null,
+                        channel_id: wizard.channel_id.trim(),
+                        channel_secret: wizard.channel_secret.trim(),
+                        channel_access_token: wizard.channel_access_token.trim(),
+                        basic_id: wizard.basic_id.trim() || null,
+                      }),
+                    });
+                    const data = await res.json();
+                    if (!res.ok) {
+                      alert(`登録失敗: ${data.error ?? res.status}`);
+                      return;
+                    }
+                    if (wizard.role === "main") {
+                      if (confirm("登録完了しました。\n\nこのアカウントを予備プールにも追加しますか？\n（BAN時の切替先候補になります）")) {
+                        await fetch("/api/line/pool", {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ project_id: wizard.project_id, account_id: data.id }),
+                        });
+                      }
+                    } else {
+                      alert("登録完了しました（予備プールに自動追加されました）");
+                    }
+                    await fetchAccounts();
+                    closeWizard();
+                  } catch (e) {
+                    alert(`登録エラー: ${(e as Error).message}`);
+                  } finally {
+                    setWizardSaving(false);
+                  }
+                };
+
+                return (
+                  <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+                    <div className="bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+                      <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
+                        <div className="flex items-center gap-3">
+                          <h3 className="font-bold text-gray-800">アカウント登録ウィザード</h3>
+                          <div className="flex items-center gap-1 text-xs">
+                            {[1, 2, 3].map((s) => (
+                              <span key={s} className={`px-2 py-0.5 rounded ${wizard.step === s ? "bg-blue-600 text-white" : wizard.step > s ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-400"}`}>
+                                STEP{s}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                        <button onClick={closeWizard} className="text-gray-400 hover:text-gray-600">{Icons.close}</button>
+                      </div>
+
+                      {wizard.step === 1 && (
+                        <div className="p-5 space-y-4">
+                          <div>
+                            <label className="text-sm text-gray-700 font-medium block mb-1.5">案件 <span className="text-[10px] text-white bg-red-500 px-1.5 py-0.5 rounded">必須</span></label>
+                            <select
+                              value={wizard.project_id}
+                              onChange={(e) => setWizard({ ...wizard, project_id: e.target.value })}
+                              className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm bg-white"
+                            >
+                              <option value="">選択してください</option>
+                              {allProjects.map((p) => (
+                                <option key={p.id} value={p.id}>{p.name}</option>
+                              ))}
+                            </select>
+                          </div>
+                          <div>
+                            <label className="text-sm text-gray-700 font-medium block mb-1.5">グループ <span className="text-[10px] text-white bg-red-500 px-1.5 py-0.5 rounded">必須</span></label>
+                            {existingGroups.length > 0 && (
+                              <select
+                                value={existingGroups.includes(wizard.group_name) ? wizard.group_name : ""}
+                                onChange={(e) => setWizard({ ...wizard, group_name: e.target.value })}
+                                className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm bg-white mb-2"
+                              >
+                                <option value="">既存のグループから選択</option>
+                                {existingGroups.map((g) => (
+                                  <option key={g} value={g}>{g}</option>
+                                ))}
+                              </select>
+                            )}
+                            <input
+                              type="text"
+                              value={wizard.group_name}
+                              onChange={(e) => setWizard({ ...wizard, group_name: e.target.value })}
+                              placeholder="または新しいグループ名を入力（例: 音声相談LINE）"
+                              className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-sm text-gray-700 font-medium block mb-1.5">ロール <span className="text-[10px] text-white bg-red-500 px-1.5 py-0.5 rounded">必須</span></label>
+                            <div className="grid grid-cols-2 gap-2">
+                              <label className={`cursor-pointer border-2 rounded-md p-3 ${wizard.role === "main" ? "border-[#06C755] bg-[#06C755]/5" : "border-gray-200"}`}>
+                                <input type="radio" name="wiz-role" checked={wizard.role === "main"} onChange={() => setWizard({ ...wizard, role: "main" })} className="accent-[#06C755] mr-2" />
+                                <span className="font-medium">メイン（本番）</span>
+                                <p className="text-[11px] text-gray-500 mt-0.5">稼働中のアカウント</p>
+                              </label>
+                              <label className={`cursor-pointer border-2 rounded-md p-3 ${wizard.role === "standby" ? "border-[#06C755] bg-[#06C755]/5" : "border-gray-200"}`}>
+                                <input type="radio" name="wiz-role" checked={wizard.role === "standby"} onChange={() => setWizard({ ...wizard, role: "standby" })} className="accent-[#06C755] mr-2" />
+                                <span className="font-medium">スタンバイ（予備）</span>
+                                <p className="text-[11px] text-gray-500 mt-0.5">BAN時の切替先候補</p>
+                              </label>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {wizard.step === 2 && (
+                        <div className="p-5 space-y-4">
+                          <p className="text-[11px] text-gray-500">
+                            LINE Developers コンソール（<a className="text-blue-500 underline" href="https://developers.line.biz/console/" target="_blank" rel="noreferrer">developers.line.biz/console</a>）から該当チャネルを開いてコピー＆ペーストしてください。
+                          </p>
+                          <div>
+                            <label className="text-sm text-gray-700 font-medium block mb-1">アカウント名 <span className="text-[11px] text-gray-400">（任意・表示用）</span></label>
+                            <input
+                              type="text"
+                              value={wizard.account_name}
+                              onChange={(e) => setWizard({ ...wizard, account_name: e.target.value })}
+                              placeholder="例: MARI個別相談LINE"
+                              className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                            />
+                            <p className="text-[11px] text-gray-400 mt-1">接続テストで自動取得されます</p>
+                          </div>
+                          <div>
+                            <label className="text-sm text-gray-700 font-medium block mb-1">チャネルID <span className="text-[10px] text-white bg-red-500 px-1.5 py-0.5 rounded">必須</span></label>
+                            <input
+                              type="text"
+                              value={wizard.channel_id}
+                              onChange={(e) => setWizard({ ...wizard, channel_id: e.target.value })}
+                              placeholder="2009XXXXXX"
+                              className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm font-mono"
+                            />
+                            <p className="text-[11px] text-gray-400 mt-1">LINE Developers → プロバイダー → チャネル → 基本設定 → チャネルID</p>
+                          </div>
+                          <div>
+                            <label className="text-sm text-gray-700 font-medium block mb-1">チャネルシークレット <span className="text-[10px] text-white bg-red-500 px-1.5 py-0.5 rounded">必須</span></label>
+                            <input
+                              type="text"
+                              value={wizard.channel_secret}
+                              onChange={(e) => setWizard({ ...wizard, channel_secret: e.target.value })}
+                              placeholder="32桁の英数字"
+                              className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm font-mono"
+                            />
+                            <p className="text-[11px] text-gray-400 mt-1">LINE Developers → 該当チャネル → 基本設定 → チャネルシークレット</p>
+                          </div>
+                          <div>
+                            <label className="text-sm text-gray-700 font-medium block mb-1">チャネルアクセストークン <span className="text-[10px] text-white bg-red-500 px-1.5 py-0.5 rounded">必須</span></label>
+                            <input
+                              type="text"
+                              value={wizard.channel_access_token}
+                              onChange={(e) => setWizard({ ...wizard, channel_access_token: e.target.value })}
+                              placeholder="長期トークン"
+                              className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm font-mono"
+                            />
+                            <p className="text-[11px] text-gray-400 mt-1">LINE Developers → Messaging API 設定 → チャネルアクセストークン(長期) → 発行</p>
+                          </div>
+                          <div>
+                            <label className="text-sm text-gray-700 font-medium block mb-1">Basic ID <span className="text-[11px] text-gray-400">（@から始まる ID）</span></label>
+                            <input
+                              type="text"
+                              value={wizard.basic_id}
+                              onChange={(e) => setWizard({ ...wizard, basic_id: e.target.value.replace(/^@/, "") })}
+                              placeholder="例: 058phahn（@ は不要）"
+                              className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm font-mono"
+                            />
+                            <p className="text-[11px] text-gray-400 mt-1">LINE Official Account Manager → 設定 → Basic ID（接続テストで自動取得）</p>
+                          </div>
+                        </div>
+                      )}
+
+                      {wizard.step === 3 && (
+                        <div className="p-5 space-y-4">
+                          <h4 className="text-sm font-bold text-gray-700">登録内容の確認</h4>
+                          <dl className="bg-gray-50 border border-gray-200 rounded-md divide-y divide-gray-200">
+                            {[
+                              { label: "案件", value: allProjects.find((p) => p.id === wizard.project_id)?.name ?? wizard.project_id },
+                              { label: "グループ", value: wizard.group_name },
+                              { label: "ロール", value: wizard.role === "main" ? "メイン（本番）" : "スタンバイ（予備）" },
+                              { label: "アカウント名", value: wizard.account_name || "（未入力）" },
+                              { label: "チャネルID", value: wizard.channel_id },
+                              { label: "Basic ID", value: wizard.basic_id ? `@${wizard.basic_id}` : "（未入力）" },
+                              { label: "シークレット", value: "•".repeat(Math.min(12, wizard.channel_secret.length)) },
+                              { label: "アクセストークン", value: "•".repeat(Math.min(16, wizard.channel_access_token.length)) },
+                            ].map((row) => (
+                              <div key={row.label} className="flex items-center gap-3 px-3 py-2">
+                                <dt className="text-xs text-gray-500 w-32 flex-shrink-0">{row.label}</dt>
+                                <dd className="text-sm text-gray-800 break-all">{row.value}</dd>
+                              </div>
+                            ))}
+                          </dl>
+
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={runConnectionTest}
+                              disabled={wizardTesting || !wizard.channel_access_token}
+                              className="px-4 py-2 bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 text-sm rounded-md disabled:opacity-50"
+                            >
+                              {wizardTesting ? "テスト中..." : "接続テスト"}
+                            </button>
+                            <p className="text-[11px] text-gray-500">LINE /v2/bot/info を叩いてトークンの有効性を確認します（保存はされません）</p>
+                          </div>
+                          {wizardTestResult && (
+                            <div className={`px-3 py-2 rounded-md text-sm ${wizardTestResult.ok ? "bg-green-50 border border-green-200 text-green-700" : "bg-red-50 border border-red-200 text-red-600"}`}>
+                              {wizardTestResult.ok ? "✓ " : "✗ "}
+                              {wizardTestResult.text}
+                            </div>
+                          )}
+
+                          <div className="text-[11px] text-gray-500 bg-blue-50 border border-blue-200 rounded-md p-2.5">
+                            ℹ️ 登録後、LINE Developers の Messaging API 設定タブで「Webhook URL」を以下に設定してください:<br />
+                            <code className="font-mono text-blue-700 break-all">
+                              https://app-pink-tau-37.vercel.app/api/line/webhook
+                            </code>
+                            <br />
+                            「Webhookの利用」を有効化し「応答メッセージ」は無効化してください。
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="flex justify-between px-5 py-4 border-t border-gray-200">
+                        <button
+                          onClick={wizard.step === 1 ? closeWizard : goBack}
+                          disabled={wizardSaving}
+                          className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-md"
+                        >
+                          {wizard.step === 1 ? "キャンセル" : "← 戻る"}
+                        </button>
+                        {wizard.step < 3 ? (
+                          <button
+                            onClick={goNext}
+                            disabled={(wizard.step === 1 && !step1Ready) || (wizard.step === 2 && !step2Ready)}
+                            className="px-5 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-sm font-medium rounded-md"
+                          >
+                            次へ →
+                          </button>
+                        ) : (
+                          <button
+                            onClick={finishRegistration}
+                            disabled={wizardSaving}
+                            className="px-5 py-2 bg-[#06C755] hover:bg-[#05a648] disabled:opacity-50 text-white text-sm font-medium rounded-md"
+                          >
+                            {wizardSaving ? "登録中..." : "登録する"}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
 
               {/* グループ管理モーダル */}
               {showGroupManager && (
