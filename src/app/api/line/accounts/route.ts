@@ -95,6 +95,20 @@ export async function POST(request: NextRequest) {
     return Response.json({ error: error.message }, { status: 500 });
   }
 
+  // role=standby の場合は line_account_pool にも登録（BAN切替の切替先候補として使える状態にする）
+  if (data?.id && insertBody.role === "standby" && insertBody.project_id) {
+    const { error: poolErr } = await supabase
+      .from("line_account_pool")
+      .insert({
+        project_id: insertBody.project_id,
+        account_id: data.id,
+        status: "ready",
+      });
+    if (poolErr) {
+      console.error("[accounts] pool登録失敗:", poolErr.message);
+    }
+  }
+
   return Response.json({ ok: true, id: data?.id });
 }
 
