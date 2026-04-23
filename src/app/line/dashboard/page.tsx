@@ -361,6 +361,7 @@ export default function LineDashboard() {
     channel_access_token: string;
     basic_id: string;
     group_name: string;
+    group_is_new: boolean;
     role: "main" | "standby";
     testing: boolean;
     testResult: { ok: boolean; text: string } | null;
@@ -374,6 +375,7 @@ export default function LineDashboard() {
     channel_access_token: "",
     basic_id: "",
     group_name: "",
+    group_is_new: false,
     role: "main",
     testing: false,
     testResult: null,
@@ -384,6 +386,25 @@ export default function LineDashboard() {
   const [bulkProjectId, setBulkProjectId] = useState<string>("");
   const [bulkRows, setBulkRows] = useState<BulkRow[]>([]);
   const [bulkRunning, setBulkRunning] = useState(false);
+  const [bulkGroups, setBulkGroups] = useState<string[]>([]);
+
+  // ウィザードが開いていて案件が選ばれているときはグループ一覧を取得
+  useEffect(() => {
+    if (!showWizard || !bulkProjectId) { setBulkGroups([]); return; }
+    (async () => {
+      try {
+        const res = await fetch(`/api/line/account-groups?project_id=${bulkProjectId}`);
+        if (res.ok) {
+          const data: Array<{ group_name: string }> = await res.json();
+          setBulkGroups(Array.from(new Set(data.map((d) => d.group_name))).sort());
+        } else {
+          setBulkGroups([]);
+        }
+      } catch {
+        setBulkGroups([]);
+      }
+    })();
+  }, [showWizard, bulkProjectId]);
 
   const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>({});
   const [needsAction, setNeedsAction] = useState<Set<string>>(new Set());
@@ -3891,9 +3912,6 @@ export default function LineDashboard() {
               {/* ============================================================ */}
               {showWizard && (() => {
                 const closeWizard = () => { setShowWizard(false); setBulkRows([]); };
-                const existingGroups = Array.from(new Set(
-                  accounts.filter((a) => a.group_name).map((a) => a.group_name as string),
-                )).sort();
 
                 const updateRow = (i: number, patch: Partial<BulkRow>) => {
                   setBulkRows((prev) => {
@@ -3952,6 +3970,28 @@ export default function LineDashboard() {
                   setBulkRunning(true);
                   // 全行の saveResult をクリア
                   setBulkRows((prev) => prev.map((r) => ({ ...r, saveResult: null, saving: false })));
+
+                  // 登録前に必要な新規グループを line_account_groups に作成（重複排除）
+                  const knownGroups = new Set(bulkGroups);
+                  const newGroupNames = new Set<string>();
+                  for (const { row } of targets) {
+                    const g = row.group_name.trim();
+                    if (g && !knownGroups.has(g)) newGroupNames.add(g);
+                  }
+                  for (const g of newGroupNames) {
+                    try {
+                      await fetch("/api/line/account-groups", {
+                        method: "PUT",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ project_id: bulkProjectId, group_name: g, closer_visible: false }),
+                      });
+                      knownGroups.add(g);
+                    } catch (e) {
+                      console.error("group upsert failed:", g, e);
+                    }
+                  }
+                  // ローカルのグループ一覧を最新化
+                  if (newGroupNames.size > 0) setBulkGroups(Array.from(knownGroups).sort());
 
                   for (const { row, index } of targets) {
                     setBulkRows((prev) => {
@@ -4111,17 +4151,45 @@ export default function LineDashboard() {
                                     />
                                   </td>
                                   <td className="px-1 py-1 border-r border-gray-200">
-                                    <input
-                                      type="text"
-                                      list={`bulk-groups-${i}`}
-                                      value={row.group_name}
-                                      onChange={(e) => updateRow(i, { group_name: e.target.value })}
-                                      placeholder="新規 or 既存"
-                                      className="w-full px-2 py-1 border border-gray-200 rounded text-xs focus:border-blue-400 focus:outline-none"
-                                    />
-                                    <datalist id={`bulk-groups-${i}`}>
-                                      {existingGroups.map((g) => <option key={g} value={g} />)}
-                                    </datalist>
+                                    {bulkGroups.length === 0 ? (
+                                      <input
+                                        type="text"
+                                        value={row.group_name}
+                                        onChange={(e) => updateRow(i, { group_name: e.target.value, group_is_new: true })}
+                                        placeholder="新規グループ名"
+                                        className="w-full px-2 py-1 border border-gray-200 rounded text-xs focus:border-blue-400 focus:outline-none"
+                                      />
+                                    ) : (
+                                      <>
+                                        <select
+                                          value={row.group_is_new ? "__new__" : row.group_name}
+                                          onChange={(e) => {
+                                            if (e.target.value === "__new__") {
+                                              updateRow(i, { group_name: "", group_is_new: true });
+                                            } else {
+                                              updateRow(i, { group_name: e.target.value, group_is_new: false });
+                                            }
+                                          }}
+                                          className="w-full px-1 py-1 border border-gray-200 rounded text-xs bg-white focus:border-blue-400 focus:outline-none"
+                                        >
+                                          <option value="">選択してください</option>
+                                          {bulkGroups.map((g) => (
+                                            <option key={g} value={g}>{g}</option>
+                                          ))}
+                                          <option value="__new__">＋ 新規グループを作成</option>
+                                        </select>
+                                        {row.group_is_new && (
+                                          <input
+                                            type="text"
+                                            value={row.group_name}
+                                            onChange={(e) => updateRow(i, { group_name: e.target.value })}
+                                            placeholder="新規グループ名"
+                                            className="w-full px-2 py-1 mt-1 border border-blue-400 rounded text-xs focus:outline-none"
+                                            autoFocus
+                                          />
+                                        )}
+                                      </>
+                                    )}
                                   </td>
                                   <td className="px-1 py-1 border-r border-gray-200">
                                     <select
