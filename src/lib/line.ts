@@ -47,6 +47,76 @@ export async function getProfile(userId: string, accessToken: string) {
  * 置換文字の完全サポートを使うには ReplacerContext を渡す。
  * 条件分岐メッセージ（msgType: "branch"）を評価するには第3引数に BranchEvalContext を渡す。
  */
+/**
+ * Imagemap のテンプレート領域定義。baseSize.width は常に 1040 固定。
+ * baseHeight を引数で受け取り、各エリア座標を返す。
+ * area ラベルは "A", "B", "C", ... で、payload 側の actionsInput[].area と突き合わせる。
+ */
+function getImagemapAreas(
+  linkType: string,
+  baseHeight: number,
+): Array<{ label: string; rect: { x: number; y: number; width: number; height: number } }> {
+  const H = baseHeight;
+  const W = 1040;
+  const half = Math.floor(W / 2);
+  const halfH = Math.floor(H / 2);
+  const third = Math.floor(W / 3);
+  const thirdH = Math.floor(H / 3);
+  const quarterH = Math.floor(H / 4);
+
+  switch (linkType) {
+    case "1":
+      return [{ label: "A", rect: { x: 0, y: 0, width: W, height: H } }];
+    case "2":
+      return [
+        { label: "A", rect: { x: 0, y: 0, width: half, height: H } },
+        { label: "B", rect: { x: half, y: 0, width: W - half, height: H } },
+      ];
+    case "3":
+      return [
+        { label: "A", rect: { x: 0, y: 0, width: W, height: halfH } },
+        { label: "B", rect: { x: 0, y: halfH, width: W, height: H - halfH } },
+      ];
+    case "4":
+      return [
+        { label: "A", rect: { x: 0, y: 0, width: W, height: thirdH } },
+        { label: "B", rect: { x: 0, y: thirdH, width: W, height: thirdH } },
+        { label: "C", rect: { x: 0, y: thirdH * 2, width: W, height: H - thirdH * 2 } },
+      ];
+    case "5":
+      return [
+        { label: "A", rect: { x: 0, y: 0, width: half, height: halfH } },
+        { label: "B", rect: { x: half, y: 0, width: W - half, height: halfH } },
+        { label: "C", rect: { x: 0, y: halfH, width: half, height: H - halfH } },
+        { label: "D", rect: { x: half, y: halfH, width: W - half, height: H - halfH } },
+      ];
+    case "6":
+      return [
+        { label: "A", rect: { x: 0, y: 0, width: W, height: halfH } },
+        { label: "B", rect: { x: 0, y: halfH, width: half, height: H - halfH } },
+        { label: "C", rect: { x: half, y: halfH, width: W - half, height: H - halfH } },
+      ];
+    case "7":
+      return [
+        { label: "A", rect: { x: 0, y: 0, width: third, height: halfH } },
+        { label: "B", rect: { x: third, y: 0, width: third, height: halfH } },
+        { label: "C", rect: { x: third * 2, y: 0, width: W - third * 2, height: halfH } },
+        { label: "D", rect: { x: 0, y: halfH, width: third, height: H - halfH } },
+        { label: "E", rect: { x: third, y: halfH, width: third, height: H - halfH } },
+        { label: "F", rect: { x: third * 2, y: halfH, width: W - third * 2, height: H - halfH } },
+      ];
+    case "8":
+      // A: 上 1/4, B: 中央 1/2, C: 下 1/4
+      return [
+        { label: "A", rect: { x: 0, y: 0, width: W, height: quarterH } },
+        { label: "B", rect: { x: 0, y: quarterH, width: W, height: halfH } },
+        { label: "C", rect: { x: 0, y: quarterH + halfH, width: W, height: H - quarterH - halfH } },
+      ];
+    default:
+      return [];
+  }
+}
+
 export function buildLineMessage(
   payload: Record<string, unknown> | null | undefined,
   displayNameOrContext: string | ReplacerContext = "ゲスト",
@@ -108,6 +178,59 @@ export function buildLineMessage(
   if (type === "image") {
     const url = p.imageUrl as string | undefined;
     if (!url) return null;
+
+    // imagemap 対応: imagemapLinkType が "none" 以外なら Imagemap Message を構築
+    const linkType = (p.imagemapLinkType as string | undefined) ?? "none";
+    if (linkType !== "none" && linkType !== "") {
+      const altText = (p.imagemapAltText as string) || "画像メッセージ";
+      const baseHeight = Math.max(1, Math.min(1040, Number(p.imagemapBaseHeight ?? 1040)));
+      const actionsInput = (p.imagemapActions as Array<{
+        area?: string;
+        actionType?: string;
+        uri?: string;
+        text?: string;
+        data?: string;
+      }>) ?? [];
+      const areas = getImagemapAreas(linkType, baseHeight);
+      if (areas.length === 0) return null;
+      const lineActions: Array<Record<string, unknown>> = [];
+      for (const a of areas) {
+        const cfg = actionsInput.find((x) => x.area === a.label);
+        if (!cfg) continue;
+        const at = cfg.actionType || "uri";
+        if (at === "uri" && cfg.uri) {
+          lineActions.push({ type: "uri", area: a.rect, linkUri: cfg.uri });
+        } else if (at === "message" && cfg.text) {
+          lineActions.push({ type: "message", area: a.rect, text: cfg.text });
+        }
+      }
+      if (lineActions.length === 0) return null;
+
+      // base64url エンコードして中継エンドポイントの URL を組み立てる
+      const b64 = Buffer.from(url, "utf-8")
+        .toString("base64")
+        .replace(/\+/g, "-")
+        .replace(/\//g, "_")
+        .replace(/=+$/, "");
+      const siteUrl =
+        process.env.NEXT_PUBLIC_SITE_URL ??
+        (process.env.VERCEL_PROJECT_PRODUCTION_URL
+          ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
+          : process.env.VERCEL_URL
+            ? `https://${process.env.VERCEL_URL}`
+            : "");
+      if (!siteUrl) return null;
+      const baseUrl = `${siteUrl.replace(/\/$/, "")}/api/line/imagemap/${b64}`;
+
+      return {
+        type: "imagemap",
+        baseUrl,
+        altText: altText.slice(0, 400),
+        baseSize: { width: 1040, height: baseHeight },
+        actions: lineActions,
+      };
+    }
+
     return { type: "image", originalContentUrl: url, previewImageUrl: url };
   }
   if (type === "video") {
@@ -225,6 +348,7 @@ export function summarizeBuiltMessage(
   const t = (b.type as string) ?? "";
   if (t === "text") return (b.text as string) ?? "";
   if (t === "image") return "[画像]";
+  if (t === "imagemap") return "[画像（リンク付き）]";
   if (t === "video") return "[動画]";
   if (t === "audio") return "[音声]";
   if (t === "sticker") return "[スタンプ]";
