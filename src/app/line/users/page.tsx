@@ -19,6 +19,7 @@ interface ManagedUser {
   closer_name: string | null;
   is_closer: boolean;
   is_admin: boolean;
+  password_memo: string | null;
   owner_project_ids: string[];
   viewer_project_ids: string[];
 }
@@ -55,6 +56,15 @@ export default function LineUsers() {
   const [userForm, setUserForm] = useState<UserForm>(emptyUserForm);
   const [userSaving, setUserSaving] = useState(false);
   const [userMsg, setUserMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [revealedIds, setRevealedIds] = useState<Set<string>>(new Set());
+  const toggleReveal = (id: string) => {
+    setRevealedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
 
   const fetchUsers = useCallback(async () => {
     setUsersLoading(true);
@@ -224,6 +234,10 @@ export default function LineUsers() {
       </header>
 
       <main className="max-w-5xl mx-auto px-6 py-10">
+        <div className="mb-4 px-3 py-2 rounded-md bg-yellow-500/10 border border-yellow-500/30 text-yellow-200 text-[11px]">
+          ⚠ パスワード列は管理の利便性のためにメモとして保存されています（平文）。
+          作成・変更時に入力された内容のみが記録されます。管理者以外のアクセスを避けてください。
+        </div>
         {showUserForm && (
           <div className="bg-white/5 border border-white/10 rounded-xl p-6 mb-6">
             <h3 className="text-white text-sm font-bold mb-4">
@@ -398,6 +412,7 @@ export default function LineUsers() {
                     <th className="px-5 py-3 font-medium">クローザー名</th>
                     <th className="px-5 py-3 font-medium">権限</th>
                     <th className="px-5 py-3 font-medium">ログインID</th>
+                    <th className="px-5 py-3 font-medium">パスワード</th>
                     <th className="px-5 py-3 font-medium">担当案件</th>
                     <th className="px-5 py-3 font-medium">閲覧可能</th>
                     <th className="px-5 py-3 font-medium">操作</th>
@@ -416,6 +431,33 @@ export default function LineUsers() {
                         </div>
                       </td>
                       <td className="px-5 py-3 text-white/70 text-xs font-mono">{emailToDisplayId(u.email) || "—"}</td>
+                      <td className="px-5 py-3">
+                        {u.password_memo ? (
+                          <div className="flex items-center gap-1.5">
+                            <code className="text-xs font-mono text-white/70 bg-white/5 px-2 py-0.5 rounded">
+                              {revealedIds.has(u.id) ? u.password_memo : "•".repeat(Math.min(u.password_memo.length, 10))}
+                            </code>
+                            <button
+                              onClick={() => toggleReveal(u.id)}
+                              className="text-[10px] text-blue-300 hover:text-blue-200"
+                              title={revealedIds.has(u.id) ? "隠す" : "表示"}
+                            >
+                              {revealedIds.has(u.id) ? "隠す" : "表示"}
+                            </button>
+                            {revealedIds.has(u.id) && (
+                              <button
+                                onClick={() => { if (u.password_memo) { navigator.clipboard.writeText(u.password_memo); } }}
+                                className="text-[10px] text-blue-300 hover:text-blue-200"
+                                title="コピー"
+                              >
+                                コピー
+                              </button>
+                            )}
+                          </div>
+                        ) : (
+                          <span className="text-white/30 text-xs">—</span>
+                        )}
+                      </td>
                       <td className="px-5 py-3">
                         <div className="flex flex-wrap gap-1">
                           {u.owner_project_ids.length === 0 ? (

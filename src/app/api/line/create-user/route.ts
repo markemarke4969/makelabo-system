@@ -51,6 +51,8 @@ export async function POST(request: NextRequest) {
       closer_name: closer_name ?? null,
       is_closer: !!is_closer,
       is_admin: !!is_admin,
+      // 管理画面表示用。※平文保存。管理者のみが閲覧できる前提
+      password_memo: password,
     },
   });
 

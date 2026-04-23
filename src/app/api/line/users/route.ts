@@ -54,6 +54,7 @@ export async function GET() {
       closer_name: (meta.closer_name as string | null) ?? null,
       is_closer: !!(meta.is_closer),
       is_admin: !!(meta.is_admin),
+      password_memo: (meta.password_memo as string | null) ?? null,
       owner_project_ids,
       viewer_project_ids,
     };
@@ -94,8 +95,18 @@ export async function PATCH(request: NextRequest) {
     updates.email = loginIdToEmail(input);
   }
   if (password) updates.password = password;
-  if (name !== undefined || closer_name !== undefined || is_closer !== undefined || is_admin !== undefined) {
-    updates.user_metadata = { name, closer_name, is_closer: !!is_closer, is_admin: !!is_admin };
+  if (name !== undefined || closer_name !== undefined || is_closer !== undefined || is_admin !== undefined || password) {
+    // 既存のメタデータを取得してマージ（password_memo を保持／更新）
+    const { data: existing } = await adminClient.auth.admin.getUserById(id);
+    const prevMeta = (existing?.user?.user_metadata ?? {}) as Record<string, unknown>;
+    updates.user_metadata = {
+      ...prevMeta,
+      ...(name !== undefined ? { name } : {}),
+      ...(closer_name !== undefined ? { closer_name } : {}),
+      ...(is_closer !== undefined ? { is_closer: !!is_closer } : {}),
+      ...(is_admin !== undefined ? { is_admin: !!is_admin } : {}),
+      ...(password ? { password_memo: password } : {}),
+    };
   }
 
   if (Object.keys(updates).length > 0) {
