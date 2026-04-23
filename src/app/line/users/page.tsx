@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
+import { emailToDisplayId, isValidLoginId } from "@/lib/login-id";
 
 interface Project {
   id: string;
@@ -85,7 +86,7 @@ export default function LineUsers() {
   const openEditUser = (u: ManagedUser) => {
     setEditingUserId(u.id);
     setUserForm({
-      email: u.email ?? "",
+      email: emailToDisplayId(u.email),
       password: "",
       name: u.name ?? "",
       closer_name: u.closer_name ?? "",
@@ -108,8 +109,15 @@ export default function LineUsers() {
   };
 
   const saveUser = async () => {
-    if (!userForm.email.trim()) {
-      setUserMsg({ ok: false, text: "メールアドレスを入力してください" });
+    const input = userForm.email.trim();
+    if (!input) {
+      setUserMsg({ ok: false, text: "ログインIDを入力してください" });
+      return;
+    }
+    // @が含まれていない（ID 形式の）場合のみ英数記号バリデーション。
+    // 既存のメアドユーザーの編集時に誤って弾かないため。
+    if (!input.includes("@") && !isValidLoginId(input)) {
+      setUserMsg({ ok: false, text: "ログインIDは英数字・ . _ - のみ、3〜50文字で入力してください" });
       return;
     }
     if (!editingUserId && !userForm.password.trim()) {
@@ -175,7 +183,7 @@ export default function LineUsers() {
   };
 
   const deleteUser = async (u: ManagedUser) => {
-    if (!confirm(`${u.email} を削除しますか？`)) return;
+    if (!confirm(`${emailToDisplayId(u.email)} を削除しますか？`)) return;
     const res = await fetch("/api/line/users", {
       method: "DELETE",
       headers: { "Content-Type": "application/json" },
@@ -244,15 +252,16 @@ export default function LineUsers() {
               </div>
               <div>
                 <label className="text-[11px] text-white/60 block mb-1 font-medium">
-                  メールアドレス <span className="text-red-400">*</span>
+                  ログインID <span className="text-red-400">*</span>
                 </label>
                 <input
-                  type="email"
+                  type="text"
                   value={userForm.email}
                   onChange={(e) => setUserForm({ ...userForm, email: e.target.value })}
-                  placeholder="user@example.com"
+                  placeholder="例: taro"
                   className="w-full bg-white/10 border border-white/10 rounded-md px-3 py-2 text-sm text-white placeholder-white/30 focus:border-[#06C755] focus:outline-none"
                 />
+                <p className="text-[10px] text-white/40 mt-1">英数字・ . _ - のみ、3〜50文字。メアド形式も可（既存ユーザー向け）</p>
               </div>
               <div className="md:col-span-2 flex items-center gap-6">
                 <label className="flex items-center gap-2 cursor-pointer">
@@ -388,7 +397,7 @@ export default function LineUsers() {
                     <th className="px-5 py-3 font-medium">名前</th>
                     <th className="px-5 py-3 font-medium">クローザー名</th>
                     <th className="px-5 py-3 font-medium">権限</th>
-                    <th className="px-5 py-3 font-medium">メール</th>
+                    <th className="px-5 py-3 font-medium">ログインID</th>
                     <th className="px-5 py-3 font-medium">担当案件</th>
                     <th className="px-5 py-3 font-medium">閲覧可能</th>
                     <th className="px-5 py-3 font-medium">操作</th>
@@ -406,7 +415,7 @@ export default function LineUsers() {
                           {!u.is_admin && !u.is_closer && <span className="text-white/30 text-xs">—</span>}
                         </div>
                       </td>
-                      <td className="px-5 py-3 text-white/70 text-xs">{u.email ?? "—"}</td>
+                      <td className="px-5 py-3 text-white/70 text-xs font-mono">{emailToDisplayId(u.email) || "—"}</td>
                       <td className="px-5 py-3">
                         <div className="flex flex-wrap gap-1">
                           {u.owner_project_ids.length === 0 ? (

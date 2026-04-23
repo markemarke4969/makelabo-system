@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
+import { loginIdToEmail, isValidLoginId } from "@/lib/login-id";
 
 // ユーザー一覧取得（プロフィール + 担当/閲覧可能案件を含む）
 export async function GET() {
@@ -82,7 +83,16 @@ export async function PATCH(request: NextRequest) {
   );
 
   const updates: Record<string, unknown> = {};
-  if (email !== undefined) updates.email = email;
+  if (email !== undefined) {
+    const input = String(email).trim();
+    if (input && !input.includes("@") && !isValidLoginId(input)) {
+      return Response.json(
+        { error: "ログインIDは英数字・ . _ - のみ、3〜50文字で入力してください" },
+        { status: 400 },
+      );
+    }
+    updates.email = loginIdToEmail(input);
+  }
   if (password) updates.password = password;
   if (name !== undefined || closer_name !== undefined || is_closer !== undefined || is_admin !== undefined) {
     updates.user_metadata = { name, closer_name, is_closer: !!is_closer, is_admin: !!is_admin };

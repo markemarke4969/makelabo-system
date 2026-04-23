@@ -1,11 +1,12 @@
 import { NextRequest } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
+import { loginIdToEmail, isValidLoginId } from "@/lib/login-id";
 
 export async function POST(request: NextRequest) {
   const body = await request.json();
   const {
-    email,
+    email: rawEmail,
     password,
     name,
     closer_name,
@@ -16,9 +17,19 @@ export async function POST(request: NextRequest) {
     project_ids, // 互換用
   } = body;
 
-  if (!email || !password) {
-    return Response.json({ error: "email and password are required" }, { status: 400 });
+  if (!rawEmail || !password) {
+    return Response.json({ error: "ログインIDとパスワードを入力してください" }, { status: 400 });
   }
+
+  const input = String(rawEmail).trim();
+  // ID 形式（@を含まない）なら英数記号バリデーション
+  if (!input.includes("@") && !isValidLoginId(input)) {
+    return Response.json(
+      { error: "ログインIDは英数字・ . _ - のみ、3〜50文字で入力してください" },
+      { status: 400 },
+    );
+  }
+  const email = loginIdToEmail(input);
 
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!serviceKey) {

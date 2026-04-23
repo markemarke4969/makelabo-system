@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase-browser";
+import { loginIdToEmail } from "@/lib/login-id";
 
 export default function LineLogin() {
   const router = useRouter();
@@ -19,12 +20,12 @@ export default function LineLogin() {
     try {
       const supabase = createClient();
       const { error: signInError } = await supabase.auth.signInWithPassword({
-        email,
+        email: loginIdToEmail(email),
         password,
       });
 
       if (signInError) {
-        setError("メールアドレスまたはパスワードが正しくありません");
+        setError("ログインIDまたはパスワードが正しくありません");
         return;
       }
 
@@ -83,12 +84,13 @@ export default function LineLogin() {
 
           <form onSubmit={handleLogin} className="space-y-4">
             <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1.5">メールアドレス</label>
+              <label className="block text-xs font-medium text-gray-600 mb-1.5">ログインID</label>
               <input
-                type="email"
+                type="text"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="example@company.com"
+                placeholder="例: taro"
+                autoComplete="username"
                 required
                 className="w-full border border-gray-200 rounded-lg px-3.5 py-2.5 text-sm focus:border-[#06C755] focus:outline-none focus:ring-1 focus:ring-[#06C755] transition"
               />
