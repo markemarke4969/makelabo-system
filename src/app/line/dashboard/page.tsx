@@ -353,34 +353,37 @@ export default function LineDashboard() {
   const [memoText, setMemoText] = useState("");
   const [showAddAccount, setShowAddAccount] = useState(false);
 
-  // アカウント登録ウィザード
-  interface WizardForm {
-    step: 1 | 2 | 3;
-    project_id: string;
-    group_name: string;
-    role: "main" | "standby";
+  // アカウント一括登録（スプレッドシート形式）
+  interface BulkRow {
     account_name: string;
     channel_id: string;
     channel_secret: string;
     channel_access_token: string;
     basic_id: string;
+    group_name: string;
+    role: "main" | "standby";
+    testing: boolean;
+    testResult: { ok: boolean; text: string } | null;
+    saving: boolean;
+    saveResult: { ok: boolean; text: string } | null;
   }
-  const emptyWizard: WizardForm = {
-    step: 1,
-    project_id: "",
-    group_name: "",
-    role: "main",
+  const emptyBulkRow = (): BulkRow => ({
     account_name: "",
     channel_id: "",
     channel_secret: "",
     channel_access_token: "",
     basic_id: "",
-  };
+    group_name: "",
+    role: "main",
+    testing: false,
+    testResult: null,
+    saving: false,
+    saveResult: null,
+  });
   const [showWizard, setShowWizard] = useState(false);
-  const [wizard, setWizard] = useState<WizardForm>(emptyWizard);
-  const [wizardTesting, setWizardTesting] = useState(false);
-  const [wizardTestResult, setWizardTestResult] = useState<{ ok: boolean; text: string; displayName?: string; basicId?: string } | null>(null);
-  const [wizardSaving, setWizardSaving] = useState(false);
+  const [bulkProjectId, setBulkProjectId] = useState<string>("");
+  const [bulkRows, setBulkRows] = useState<BulkRow[]>([]);
+  const [bulkRunning, setBulkRunning] = useState(false);
 
   const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>({});
   const [needsAction, setNeedsAction] = useState<Set<string>>(new Set());
@@ -3816,8 +3819,8 @@ export default function LineDashboard() {
               <h1 className="text-base font-bold text-gray-800">アカウント一覧</h1>
               <button
                 onClick={() => {
-                  setWizard({ ...emptyWizard, project_id: project?.id ?? "" });
-                  setWizardTestResult(null);
+                  setBulkProjectId(project?.id ?? "");
+                  setBulkRows(Array.from({ length: 10 }, () => emptyBulkRow()));
                   setShowWizard(true);
                 }}
                 className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded-md transition"
@@ -3884,305 +3887,321 @@ export default function LineDashboard() {
               )}
 
               {/* ============================================================ */}
-              {/* アカウント登録ウィザード */}
+              {/* アカウント一括登録（スプレッドシート形式） */}
               {/* ============================================================ */}
               {showWizard && (() => {
-                const closeWizard = () => { setShowWizard(false); setWizard(emptyWizard); setWizardTestResult(null); };
+                const closeWizard = () => { setShowWizard(false); setBulkRows([]); };
                 const existingGroups = Array.from(new Set(
                   accounts.filter((a) => a.group_name).map((a) => a.group_name as string),
                 )).sort();
 
-                const goNext = () => setWizard({ ...wizard, step: Math.min(3, wizard.step + 1) as 1 | 2 | 3 });
-                const goBack = () => setWizard({ ...wizard, step: Math.max(1, wizard.step - 1) as 1 | 2 | 3 });
+                const updateRow = (i: number, patch: Partial<BulkRow>) => {
+                  setBulkRows((prev) => {
+                    const next = [...prev];
+                    next[i] = { ...next[i], ...patch };
+                    return next;
+                  });
+                };
 
-                const step1Ready = !!wizard.project_id && !!wizard.group_name && !!wizard.role;
-                const step2Ready = !!wizard.channel_id.trim() && !!wizard.channel_secret.trim() && !!wizard.channel_access_token.trim();
+                const addRow = () => setBulkRows((prev) => [...prev, emptyBulkRow()]);
+                const removeRow = (i: number) => setBulkRows((prev) => prev.filter((_, j) => j !== i));
 
-                const runConnectionTest = async () => {
-                  setWizardTesting(true);
-                  setWizardTestResult(null);
+                const isRowFilled = (r: BulkRow) =>
+                  r.channel_id.trim() && r.channel_secret.trim() && r.channel_access_token.trim() && r.group_name.trim();
+
+                const testRow = async (i: number) => {
+                  const row = bulkRows[i];
+                  if (!row.channel_access_token.trim()) {
+                    updateRow(i, { testResult: { ok: false, text: "トークン未入力" } });
+                    return;
+                  }
+                  updateRow(i, { testing: true, testResult: null });
                   try {
                     const res = await fetch("/api/line/accounts/validate-token", {
                       method: "POST",
                       headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({ channel_access_token: wizard.channel_access_token }),
+                      body: JSON.stringify({ channel_access_token: row.channel_access_token.trim() }),
                     });
                     const data = await res.json();
                     if (res.ok && data.ok) {
-                      setWizardTestResult({
-                        ok: true,
-                        text: `接続成功: ${data.displayName ?? "Bot"}${data.basicId ? ` (@${data.basicId})` : ""}`,
-                        displayName: data.displayName,
-                        basicId: data.basicId,
-                      });
-                      const patch: Partial<WizardForm> = {};
-                      if (!wizard.account_name.trim() && data.displayName) patch.account_name = data.displayName;
-                      if (!wizard.basic_id.trim() && data.basicId) patch.basic_id = data.basicId;
-                      if (Object.keys(patch).length > 0) setWizard({ ...wizard, ...patch });
+                      const patch: Partial<BulkRow> = {
+                        testing: false,
+                        testResult: { ok: true, text: `✓ ${data.displayName ?? "OK"}${data.basicId ? ` @${data.basicId}` : ""}` },
+                      };
+                      if (!row.account_name.trim() && data.displayName) patch.account_name = data.displayName;
+                      if (!row.basic_id.trim() && data.basicId) patch.basic_id = data.basicId;
+                      updateRow(i, patch);
                     } else {
-                      setWizardTestResult({
-                        ok: false,
-                        text: `接続失敗 (HTTP ${data.status ?? "?"}): ${data.hint ?? data.detail ?? "エラー"}`,
+                      updateRow(i, {
+                        testing: false,
+                        testResult: { ok: false, text: `✗ HTTP ${data.status ?? "?"}: ${data.hint ?? data.detail ?? "失敗"}` },
                       });
                     }
                   } catch (e) {
-                    setWizardTestResult({ ok: false, text: `通信エラー: ${(e as Error).message}` });
-                  } finally {
-                    setWizardTesting(false);
+                    updateRow(i, { testing: false, testResult: { ok: false, text: `通信エラー: ${(e as Error).message}` } });
                   }
                 };
 
-                const finishRegistration = async () => {
-                  setWizardSaving(true);
-                  try {
-                    const res = await fetch("/api/line/accounts", {
-                      method: "POST",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({
-                        project_id: wizard.project_id,
-                        group_name: wizard.group_name,
-                        role: wizard.role,
-                        account_name: wizard.account_name || null,
-                        channel_id: wizard.channel_id.trim(),
-                        channel_secret: wizard.channel_secret.trim(),
-                        channel_access_token: wizard.channel_access_token.trim(),
-                        basic_id: wizard.basic_id.trim() || null,
-                      }),
+                const runBulkRegister = async () => {
+                  if (!bulkProjectId) { alert("案件を選択してください"); return; }
+                  const targets = bulkRows.map((r, i) => ({ row: r, index: i })).filter(({ row }) => isRowFilled(row));
+                  if (targets.length === 0) {
+                    alert("入力された行がありません（チャネルID/シークレット/トークン/グループの全て入力が必要）");
+                    return;
+                  }
+                  setBulkRunning(true);
+                  // 全行の saveResult をクリア
+                  setBulkRows((prev) => prev.map((r) => ({ ...r, saveResult: null, saving: false })));
+
+                  for (const { row, index } of targets) {
+                    setBulkRows((prev) => {
+                      const next = [...prev];
+                      next[index] = { ...next[index], saving: true, saveResult: null };
+                      return next;
                     });
-                    const data = await res.json();
-                    if (!res.ok) {
-                      alert(`登録失敗: ${data.error ?? res.status}`);
-                      return;
-                    }
-                    if (wizard.role === "main") {
-                      if (confirm("登録完了しました。\n\nこのアカウントを予備プールにも追加しますか？\n（BAN時の切替先候補になります）")) {
-                        await fetch("/api/line/pool", {
-                          method: "POST",
-                          headers: { "Content-Type": "application/json" },
-                          body: JSON.stringify({ project_id: wizard.project_id, account_id: data.id }),
+                    try {
+                      const res = await fetch("/api/line/accounts", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                          project_id: bulkProjectId,
+                          group_name: row.group_name.trim(),
+                          role: row.role,
+                          account_name: row.account_name.trim() || null,
+                          channel_id: row.channel_id.trim(),
+                          channel_secret: row.channel_secret.trim(),
+                          channel_access_token: row.channel_access_token.trim(),
+                          basic_id: row.basic_id.trim() || null,
+                        }),
+                      });
+                      const data = await res.json();
+                      if (res.ok) {
+                        setBulkRows((prev) => {
+                          const next = [...prev];
+                          next[index] = { ...next[index], saving: false, saveResult: { ok: true, text: "登録成功" } };
+                          return next;
+                        });
+                      } else {
+                        setBulkRows((prev) => {
+                          const next = [...prev];
+                          next[index] = { ...next[index], saving: false, saveResult: { ok: false, text: data.error ?? `HTTP ${res.status}` } };
+                          return next;
                         });
                       }
-                    } else {
-                      alert("登録完了しました（予備プールに自動追加されました）");
+                    } catch (e) {
+                      setBulkRows((prev) => {
+                        const next = [...prev];
+                        next[index] = { ...next[index], saving: false, saveResult: { ok: false, text: (e as Error).message } };
+                        return next;
+                      });
                     }
-                    await fetchAccounts();
-                    closeWizard();
-                  } catch (e) {
-                    alert(`登録エラー: ${(e as Error).message}`);
-                  } finally {
-                    setWizardSaving(false);
                   }
+
+                  setBulkRunning(false);
+                  await fetchAccounts();
                 };
+
+                const filledCount = bulkRows.filter(isRowFilled).length;
 
                 return (
                   <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-                    <div className="bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+                    <div className="bg-white rounded-xl shadow-xl w-full max-w-[1400px] max-h-[95vh] overflow-hidden flex flex-col">
                       <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
-                        <div className="flex items-center gap-3">
-                          <h3 className="font-bold text-gray-800">アカウント登録ウィザード</h3>
-                          <div className="flex items-center gap-1 text-xs">
-                            {[1, 2, 3].map((s) => (
-                              <span key={s} className={`px-2 py-0.5 rounded ${wizard.step === s ? "bg-blue-600 text-white" : wizard.step > s ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-400"}`}>
-                                STEP{s}
-                              </span>
-                            ))}
-                          </div>
-                        </div>
+                        <h3 className="font-bold text-gray-800">LINEアカウント 一括登録</h3>
                         <button onClick={closeWizard} className="text-gray-400 hover:text-gray-600">{Icons.close}</button>
                       </div>
 
-                      {wizard.step === 1 && (
-                        <div className="p-5 space-y-4">
-                          <div>
-                            <label className="text-sm text-gray-700 font-medium block mb-1.5">案件 <span className="text-[10px] text-white bg-red-500 px-1.5 py-0.5 rounded">必須</span></label>
-                            <select
-                              value={wizard.project_id}
-                              onChange={(e) => setWizard({ ...wizard, project_id: e.target.value })}
-                              className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm bg-white"
-                            >
-                              <option value="">選択してください</option>
-                              {allProjects.map((p) => (
-                                <option key={p.id} value={p.id}>{p.name}</option>
-                              ))}
-                            </select>
-                          </div>
-                          <div>
-                            <label className="text-sm text-gray-700 font-medium block mb-1.5">グループ <span className="text-[10px] text-white bg-red-500 px-1.5 py-0.5 rounded">必須</span></label>
-                            {existingGroups.length > 0 && (
-                              <select
-                                value={existingGroups.includes(wizard.group_name) ? wizard.group_name : ""}
-                                onChange={(e) => setWizard({ ...wizard, group_name: e.target.value })}
-                                className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm bg-white mb-2"
-                              >
-                                <option value="">既存のグループから選択</option>
-                                {existingGroups.map((g) => (
-                                  <option key={g} value={g}>{g}</option>
-                                ))}
-                              </select>
-                            )}
-                            <input
-                              type="text"
-                              value={wizard.group_name}
-                              onChange={(e) => setWizard({ ...wizard, group_name: e.target.value })}
-                              placeholder="または新しいグループ名を入力（例: 音声相談LINE）"
-                              className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
-                            />
-                          </div>
-                          <div>
-                            <label className="text-sm text-gray-700 font-medium block mb-1.5">ロール <span className="text-[10px] text-white bg-red-500 px-1.5 py-0.5 rounded">必須</span></label>
-                            <div className="grid grid-cols-2 gap-2">
-                              <label className={`cursor-pointer border-2 rounded-md p-3 ${wizard.role === "main" ? "border-[#06C755] bg-[#06C755]/5" : "border-gray-200"}`}>
-                                <input type="radio" name="wiz-role" checked={wizard.role === "main"} onChange={() => setWizard({ ...wizard, role: "main" })} className="accent-[#06C755] mr-2" />
-                                <span className="font-medium">メイン（本番）</span>
-                                <p className="text-[11px] text-gray-500 mt-0.5">稼働中のアカウント</p>
-                              </label>
-                              <label className={`cursor-pointer border-2 rounded-md p-3 ${wizard.role === "standby" ? "border-[#06C755] bg-[#06C755]/5" : "border-gray-200"}`}>
-                                <input type="radio" name="wiz-role" checked={wizard.role === "standby"} onChange={() => setWizard({ ...wizard, role: "standby" })} className="accent-[#06C755] mr-2" />
-                                <span className="font-medium">スタンバイ（予備）</span>
-                                <p className="text-[11px] text-gray-500 mt-0.5">BAN時の切替先候補</p>
-                              </label>
-                            </div>
-                          </div>
-                        </div>
-                      )}
-
-                      {wizard.step === 2 && (
-                        <div className="p-5 space-y-4">
-                          <p className="text-[11px] text-gray-500">
-                            LINE Developers コンソール（<a className="text-blue-500 underline" href="https://developers.line.biz/console/" target="_blank" rel="noreferrer">developers.line.biz/console</a>）から該当チャネルを開いてコピー＆ペーストしてください。
-                          </p>
-                          <div>
-                            <label className="text-sm text-gray-700 font-medium block mb-1">アカウント名 <span className="text-[11px] text-gray-400">（任意・表示用）</span></label>
-                            <input
-                              type="text"
-                              value={wizard.account_name}
-                              onChange={(e) => setWizard({ ...wizard, account_name: e.target.value })}
-                              placeholder="例: MARI個別相談LINE"
-                              className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
-                            />
-                            <p className="text-[11px] text-gray-400 mt-1">接続テストで自動取得されます</p>
-                          </div>
-                          <div>
-                            <label className="text-sm text-gray-700 font-medium block mb-1">チャネルID <span className="text-[10px] text-white bg-red-500 px-1.5 py-0.5 rounded">必須</span></label>
-                            <input
-                              type="text"
-                              value={wizard.channel_id}
-                              onChange={(e) => setWizard({ ...wizard, channel_id: e.target.value })}
-                              placeholder="2009XXXXXX"
-                              className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm font-mono"
-                            />
-                            <p className="text-[11px] text-gray-400 mt-1">LINE Developers → プロバイダー → チャネル → 基本設定 → チャネルID</p>
-                          </div>
-                          <div>
-                            <label className="text-sm text-gray-700 font-medium block mb-1">チャネルシークレット <span className="text-[10px] text-white bg-red-500 px-1.5 py-0.5 rounded">必須</span></label>
-                            <input
-                              type="text"
-                              value={wizard.channel_secret}
-                              onChange={(e) => setWizard({ ...wizard, channel_secret: e.target.value })}
-                              placeholder="32桁の英数字"
-                              className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm font-mono"
-                            />
-                            <p className="text-[11px] text-gray-400 mt-1">LINE Developers → 該当チャネル → 基本設定 → チャネルシークレット</p>
-                          </div>
-                          <div>
-                            <label className="text-sm text-gray-700 font-medium block mb-1">チャネルアクセストークン <span className="text-[10px] text-white bg-red-500 px-1.5 py-0.5 rounded">必須</span></label>
-                            <input
-                              type="text"
-                              value={wizard.channel_access_token}
-                              onChange={(e) => setWizard({ ...wizard, channel_access_token: e.target.value })}
-                              placeholder="長期トークン"
-                              className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm font-mono"
-                            />
-                            <p className="text-[11px] text-gray-400 mt-1">LINE Developers → Messaging API 設定 → チャネルアクセストークン(長期) → 発行</p>
-                          </div>
-                          <div>
-                            <label className="text-sm text-gray-700 font-medium block mb-1">Basic ID <span className="text-[11px] text-gray-400">（@から始まる ID）</span></label>
-                            <input
-                              type="text"
-                              value={wizard.basic_id}
-                              onChange={(e) => setWizard({ ...wizard, basic_id: e.target.value.replace(/^@/, "") })}
-                              placeholder="例: 058phahn（@ は不要）"
-                              className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm font-mono"
-                            />
-                            <p className="text-[11px] text-gray-400 mt-1">LINE Official Account Manager → 設定 → Basic ID（接続テストで自動取得）</p>
-                          </div>
-                        </div>
-                      )}
-
-                      {wizard.step === 3 && (
-                        <div className="p-5 space-y-4">
-                          <h4 className="text-sm font-bold text-gray-700">登録内容の確認</h4>
-                          <dl className="bg-gray-50 border border-gray-200 rounded-md divide-y divide-gray-200">
-                            {[
-                              { label: "案件", value: allProjects.find((p) => p.id === wizard.project_id)?.name ?? wizard.project_id },
-                              { label: "グループ", value: wizard.group_name },
-                              { label: "ロール", value: wizard.role === "main" ? "メイン（本番）" : "スタンバイ（予備）" },
-                              { label: "アカウント名", value: wizard.account_name || "（未入力）" },
-                              { label: "チャネルID", value: wizard.channel_id },
-                              { label: "Basic ID", value: wizard.basic_id ? `@${wizard.basic_id}` : "（未入力）" },
-                              { label: "シークレット", value: "•".repeat(Math.min(12, wizard.channel_secret.length)) },
-                              { label: "アクセストークン", value: "•".repeat(Math.min(16, wizard.channel_access_token.length)) },
-                            ].map((row) => (
-                              <div key={row.label} className="flex items-center gap-3 px-3 py-2">
-                                <dt className="text-xs text-gray-500 w-32 flex-shrink-0">{row.label}</dt>
-                                <dd className="text-sm text-gray-800 break-all">{row.value}</dd>
-                              </div>
-                            ))}
-                          </dl>
-
-                          <div className="flex items-center gap-2">
-                            <button
-                              onClick={runConnectionTest}
-                              disabled={wizardTesting || !wizard.channel_access_token}
-                              className="px-4 py-2 bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 text-sm rounded-md disabled:opacity-50"
-                            >
-                              {wizardTesting ? "テスト中..." : "接続テスト"}
-                            </button>
-                            <p className="text-[11px] text-gray-500">LINE /v2/bot/info を叩いてトークンの有効性を確認します（保存はされません）</p>
-                          </div>
-                          {wizardTestResult && (
-                            <div className={`px-3 py-2 rounded-md text-sm ${wizardTestResult.ok ? "bg-green-50 border border-green-200 text-green-700" : "bg-red-50 border border-red-200 text-red-600"}`}>
-                              {wizardTestResult.ok ? "✓ " : "✗ "}
-                              {wizardTestResult.text}
-                            </div>
-                          )}
-
-                          <div className="text-[11px] text-gray-500 bg-blue-50 border border-blue-200 rounded-md p-2.5">
-                            ℹ️ 登録後、LINE Developers の Messaging API 設定タブで「Webhook URL」を以下に設定してください:<br />
-                            <code className="font-mono text-blue-700 break-all">
-                              https://app-pink-tau-37.vercel.app/api/line/webhook
-                            </code>
-                            <br />
-                            「Webhookの利用」を有効化し「応答メッセージ」は無効化してください。
-                          </div>
-                        </div>
-                      )}
-
-                      <div className="flex justify-between px-5 py-4 border-t border-gray-200">
-                        <button
-                          onClick={wizard.step === 1 ? closeWizard : goBack}
-                          disabled={wizardSaving}
-                          className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-md"
-                        >
-                          {wizard.step === 1 ? "キャンセル" : "← 戻る"}
-                        </button>
-                        {wizard.step < 3 ? (
-                          <button
-                            onClick={goNext}
-                            disabled={(wizard.step === 1 && !step1Ready) || (wizard.step === 2 && !step2Ready)}
-                            className="px-5 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-sm font-medium rounded-md"
+                      {/* ヘッダー設定 */}
+                      <div className="px-5 py-3 border-b border-gray-200 bg-gray-50 flex items-center gap-4 flex-wrap">
+                        <div className="flex items-center gap-2">
+                          <label className="text-xs text-gray-600 font-medium">案件</label>
+                          <span className="text-[10px] text-white bg-red-500 px-1.5 py-0.5 rounded">全行共通</span>
+                          <select
+                            value={bulkProjectId}
+                            onChange={(e) => setBulkProjectId(e.target.value)}
+                            className="border border-gray-300 rounded-md px-2 py-1 text-sm bg-white"
                           >
-                            次へ →
-                          </button>
-                        ) : (
+                            <option value="">選択してください</option>
+                            {allProjects.map((p) => (
+                              <option key={p.id} value={p.id}>{p.name}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="flex-1" />
+                        <span className="text-xs text-gray-500">{filledCount} 行が入力済み</span>
+                        <button
+                          onClick={addRow}
+                          className="px-3 py-1 text-xs bg-white border border-gray-300 hover:bg-gray-50 rounded-md"
+                        >
+                          ＋ 行を追加
+                        </button>
+                      </div>
+
+                      {/* テーブル */}
+                      <div className="flex-1 overflow-auto">
+                        <table className="w-full text-xs border-collapse">
+                          <thead className="sticky top-0 bg-gray-100 z-10">
+                            <tr className="border-b border-gray-300 text-gray-600">
+                              <th className="px-2 py-2 font-medium border-r border-gray-300 w-10 text-center">#</th>
+                              <th className="px-2 py-2 font-medium border-r border-gray-300 min-w-[140px] text-left">アカウント名</th>
+                              <th className="px-2 py-2 font-medium border-r border-gray-300 min-w-[130px] text-left">チャネルID <span className="text-red-500">*</span></th>
+                              <th className="px-2 py-2 font-medium border-r border-gray-300 min-w-[180px] text-left">チャネルシークレット <span className="text-red-500">*</span></th>
+                              <th className="px-2 py-2 font-medium border-r border-gray-300 min-w-[220px] text-left">アクセストークン <span className="text-red-500">*</span></th>
+                              <th className="px-2 py-2 font-medium border-r border-gray-300 min-w-[110px] text-left">Basic ID</th>
+                              <th className="px-2 py-2 font-medium border-r border-gray-300 min-w-[130px] text-left">グループ <span className="text-red-500">*</span></th>
+                              <th className="px-2 py-2 font-medium border-r border-gray-300 min-w-[90px] text-left">ロール</th>
+                              <th className="px-2 py-2 font-medium border-r border-gray-300 min-w-[140px] text-left">テスト</th>
+                              <th className="px-2 py-2 font-medium w-12 text-center">削除</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {bulkRows.map((row, i) => {
+                              const filled = isRowFilled(row);
+                              const rowBg = row.saveResult?.ok
+                                ? "bg-green-50"
+                                : row.saveResult && !row.saveResult.ok
+                                  ? "bg-red-50"
+                                  : "bg-white hover:bg-blue-50/30";
+                              return (
+                                <tr key={i} className={`border-b border-gray-200 ${rowBg}`}>
+                                  <td className="px-2 py-1.5 border-r border-gray-200 text-center text-gray-400">{i + 1}</td>
+                                  <td className="px-1 py-1 border-r border-gray-200">
+                                    <input
+                                      type="text"
+                                      value={row.account_name}
+                                      onChange={(e) => updateRow(i, { account_name: e.target.value })}
+                                      placeholder="（任意）"
+                                      className="w-full px-2 py-1 border border-gray-200 rounded text-xs focus:border-blue-400 focus:outline-none"
+                                    />
+                                  </td>
+                                  <td className="px-1 py-1 border-r border-gray-200">
+                                    <input
+                                      type="text"
+                                      value={row.channel_id}
+                                      onChange={(e) => updateRow(i, { channel_id: e.target.value })}
+                                      placeholder="2009XXXXXX"
+                                      className="w-full px-2 py-1 border border-gray-200 rounded text-xs font-mono focus:border-blue-400 focus:outline-none"
+                                    />
+                                  </td>
+                                  <td className="px-1 py-1 border-r border-gray-200">
+                                    <input
+                                      type="text"
+                                      value={row.channel_secret}
+                                      onChange={(e) => updateRow(i, { channel_secret: e.target.value })}
+                                      placeholder="32桁の英数字"
+                                      className="w-full px-2 py-1 border border-gray-200 rounded text-xs font-mono focus:border-blue-400 focus:outline-none"
+                                    />
+                                  </td>
+                                  <td className="px-1 py-1 border-r border-gray-200">
+                                    <input
+                                      type="text"
+                                      value={row.channel_access_token}
+                                      onChange={(e) => updateRow(i, { channel_access_token: e.target.value })}
+                                      placeholder="長期トークン"
+                                      className="w-full px-2 py-1 border border-gray-200 rounded text-xs font-mono focus:border-blue-400 focus:outline-none"
+                                    />
+                                  </td>
+                                  <td className="px-1 py-1 border-r border-gray-200">
+                                    <input
+                                      type="text"
+                                      value={row.basic_id}
+                                      onChange={(e) => updateRow(i, { basic_id: e.target.value.replace(/^@/, "") })}
+                                      placeholder="@除く"
+                                      className="w-full px-2 py-1 border border-gray-200 rounded text-xs font-mono focus:border-blue-400 focus:outline-none"
+                                    />
+                                  </td>
+                                  <td className="px-1 py-1 border-r border-gray-200">
+                                    <input
+                                      type="text"
+                                      list={`bulk-groups-${i}`}
+                                      value={row.group_name}
+                                      onChange={(e) => updateRow(i, { group_name: e.target.value })}
+                                      placeholder="新規 or 既存"
+                                      className="w-full px-2 py-1 border border-gray-200 rounded text-xs focus:border-blue-400 focus:outline-none"
+                                    />
+                                    <datalist id={`bulk-groups-${i}`}>
+                                      {existingGroups.map((g) => <option key={g} value={g} />)}
+                                    </datalist>
+                                  </td>
+                                  <td className="px-1 py-1 border-r border-gray-200">
+                                    <select
+                                      value={row.role}
+                                      onChange={(e) => updateRow(i, { role: e.target.value as "main" | "standby" })}
+                                      className="w-full px-1 py-1 border border-gray-200 rounded text-xs bg-white focus:border-blue-400 focus:outline-none"
+                                    >
+                                      <option value="main">メイン</option>
+                                      <option value="standby">予備</option>
+                                    </select>
+                                  </td>
+                                  <td className="px-1 py-1 border-r border-gray-200">
+                                    <div className="flex items-center gap-1">
+                                      <button
+                                        type="button"
+                                        disabled={row.testing || !row.channel_access_token.trim()}
+                                        onClick={() => testRow(i)}
+                                        className="px-2 py-1 text-[11px] bg-gray-100 hover:bg-gray-200 rounded border border-gray-300 disabled:opacity-50"
+                                      >
+                                        {row.testing ? "..." : "テスト"}
+                                      </button>
+                                      {row.testResult && (
+                                        <span
+                                          className={`text-[10px] truncate max-w-[80px] ${row.testResult.ok ? "text-green-600" : "text-red-600"}`}
+                                          title={row.testResult.text}
+                                        >
+                                          {row.testResult.text}
+                                        </span>
+                                      )}
+                                    </div>
+                                    {row.saveResult && (
+                                      <div className={`text-[10px] mt-0.5 ${row.saveResult.ok ? "text-green-700" : "text-red-600"}`} title={row.saveResult.text}>
+                                        {row.saveResult.ok ? "✅" : "❌"} {row.saveResult.text}
+                                      </div>
+                                    )}
+                                    {row.saving && <div className="text-[10px] text-blue-600 mt-0.5">登録中...</div>}
+                                    {!filled && !row.saveResult && (
+                                      <div className="text-[10px] text-gray-400 mt-0.5">未入力の行はスキップ</div>
+                                    )}
+                                  </td>
+                                  <td className="px-1 py-1 text-center">
+                                    <button
+                                      type="button"
+                                      onClick={() => removeRow(i)}
+                                      className="text-red-500 hover:text-red-700 text-xs"
+                                      title="行を削除"
+                                    >
+                                      ✕
+                                    </button>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      {/* フッター */}
+                      <div className="px-5 py-3 border-t border-gray-200 bg-gray-50 flex items-center justify-between gap-2">
+                        <div className="text-[11px] text-gray-500">
+                          登録後は LINE Developers の Webhook URL に
+                          <code className="mx-1 px-1 bg-white border border-gray-300 rounded">https://app-pink-tau-37.vercel.app/api/line/webhook</code>
+                          を設定してください
+                        </div>
+                        <div className="flex items-center gap-2">
                           <button
-                            onClick={finishRegistration}
-                            disabled={wizardSaving}
+                            onClick={closeWizard}
+                            disabled={bulkRunning}
+                            className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-md"
+                          >
+                            閉じる
+                          </button>
+                          <button
+                            onClick={runBulkRegister}
+                            disabled={bulkRunning || !bulkProjectId || filledCount === 0}
                             className="px-5 py-2 bg-[#06C755] hover:bg-[#05a648] disabled:opacity-50 text-white text-sm font-medium rounded-md"
                           >
-                            {wizardSaving ? "登録中..." : "登録する"}
+                            {bulkRunning ? "登録中..." : `一括登録 (${filledCount}件)`}
                           </button>
-                        )}
+                        </div>
                       </div>
                     </div>
                   </div>
