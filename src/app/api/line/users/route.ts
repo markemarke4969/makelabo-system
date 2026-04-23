@@ -88,7 +88,7 @@ export async function PATCH(request: NextRequest) {
     const input = String(email).trim();
     if (input && !input.includes("@") && !isValidLoginId(input)) {
       return Response.json(
-        { error: "ログインIDは英数字・ . _ - のみ、3〜50文字で入力してください" },
+        { error: "IDは英数字・ . _ - のみ、3〜50文字で入力してください" },
         { status: 400 },
       );
     }

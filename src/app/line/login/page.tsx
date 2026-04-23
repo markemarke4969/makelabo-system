@@ -25,42 +25,13 @@ export default function LineLogin() {
       });
 
       if (signInError) {
-        setError("ログインIDまたはパスワードが正しくありません");
+        setError("IDまたはパスワードが正しくありません");
         return;
       }
 
       router.push("/line/projects");
     } catch {
       setError("エラーが発生しました");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleTestLogin = async () => {
-    setError("");
-    setLoading(true);
-    try {
-      const res = await fetch("/api/line/test-login", { method: "POST" });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        setError(`お試しログイン準備失敗: ${data.error ?? res.status}`);
-        return;
-      }
-      const { email: testEmail, password: testPassword } = await res.json();
-
-      const supabase = createClient();
-      const { error: signInError } = await supabase.auth.signInWithPassword({
-        email: testEmail,
-        password: testPassword,
-      });
-      if (signInError) {
-        setError(`ログインエラー: ${signInError.message}`);
-        return;
-      }
-      router.push("/line/projects");
-    } catch (e) {
-      setError(`エラーが発生しました: ${(e as Error).message}`);
     } finally {
       setLoading(false);
     }
@@ -84,7 +55,7 @@ export default function LineLogin() {
 
           <form onSubmit={handleLogin} className="space-y-4">
             <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1.5">ログインID</label>
+              <label className="block text-xs font-medium text-gray-600 mb-1.5">ID</label>
               <input
                 type="text"
                 value={email}
@@ -121,23 +92,6 @@ export default function LineLogin() {
               {loading ? "ログイン中..." : "ログイン"}
             </button>
           </form>
-
-          {/* 区切り線 */}
-          <div className="flex items-center gap-3 mt-5 mb-4">
-            <div className="flex-1 h-px bg-gray-200" />
-            <span className="text-xs text-gray-400">または</span>
-            <div className="flex-1 h-px bg-gray-200" />
-          </div>
-
-          {/* お試しログイン */}
-          <button
-            type="button"
-            onClick={handleTestLogin}
-            disabled={loading}
-            className="w-full py-2.5 bg-gray-100 hover:bg-gray-200 disabled:opacity-60 text-gray-600 font-medium rounded-lg text-sm transition"
-          >
-            {loading ? "ログイン中..." : "ID/Pass なしでお試しログイン"}
-          </button>
         </div>
 
         <p className="text-center text-xs text-white/30 mt-6">LINE Harness v1.0</p>

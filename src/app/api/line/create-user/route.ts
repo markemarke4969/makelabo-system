@@ -18,14 +18,14 @@ export async function POST(request: NextRequest) {
   } = body;
 
   if (!rawEmail || !password) {
-    return Response.json({ error: "ログインIDとパスワードを入力してください" }, { status: 400 });
+    return Response.json({ error: "IDとパスワードを入力してください" }, { status: 400 });
   }
 
   const input = String(rawEmail).trim();
   // ID 形式（@を含まない）なら英数記号バリデーション
   if (!input.includes("@") && !isValidLoginId(input)) {
     return Response.json(
-      { error: "ログインIDは英数字・ . _ - のみ、3〜50文字で入力してください" },
+      { error: "IDは英数字・ . _ - のみ、3〜50文字で入力してください" },
       { status: 400 },
     );
   }

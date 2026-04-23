@@ -121,13 +121,13 @@ export default function LineUsers() {
   const saveUser = async () => {
     const input = userForm.email.trim();
     if (!input) {
-      setUserMsg({ ok: false, text: "ログインIDを入力してください" });
+      setUserMsg({ ok: false, text: "IDを入力してください" });
       return;
     }
     // @が含まれていない（ID 形式の）場合のみ英数記号バリデーション。
     // 既存のメアドユーザーの編集時に誤って弾かないため。
     if (!input.includes("@") && !isValidLoginId(input)) {
-      setUserMsg({ ok: false, text: "ログインIDは英数字・ . _ - のみ、3〜50文字で入力してください" });
+      setUserMsg({ ok: false, text: "IDは英数字・ . _ - のみ、3〜50文字で入力してください" });
       return;
     }
     if (!editingUserId && !userForm.password.trim()) {
@@ -266,7 +266,7 @@ export default function LineUsers() {
               </div>
               <div>
                 <label className="text-[11px] text-white/60 block mb-1 font-medium">
-                  ログインID <span className="text-red-400">*</span>
+                  ID <span className="text-red-400">*</span>
                 </label>
                 <input
                   type="text"
@@ -275,7 +275,7 @@ export default function LineUsers() {
                   placeholder="例: taro"
                   className="w-full bg-white/10 border border-white/10 rounded-md px-3 py-2 text-sm text-white placeholder-white/30 focus:border-[#06C755] focus:outline-none"
                 />
-                <p className="text-[10px] text-white/40 mt-1">英数字・ . _ - のみ、3〜50文字。メアド形式も可（既存ユーザー向け）</p>
+                <p className="text-[10px] text-white/40 mt-1">英数字・ . _ - のみ、3〜50文字</p>
               </div>
               <div className="md:col-span-2 flex items-center gap-6">
                 <label className="flex items-center gap-2 cursor-pointer">
@@ -411,7 +411,7 @@ export default function LineUsers() {
                     <th className="px-5 py-3 font-medium">名前</th>
                     <th className="px-5 py-3 font-medium">クローザー名</th>
                     <th className="px-5 py-3 font-medium">権限</th>
-                    <th className="px-5 py-3 font-medium">ログインID</th>
+                    <th className="px-5 py-3 font-medium">ID</th>
                     <th className="px-5 py-3 font-medium">パスワード</th>
                     <th className="px-5 py-3 font-medium">担当案件</th>
                     <th className="px-5 py-3 font-medium">閲覧可能</th>
