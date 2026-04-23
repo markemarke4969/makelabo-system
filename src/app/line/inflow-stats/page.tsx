@@ -17,6 +17,7 @@ interface RouteStat {
   code: string;
   is_active: boolean;
   total_clicks: number;
+  total_registered: number;
 }
 
 interface DailyStat {
@@ -38,6 +39,7 @@ export default function InflowStatsPage() {
   const [days, setDays] = useState(30);
   const [routes, setRoutes] = useState<RouteStat[]>([]);
   const [daily, setDaily] = useState<DailyStat[]>([]);
+  const [registeredDaily, setRegisteredDaily] = useState<DailyStat[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -69,10 +71,12 @@ export default function InflowStatsPage() {
       if (!res.ok) throw new Error(data.error ?? "取得失敗");
       setRoutes(data.routes ?? []);
       setDaily(data.daily ?? []);
+      setRegisteredDaily(data.registered_daily ?? []);
     } catch (e) {
       setError(e instanceof Error ? e.message : "エラー");
       setRoutes([]);
       setDaily([]);
+      setRegisteredDaily([]);
     }
     setLoading(false);
   }, [project?.id, days]);
@@ -85,6 +89,10 @@ export default function InflowStatsPage() {
     () => routes.reduce((sum, r) => sum + r.total_clicks, 0),
     [routes],
   );
+  const totalRegistered = useMemo(
+    () => routes.reduce((sum, r) => sum + r.total_registered, 0),
+    [routes],
+  );
   const activeRouteCount = useMemo(
     () => routes.filter((r) => r.is_active).length,
     [routes],
@@ -93,9 +101,17 @@ export default function InflowStatsPage() {
     () => daily.reduce((m, d) => Math.max(m, d.total), 0),
     [daily],
   );
+  const registeredMax = useMemo(
+    () => registeredDaily.reduce((m, d) => Math.max(m, d.total), 0),
+    [registeredDaily],
+  );
   const dailyAvg = useMemo(
     () => (daily.length > 0 ? totalClicks / daily.length : 0),
     [daily, totalClicks],
+  );
+  const conversionRate = useMemo(
+    () => (totalClicks > 0 ? (totalRegistered / totalClicks) * 100 : 0),
+    [totalRegistered, totalClicks],
   );
 
   const buildRelayUrl = (route: RouteStat) => {
@@ -168,14 +184,15 @@ export default function InflowStatsPage() {
         )}
 
         {/* サマリーカード */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
           <StatCard label="合計クリック" value={totalClicks.toLocaleString()} unit="回" />
-          <StatCard label="日平均" value={dailyAvg.toFixed(1)} unit="回/日" />
+          <StatCard label="登録人数" value={totalRegistered.toLocaleString()} unit="人" />
+          <StatCard label="登録率" value={conversionRate.toFixed(1)} unit="%" />
           <StatCard label="アクティブ経路" value={String(activeRouteCount)} unit={`/ ${routes.length}`} />
           <StatCard label="集計期間" value={String(days)} unit="日間" />
         </div>
 
-        {/* 日別推移バーチャート */}
+        {/* 日別推移バーチャート（クリック） */}
         <section className="bg-white/5 border border-white/10 rounded-xl p-5">
           <h2 className="text-white text-sm font-bold mb-4">日別クリック推移</h2>
           {daily.length === 0 ? (
@@ -193,6 +210,41 @@ export default function InflowStatsPage() {
                   >
                     <div
                       className="w-full bg-blue-500/70 hover:bg-blue-400 rounded-t transition"
+                      style={{ height: `${h}%`, minHeight: d.total > 0 ? "2px" : "0" }}
+                    />
+                    <div className="text-[9px] text-white/40 mt-1 rotate-45 origin-left whitespace-nowrap">
+                      {label}
+                    </div>
+                    {d.total > 0 && (
+                      <div className="absolute -top-6 opacity-0 group-hover:opacity-100 transition bg-black/80 text-white text-[10px] px-1.5 py-0.5 rounded whitespace-nowrap pointer-events-none">
+                        {d.total}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </section>
+
+        {/* 日別推移バーチャート（登録人数） */}
+        <section className="bg-white/5 border border-white/10 rounded-xl p-5">
+          <h2 className="text-white text-sm font-bold mb-4">日別 登録人数（流入経路経由）</h2>
+          {registeredDaily.length === 0 || registeredMax === 0 ? (
+            <div className="text-white/40 text-sm text-center py-8">登録データがありません</div>
+          ) : (
+            <div className="flex items-end gap-0.5 h-40 overflow-x-auto pb-2">
+              {registeredDaily.map((d) => {
+                const h = registeredMax > 0 ? (d.total / registeredMax) * 100 : 0;
+                const label = d.date.slice(5);
+                return (
+                  <div
+                    key={d.date}
+                    className="flex-1 min-w-[16px] flex flex-col items-center justify-end group relative"
+                    title={`${d.date}: ${d.total}人`}
+                  >
+                    <div
+                      className="w-full bg-green-500/70 hover:bg-green-400 rounded-t transition"
                       style={{ height: `${h}%`, minHeight: d.total > 0 ? "2px" : "0" }}
                     />
                     <div className="text-[9px] text-white/40 mt-1 rotate-45 origin-left whitespace-nowrap">
@@ -228,6 +280,8 @@ export default function InflowStatsPage() {
                     <th className="px-5 py-3 font-medium">経路名</th>
                     <th className="px-5 py-3 font-medium">コード</th>
                     <th className="px-5 py-3 font-medium text-right">クリック数</th>
+                    <th className="px-5 py-3 font-medium text-right">登録人数</th>
+                    <th className="px-5 py-3 font-medium text-right">登録率</th>
                     <th className="px-5 py-3 font-medium text-right">構成比</th>
                     <th className="px-5 py-3 font-medium">状態</th>
                     <th className="px-5 py-3 font-medium">中継URL</th>
@@ -239,6 +293,9 @@ export default function InflowStatsPage() {
                     .map((route) => {
                       const pct =
                         totalClicks > 0 ? (route.total_clicks / totalClicks) * 100 : 0;
+                      const convRate = route.total_clicks > 0
+                        ? (route.total_registered / route.total_clicks) * 100
+                        : 0;
                       const relayUrl = buildRelayUrl(route);
                       return (
                         <tr key={route.id} className="border-b border-white/5 hover:bg-white/5">
@@ -248,6 +305,14 @@ export default function InflowStatsPage() {
                             <span className="text-blue-300 font-bold text-base">
                               {route.total_clicks.toLocaleString()}
                             </span>
+                          </td>
+                          <td className="px-5 py-3 text-right">
+                            <span className="text-green-300 font-bold text-base">
+                              {route.total_registered.toLocaleString()}
+                            </span>
+                          </td>
+                          <td className="px-5 py-3 text-right text-white/70 text-xs">
+                            {convRate.toFixed(1)}%
                           </td>
                           <td className="px-5 py-3 text-right">
                             <div className="flex items-center justify-end gap-2">
@@ -298,8 +363,8 @@ export default function InflowStatsPage() {
         </section>
 
         <p className="text-[11px] text-white/30 text-center">
-          ※ クリック数は中継URL(<code>/line/r/&#123;案件コード&#125;/&#123;流入コード&#125;</code>)経由のアクセスをカウントしています。
-          実際の友だち追加数とは異なる場合があります。
+          ※ クリック数は中継URL(<code>/line/r/&#123;案件コード&#125;/&#123;流入コード&#125;</code>)経由のアクセス数。<br />
+          登録人数は友だち追加時に inflow_route_id が紐付いた数（クリックから60分以内の友だち追加が自動紐付けされます）。
         </p>
       </main>
     </div>

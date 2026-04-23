@@ -84,12 +84,48 @@ export async function GET(request: NextRequest) {
     by_route: v.by_route,
   }));
 
+  // 5. 期間内の友だち登録数（流入経路別）
+  const registeredByRoute = new Map<string, number>();
+  const registeredDailyMap = new Map<string, { total: number; by_route: Record<string, number> }>();
+  for (let i = 0; i < days; i++) {
+    const d = new Date(sinceDate);
+    d.setUTCDate(sinceDate.getUTCDate() + i);
+    const key = d.toISOString().slice(0, 10);
+    registeredDailyMap.set(key, { total: 0, by_route: {} });
+  }
+  {
+    const { data: regFollowers } = await supabase
+      .from("line_followers")
+      .select("inflow_route_id, followed_at")
+      .in("inflow_route_id", routeIds)
+      .gte("followed_at", sinceIso);
+    for (const f of regFollowers ?? []) {
+      const rid = f.inflow_route_id as string;
+      registeredByRoute.set(rid, (registeredByRoute.get(rid) ?? 0) + 1);
+      const followedAt = f.followed_at as string | null;
+      if (!followedAt) continue;
+      const key = followedAt.slice(0, 10);
+      const bucket = registeredDailyMap.get(key);
+      if (!bucket) continue;
+      bucket.total += 1;
+      bucket.by_route[rid] = (bucket.by_route[rid] ?? 0) + 1;
+    }
+  }
+
+  const registeredDaily = Array.from(registeredDailyMap.entries()).map(([date, v]) => ({
+    date,
+    total: v.total,
+    by_route: v.by_route,
+  }));
+
   return Response.json({
     routes: routeList.map((r) => ({
       ...r,
       total_clicks: totalsByRoute.get(r.id) ?? 0,
+      total_registered: registeredByRoute.get(r.id) ?? 0,
     })),
     daily,
+    registered_daily: registeredDaily,
     days,
   });
 }

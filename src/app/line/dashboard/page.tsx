@@ -5222,7 +5222,21 @@ export default function LineDashboard() {
               <h1 className="text-base font-bold text-gray-800">送信済み</h1>
             </header>
             <main className="flex-1 overflow-y-auto p-6">
-              <div className="max-w-6xl">
+              {showScheduleCreator && (
+                <div className="max-w-5xl mb-6">
+                  {renderBroadcastCreator(
+                    scheduleCreatorForm,
+                    setScheduleCreatorForm,
+                    () => setShowScheduleCreator(false),
+                    async () => {
+                      const ok = await saveBroadcast("schedule", scheduleCreatorForm);
+                      if (ok) { setShowScheduleCreator(false); setScheduleCreatorForm(emptyBroadcast); }
+                    },
+                    "送信済み配信の内容",
+                  )}
+                </div>
+              )}
+              <div className={`max-w-6xl ${showScheduleCreator ? "hidden" : ""}`}>
                 {stepSequences.filter((s) => s.kind === "schedule" && !!s.sent_at).length === 0 ? (
                   <div className="bg-white rounded-lg border border-gray-200 p-16 text-center text-gray-400">
                     <p className="text-lg mb-2">送信済みの配信がありません</p>
