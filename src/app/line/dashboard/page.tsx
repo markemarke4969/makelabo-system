@@ -1868,19 +1868,24 @@ export default function LineDashboard() {
       return false;
     }
 
-    // 予約配信は日時指定モードを必須にする
+    // 予約配信: 「今すぐ」か「日時指定」のいずれか必須
     let scheduledAtIso: string | null = null;
+    const sendImmediate = kind === "schedule" && form.timingMode === "immediate";
     if (kind === "schedule") {
-      if (form.timingMode !== "datetime" || !form.timingDate) {
-        alert("予約配信は送信日時を指定してください");
+      if (form.timingMode === "immediate") {
+        // 「今すぐ」: scheduled_at は現在時刻に設定し、作成後に send-now で即時配信
+        scheduledAtIso = new Date().toISOString();
+      } else if (form.timingMode === "datetime" && form.timingDate) {
+        const dt = new Date(form.timingDate);
+        if (isNaN(dt.getTime())) {
+          alert("送信日時の形式が不正です");
+          return false;
+        }
+        scheduledAtIso = dt.toISOString();
+      } else {
+        alert("予約配信は「今すぐ」または送信日時を指定してください");
         return false;
       }
-      const dt = new Date(form.timingDate);
-      if (isNaN(dt.getTime())) {
-        alert("送信日時の形式が不正です");
-        return false;
-      }
-      scheduledAtIso = dt.toISOString();
     }
 
     const cleanName = form.name.trim();
@@ -1993,6 +1998,20 @@ export default function LineDashboard() {
           const data = await msgRes.json().catch(() => ({}));
           alert(`メッセージ${i + 1}作成失敗: ${data.error ?? msgRes.status}`);
           return false;
+        }
+      }
+      // 予約配信 + 「今すぐ」: 作成後に send-now で即時配信
+      if (sendImmediate) {
+        const sendRes = await fetch("/api/line/step-sequences/send-now", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: sequenceId }),
+        });
+        const sendData = await sendRes.json().catch(() => ({}));
+        if (sendRes.ok) {
+          alert(`送信完了: ${sendData.sent ?? 0}件成功 / ${sendData.failed ?? 0}件失敗`);
+        } else {
+          alert(`作成は成功しましたが送信に失敗しました: ${sendData.error ?? sendRes.status}`);
         }
       }
       await fetchStepSequences();
