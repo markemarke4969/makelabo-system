@@ -1243,15 +1243,21 @@ export default function LineDashboard() {
     setShowSortMode(false);
   };
 
-  // 通常表示用のグループ（本番のみ。サブ・BAN は除外）
+  // 通常表示用のグループ（本番 + BAN済み。サブ（standby）は別管理）
+  // BAN済みアカウントは過去の友だち・チャット履歴閲覧のため表示を残す
   // クローザーの場合はcloser_visibleなグループのみ表示
   const isCloserUser = currentUser?.is_closer && !currentUser?.is_admin;
   const sortedGroupedAccounts = accounts
-    .filter((acc) => !acc.role || acc.role === "main")
+    .filter((acc) => !acc.role || acc.role === "main" || acc.role === "banned")
     .filter((acc) => {
       if (!isCloserUser) return true;
       const group = acc.group_name || "未分類";
       return !!groupSettings[group];
+    })
+    // main を先、banned を後に並べる
+    .sort((a, b) => {
+      const rank = (r?: string | null) => (r === "banned" ? 1 : 0);
+      return rank(a.role) - rank(b.role);
     })
     .reduce<Record<string, LineAccount[]>>((groups, acc) => {
       const group = acc.group_name || "未分類";
@@ -4542,27 +4548,39 @@ export default function LineDashboard() {
                           追加
                         </button>
                       </div>
-                      {groupAccs.map((acc, i) => (
+                      {groupAccs.map((acc, i) => {
+                        const isBanned = acc.role === "banned";
+                        return (
                         <div
                           key={acc.id}
                           onClick={() => openAccount(acc)}
-                          className={`flex items-center justify-between px-5 py-3.5 hover:bg-blue-50/50 cursor-pointer transition-colors ${i < groupAccs.length - 1 ? "border-b border-gray-100" : ""}`}
+                          className={`flex items-center justify-between px-5 py-3.5 hover:bg-blue-50/50 cursor-pointer transition-colors ${i < groupAccs.length - 1 ? "border-b border-gray-100" : ""} ${isBanned ? "bg-red-50/30 opacity-80" : ""}`}
                         >
                           <div className="flex items-center gap-3">
-                            <div className="w-9 h-9 rounded-full bg-[#06C755] flex items-center justify-center">{LINE_ICON}</div>
+                            <div className={`w-9 h-9 rounded-full flex items-center justify-center ${isBanned ? "bg-gray-400 grayscale" : "bg-[#06C755]"}`}>{LINE_ICON}</div>
                             <div>
-                              <div className="text-sm font-medium text-gray-800">{acc.account_name ?? "未設定"}</div>
+                              <div className="text-sm font-medium text-gray-800 flex items-center gap-2">
+                                {acc.account_name ?? "未設定"}
+                                {isBanned && (
+                                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-100 text-red-600 font-semibold">BAN</span>
+                                )}
+                              </div>
                               {acc.basic_id && <div className="text-xs text-gray-400">@{acc.basic_id}</div>}
                             </div>
                           </div>
                           <div className="flex items-center gap-4">
-                            <span className={`text-xs px-2 py-0.5 rounded-full ${acc.is_active ? "bg-green-100 text-green-600" : "bg-gray-100 text-gray-400"}`}>
-                              {acc.is_active ? "有効" : "無効"}
-                            </span>
+                            {isBanned ? (
+                              <span className="text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-600">BAN済</span>
+                            ) : (
+                              <span className={`text-xs px-2 py-0.5 rounded-full ${acc.is_active ? "bg-green-100 text-green-600" : "bg-gray-100 text-gray-400"}`}>
+                                {acc.is_active ? "有効" : "無効"}
+                              </span>
+                            )}
                             {Icons.chevronRight}
                           </div>
                         </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   ))}
 
@@ -4593,27 +4611,39 @@ export default function LineDashboard() {
                       <span className="text-[10px] text-gray-400">新規追加はグループ内から行ってください</span>
                     </div>
                     {sortedGroupedAccounts["未分類"] && sortedGroupedAccounts["未分類"].length > 0 ? (
-                      sortedGroupedAccounts["未分類"].map((acc, i) => (
+                      sortedGroupedAccounts["未分類"].map((acc, i) => {
+                        const isBanned = acc.role === "banned";
+                        return (
                         <div
                           key={acc.id}
                           onClick={() => openAccount(acc)}
-                          className={`flex items-center justify-between px-5 py-3.5 hover:bg-blue-50/50 cursor-pointer transition-colors ${i < sortedGroupedAccounts["未分類"].length - 1 ? "border-b border-gray-100" : ""}`}
+                          className={`flex items-center justify-between px-5 py-3.5 hover:bg-blue-50/50 cursor-pointer transition-colors ${i < sortedGroupedAccounts["未分類"].length - 1 ? "border-b border-gray-100" : ""} ${isBanned ? "bg-red-50/30 opacity-80" : ""}`}
                         >
                           <div className="flex items-center gap-3">
-                            <div className="w-9 h-9 rounded-full bg-[#06C755] flex items-center justify-center">{LINE_ICON}</div>
+                            <div className={`w-9 h-9 rounded-full flex items-center justify-center ${isBanned ? "bg-gray-400 grayscale" : "bg-[#06C755]"}`}>{LINE_ICON}</div>
                             <div>
-                              <div className="text-sm font-medium text-gray-800">{acc.account_name ?? "未設定"}</div>
+                              <div className="text-sm font-medium text-gray-800 flex items-center gap-2">
+                                {acc.account_name ?? "未設定"}
+                                {isBanned && (
+                                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-100 text-red-600 font-semibold">BAN</span>
+                                )}
+                              </div>
                               {acc.basic_id && <div className="text-xs text-gray-400">@{acc.basic_id}</div>}
                             </div>
                           </div>
                           <div className="flex items-center gap-4">
-                            <span className={`text-xs px-2 py-0.5 rounded-full ${acc.is_active ? "bg-green-100 text-green-600" : "bg-gray-100 text-gray-400"}`}>
-                              {acc.is_active ? "有効" : "無効"}
-                            </span>
+                            {isBanned ? (
+                              <span className="text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-600">BAN済</span>
+                            ) : (
+                              <span className={`text-xs px-2 py-0.5 rounded-full ${acc.is_active ? "bg-green-100 text-green-600" : "bg-gray-100 text-gray-400"}`}>
+                                {acc.is_active ? "有効" : "無効"}
+                              </span>
+                            )}
                             {Icons.chevronRight}
                           </div>
                         </div>
-                      ))
+                        );
+                      })
                     ) : (
                       <div className="px-5 py-4 text-center text-gray-400 text-xs">アカウントなし</div>
                     )}
