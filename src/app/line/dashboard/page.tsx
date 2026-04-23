@@ -2549,65 +2549,137 @@ export default function LineDashboard() {
                         </div>
                       </div>
                     )}
-                    {msg.msgType === "image" && (
-                      <div className="space-y-3">
+                    {msg.msgType === "image" && (() => {
+                      const LINK_TEMPLATES: ReadonlyArray<{
+                        value: BroadcastMessage["imagemapLinkType"];
+                        label: string;
+                        areas: ReadonlyArray<{ x: number; y: number; w: number; h: number; label: string }>;
+                      }> = [
+                        { value: "none", label: "リンクなし", areas: [] },
+                        { value: "1", label: "リンク1", areas: [{ x:0, y:0, w:100, h:100, label:"A" }] },
+                        { value: "2", label: "リンク2", areas: [{ x:0, y:0, w:50, h:100, label:"A" }, { x:50, y:0, w:50, h:100, label:"B" }] },
+                        { value: "3", label: "リンク3", areas: [{ x:0, y:0, w:100, h:50, label:"A" }, { x:0, y:50, w:100, h:50, label:"B" }] },
+                        { value: "4", label: "リンク4", areas: [{ x:0, y:0, w:100, h:33, label:"A" }, { x:0, y:33, w:100, h:34, label:"B" }, { x:0, y:67, w:100, h:33, label:"C" }] },
+                        { value: "5", label: "リンク5", areas: [{ x:0, y:0, w:50, h:50, label:"A" }, { x:50, y:0, w:50, h:50, label:"B" }, { x:0, y:50, w:50, h:50, label:"C" }, { x:50, y:50, w:50, h:50, label:"D" }] },
+                        { value: "6", label: "リンク6", areas: [{ x:0, y:0, w:100, h:50, label:"A" }, { x:0, y:50, w:50, h:50, label:"B" }, { x:50, y:50, w:50, h:50, label:"C" }] },
+                        { value: "7", label: "リンク7", areas: [{ x:0, y:0, w:33, h:50, label:"A" }, { x:33, y:0, w:34, h:50, label:"B" }, { x:67, y:0, w:33, h:50, label:"C" }, { x:0, y:50, w:33, h:50, label:"D" }, { x:33, y:50, w:34, h:50, label:"E" }, { x:67, y:50, w:33, h:50, label:"F" }] },
+                        { value: "8", label: "リンク8", areas: [{ x:0, y:0, w:100, h:25, label:"A" }, { x:0, y:25, w:100, h:50, label:"B" }, { x:0, y:75, w:100, h:25, label:"C" }] },
+                      ];
+                      return (
+                      <div className="space-y-5">
+                        {/* 画像ファイル */}
                         <div>
-                          <label className="text-xs text-gray-600 font-medium">
-                            画像ファイル <span className="text-[10px] text-red-500">必須</span>
-                          </label>
-                          <input
-                            type="url"
-                            value={msg.imageUrl}
-                            onChange={(e) => updateMsg(mi, { imageUrl: e.target.value })}
-                            placeholder="https://example.com/image.jpg"
-                            className="w-full border border-gray-200 rounded-md px-3 py-2 text-sm focus:border-blue-400 focus:outline-none mt-1"
-                          />
-                          <p className="text-[10px] text-gray-400 mt-1">幅1040pxの画像サイズを推奨。JPEG/PNG、HTTPS必須。</p>
+                          <div className="flex items-center gap-2 mb-2">
+                            <label className="text-sm text-gray-700 font-medium">画像ファイル</label>
+                            <span className="text-[10px] text-white bg-red-500 px-1.5 py-0.5 rounded">必須</span>
+                          </div>
+                          <div className="flex items-center gap-3">
+                            <label className="cursor-pointer px-3 py-1.5 bg-gray-100 hover:bg-gray-200 border border-gray-300 rounded-md text-xs text-gray-700 transition">
+                              ファイルを選択
+                              <input
+                                type="file"
+                                accept="image/jpeg,image/png,image/webp"
+                                className="hidden"
+                                onChange={async (e) => {
+                                  const file = e.target.files?.[0];
+                                  if (!file) return;
+                                  const fd = new FormData();
+                                  fd.append("file", file);
+                                  try {
+                                    const res = await fetch("/api/line/upload-image", { method: "POST", body: fd });
+                                    const data = await res.json();
+                                    if (res.ok && data.url) {
+                                      // 画像の実寸を取得して imagemapBaseHeight に反映
+                                      const img = new Image();
+                                      img.onload = () => {
+                                        const h = img.naturalWidth > 0
+                                          ? Math.max(1, Math.min(1040, Math.round((img.naturalHeight / img.naturalWidth) * 1040)))
+                                          : 1040;
+                                        updateMsg(mi, { imageUrl: data.url, imagemapBaseHeight: h });
+                                      };
+                                      img.onerror = () => updateMsg(mi, { imageUrl: data.url });
+                                      img.src = data.url;
+                                    } else {
+                                      alert(data.error ?? "アップロードに失敗しました");
+                                    }
+                                  } catch (err) {
+                                    alert(`アップロードエラー: ${(err as Error).message}`);
+                                  } finally {
+                                    e.target.value = "";
+                                  }
+                                }}
+                              />
+                            </label>
+                            <span className="text-xs text-gray-500">
+                              {msg.imageUrl ? "アップロード済み" : "選択されていません"}
+                            </span>
+                            {msg.imageUrl && (
+                              <button
+                                type="button"
+                                onClick={() => updateMsg(mi, { imageUrl: "" })}
+                                className="text-xs text-red-500 hover:text-red-700"
+                              >
+                                クリア
+                              </button>
+                            )}
+                          </div>
+                          <p className="text-[11px] text-gray-500 mt-1">幅1040pxの画像サイズを推奨します。</p>
+                          <div className="mt-2">
+                            <label className="text-[10px] text-gray-400 block mb-0.5">または画像URLを直接入力</label>
+                            <input
+                              type="url"
+                              value={msg.imageUrl}
+                              onChange={(e) => updateMsg(mi, { imageUrl: e.target.value })}
+                              onBlur={(e) => {
+                                const url = e.target.value.trim();
+                                if (!url) return;
+                                const img = new Image();
+                                img.onload = () => {
+                                  if (img.naturalWidth <= 0) return;
+                                  const h = Math.max(1, Math.min(1040, Math.round((img.naturalHeight / img.naturalWidth) * 1040)));
+                                  updateMsg(mi, { imagemapBaseHeight: h });
+                                };
+                                img.src = url;
+                              }}
+                              placeholder="https://example.com/image.jpg"
+                              className="w-full border border-gray-200 rounded-md px-3 py-1.5 text-xs focus:border-blue-400 focus:outline-none"
+                            />
+                          </div>
                         </div>
 
+                        {/* リンクの種類 */}
                         <div>
-                          <label className="text-xs text-gray-600 font-medium block mb-2">
-                            リンクの種類 <span className="text-[10px] text-red-500">必須</span>
-                          </label>
-                          <div className="grid grid-cols-3 md:grid-cols-6 gap-2">
-                            {([
-                              { value: "none", label: "リンクなし", areas: [] as Array<{x:number; y:number; w:number; h:number; label:string}> },
-                              { value: "1", label: "リンク1", areas: [{ x:0, y:0, w:100, h:100, label:"A" }] },
-                              { value: "2", label: "リンク2", areas: [{ x:0, y:0, w:50, h:100, label:"A" }, { x:50, y:0, w:50, h:100, label:"B" }] },
-                              { value: "3", label: "リンク3", areas: [{ x:0, y:0, w:100, h:50, label:"A" }, { x:0, y:50, w:100, h:50, label:"B" }] },
-                              { value: "4", label: "リンク4", areas: [{ x:0, y:0, w:100, h:33, label:"A" }, { x:0, y:33, w:100, h:34, label:"B" }, { x:0, y:67, w:100, h:33, label:"C" }] },
-                              { value: "5", label: "リンク5", areas: [{ x:0, y:0, w:50, h:50, label:"A" }, { x:50, y:0, w:50, h:50, label:"B" }, { x:0, y:50, w:50, h:50, label:"C" }, { x:50, y:50, w:50, h:50, label:"D" }] },
-                              { value: "6", label: "リンク6", areas: [{ x:0, y:0, w:100, h:50, label:"A" }, { x:0, y:50, w:50, h:50, label:"B" }, { x:50, y:50, w:50, h:50, label:"C" }] },
-                              { value: "7", label: "リンク7", areas: [{ x:0, y:0, w:33, h:50, label:"A" }, { x:33, y:0, w:34, h:50, label:"B" }, { x:67, y:0, w:33, h:50, label:"C" }, { x:0, y:50, w:33, h:50, label:"D" }, { x:33, y:50, w:34, h:50, label:"E" }, { x:67, y:50, w:33, h:50, label:"F" }] },
-                              { value: "8", label: "リンク8", areas: [{ x:0, y:0, w:100, h:25, label:"A" }, { x:0, y:25, w:100, h:50, label:"B" }, { x:0, y:75, w:100, h:25, label:"C" }] },
-                            ] as const).map((tpl) => {
+                          <div className="flex items-center gap-2 mb-3">
+                            <label className="text-sm text-gray-700 font-medium">リンクの種類</label>
+                            <span className="text-[10px] text-white bg-red-500 px-1.5 py-0.5 rounded">必須</span>
+                          </div>
+                          <div className="grid grid-cols-3 sm:grid-cols-6 gap-x-3 gap-y-4">
+                            {LINK_TEMPLATES.map((tpl) => {
                               const isActive = msg.imagemapLinkType === tpl.value;
                               return (
-                                <button
+                                <label
                                   key={tpl.value}
-                                  type="button"
-                                  onClick={() => {
-                                    const nextActions = tpl.areas.map((a) => {
-                                      const existing = msg.imagemapActions.find((x) => x.area === a.label);
-                                      return existing ?? { area: a.label, actionType: "uri" as const, uri: "", text: "" };
-                                    });
-                                    updateMsg(mi, {
-                                      imagemapLinkType: tpl.value as BroadcastMessage["imagemapLinkType"],
-                                      imagemapActions: nextActions,
-                                    });
-                                  }}
-                                  className={`relative border-2 rounded-md p-1 transition ${
-                                    isActive ? "border-[#06C755] bg-[#06C755]/5" : "border-gray-200 hover:border-gray-300"
-                                  }`}
+                                  className="flex flex-col items-start cursor-pointer group"
                                 >
-                                  <div className="aspect-square w-full bg-white border border-gray-200 relative overflow-hidden">
-                                    {tpl.areas.length === 0 ? (
-                                      <div className="absolute inset-0 flex items-center justify-center text-[10px] text-gray-300">—</div>
-                                    ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const nextActions = tpl.areas.map((a) => {
+                                        const existing = msg.imagemapActions.find((x) => x.area === a.label);
+                                        return existing ?? { area: a.label, actionType: "uri" as const, uri: "", text: "" };
+                                      });
+                                      updateMsg(mi, {
+                                        imagemapLinkType: tpl.value,
+                                        imagemapActions: nextActions,
+                                      });
+                                    }}
+                                    className={`w-full aspect-square bg-white border-2 ${isActive ? "border-[#06C755]" : "border-gray-200 group-hover:border-gray-300"} rounded-sm relative overflow-hidden transition`}
+                                  >
+                                    {tpl.areas.length === 0 ? null : (
                                       tpl.areas.map((a) => (
                                         <div
                                           key={a.label}
-                                          className="absolute flex items-center justify-center text-[10px] font-bold text-[#06C755] border border-[#06C755]"
+                                          className="absolute flex items-center justify-center text-4xl font-bold text-[#06C755] border-2 border-[#06C755]"
                                           style={{
                                             left: `${a.x}%`,
                                             top: `${a.y}%`,
@@ -2619,99 +2691,115 @@ export default function LineDashboard() {
                                         </div>
                                       ))
                                     )}
+                                  </button>
+                                  <div className="flex items-center gap-1.5 mt-1.5">
+                                    <input
+                                      type="radio"
+                                      name={`imagemap-link-${mi}`}
+                                      checked={isActive}
+                                      onChange={() => {
+                                        const nextActions = tpl.areas.map((a) => {
+                                          const existing = msg.imagemapActions.find((x) => x.area === a.label);
+                                          return existing ?? { area: a.label, actionType: "uri" as const, uri: "", text: "" };
+                                        });
+                                        updateMsg(mi, {
+                                          imagemapLinkType: tpl.value,
+                                          imagemapActions: nextActions,
+                                        });
+                                      }}
+                                      className="accent-[#06C755]"
+                                    />
+                                    <span className="text-xs text-gray-700">{tpl.label}</span>
                                   </div>
-                                  <div className="text-[10px] text-gray-600 mt-1 text-center">{tpl.label}</div>
-                                </button>
+                                </label>
                               );
                             })}
                           </div>
                         </div>
 
+                        {/* アクション */}
                         {msg.imagemapLinkType !== "none" && msg.imagemapActions.length > 0 && (
                           <div>
-                            <label className="text-xs text-gray-600 font-medium block mb-2">アクション（各エリア）</label>
-                            <div className="space-y-2">
+                            <div className="text-sm text-gray-700 font-medium mb-2">アクション</div>
+                            <div className="space-y-3">
                               {msg.imagemapActions.map((act, ai) => (
-                                <div key={ai} className="border border-gray-200 rounded-md p-2 bg-gray-50">
-                                  <div className="flex items-center gap-2 mb-1.5">
-                                    <span className="w-8 h-8 rounded bg-[#06C755] text-white font-bold text-sm flex items-center justify-center">
-                                      {act.area}
-                                    </span>
+                                <div key={ai} className="border border-gray-300 rounded-md">
+                                  <div className="px-3 py-2 bg-gray-50 border-b border-gray-300 text-sm text-gray-700">
+                                    エリア{act.area}
+                                  </div>
+                                  <div className="p-3 space-y-2">
+                                    <div className="flex items-center gap-2">
+                                      <label className="text-xs text-gray-700">動作</label>
+                                      <span className="text-[10px] text-white bg-red-500 px-1.5 py-0.5 rounded">必須</span>
+                                    </div>
                                     <select
-                                      value={act.actionType}
+                                      value={act.actionType === "uri" && !act.uri && !act.text ? "none" : act.actionType}
                                       onChange={(e) => {
+                                        const v = e.target.value;
                                         const next = [...msg.imagemapActions];
-                                        next[ai] = { ...next[ai], actionType: e.target.value as "uri" | "message" };
+                                        if (v === "none") {
+                                          next[ai] = { ...next[ai], actionType: "uri", uri: "", text: "" };
+                                        } else {
+                                          next[ai] = { ...next[ai], actionType: v as "uri" | "message" };
+                                        }
                                         updateMsg(mi, { imagemapActions: next });
                                       }}
-                                      className="border border-gray-200 rounded-md px-2 py-1 text-xs bg-white"
+                                      className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm bg-white"
                                     >
+                                      <option value="none">何もしない</option>
                                       <option value="uri">URLを開く</option>
                                       <option value="message">メッセージ送信</option>
                                     </select>
+                                    {act.actionType === "uri" && (
+                                      <input
+                                        type="url"
+                                        value={act.uri}
+                                        onChange={(e) => {
+                                          const next = [...msg.imagemapActions];
+                                          next[ai] = { ...next[ai], uri: e.target.value };
+                                          updateMsg(mi, { imagemapActions: next });
+                                        }}
+                                        placeholder="https://example.com"
+                                        className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm"
+                                      />
+                                    )}
+                                    {act.actionType === "message" && (
+                                      <input
+                                        type="text"
+                                        value={act.text}
+                                        onChange={(e) => {
+                                          const next = [...msg.imagemapActions];
+                                          next[ai] = { ...next[ai], text: e.target.value };
+                                          updateMsg(mi, { imagemapActions: next });
+                                        }}
+                                        placeholder="送信するメッセージ"
+                                        className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm"
+                                      />
+                                    )}
                                   </div>
-                                  {act.actionType === "uri" ? (
-                                    <input
-                                      type="url"
-                                      value={act.uri}
-                                      onChange={(e) => {
-                                        const next = [...msg.imagemapActions];
-                                        next[ai] = { ...next[ai], uri: e.target.value };
-                                        updateMsg(mi, { imagemapActions: next });
-                                      }}
-                                      placeholder="https://example.com"
-                                      className="w-full border border-gray-200 rounded-md px-2 py-1.5 text-xs"
-                                    />
-                                  ) : (
-                                    <input
-                                      type="text"
-                                      value={act.text}
-                                      onChange={(e) => {
-                                        const next = [...msg.imagemapActions];
-                                        next[ai] = { ...next[ai], text: e.target.value };
-                                        updateMsg(mi, { imagemapActions: next });
-                                      }}
-                                      placeholder="送信するメッセージ"
-                                      className="w-full border border-gray-200 rounded-md px-2 py-1.5 text-xs"
-                                    />
-                                  )}
                                 </div>
                               ))}
                             </div>
                           </div>
                         )}
 
+                        {/* 通知欄に表示するテキスト */}
                         {msg.imagemapLinkType !== "none" && (
-                          <>
-                            <div>
-                              <label className="text-xs text-gray-600 font-medium">
-                                通知欄に表示するテキスト
-                              </label>
-                              <textarea
-                                value={msg.imagemapAltText}
-                                onChange={(e) => updateMsg(mi, { imagemapAltText: e.target.value.slice(0, 400) })}
-                                rows={2}
-                                placeholder="スマートフォンから閲覧してください。"
-                                className="w-full border border-gray-200 rounded-md px-3 py-2 text-sm resize-none focus:border-blue-400 focus:outline-none mt-1"
-                              />
-                              <p className="text-[10px] text-gray-400 mt-1">{msg.imagemapAltText.length}/400 文字</p>
-                            </div>
-                            <div>
-                              <label className="text-xs text-gray-600 font-medium">画像の高さ（baseSize）</label>
-                              <input
-                                type="number"
-                                min={1}
-                                max={1040}
-                                value={msg.imagemapBaseHeight}
-                                onChange={(e) => updateMsg(mi, { imagemapBaseHeight: Math.max(1, Math.min(1040, Number(e.target.value) || 1040)) })}
-                                className="w-32 border border-gray-200 rounded-md px-3 py-2 text-sm focus:border-blue-400 focus:outline-none mt-1"
-                              />
-                              <p className="text-[10px] text-gray-400 mt-1">幅1040pxに対する画像の高さ(px)。正方形なら1040のまま。横長なら小さく、縦長なら大きく。</p>
-                            </div>
-                          </>
+                          <div>
+                            <label className="text-sm text-gray-700 font-medium block mb-2">通知欄に表示するテキスト</label>
+                            <textarea
+                              value={msg.imagemapAltText}
+                              onChange={(e) => updateMsg(mi, { imagemapAltText: e.target.value.slice(0, 400) })}
+                              rows={2}
+                              placeholder="スマートフォンから閲覧してください。"
+                              className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm resize-none focus:border-blue-400 focus:outline-none"
+                            />
+                            <p className="text-[10px] text-gray-400 mt-1">{msg.imagemapAltText.length}/400 文字</p>
+                          </div>
                         )}
                       </div>
-                    )}
+                      );
+                    })()}
                     {msg.msgType === "video" && (
                       <div className="space-y-2">
                         <label className="text-xs text-gray-600">動画URL (originalContentUrl) <span className="text-[10px] text-red-500">必須</span></label>
