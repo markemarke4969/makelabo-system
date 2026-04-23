@@ -145,7 +145,7 @@ interface InflowGroup {
 // メインビュー
 type MainView = "accounts" | "account-detail" | "settings";
 // アカウント詳細内のサブビュー
-type AccountSubView = "followers" | "chat" | "step" | "schedule" | "sent" | "friend-page" | "labels" | "templates" | "inflow" | "actions" | "custom-fields" | "reminders" | "newsletter" | "reengagement" | "surveys" | "reg-forms" | "reports";
+type AccountSubView = "followers" | "chat" | "step" | "schedule" | "sent" | "friend-page" | "labels" | "templates" | "inflow" | "actions" | "custom-fields" | "reminders" | "newsletter" | "reengagement" | "surveys" | "reg-forms" | "reports" | "rich-menu";
 
 // アクションルール
 type ActionTriggerType = "follow" | "label_added" | "message_received" | "sequence_completed";
@@ -424,6 +424,40 @@ export default function LineDashboard() {
   const [reengagementForm, setReengagementForm] = useState<{ name: string; condition: "all" | "filtered"; targetCondition: DeliveryCondition; messages: BroadcastMessage[] }>({ name: "", condition: "all", targetCondition: emptyDeliveryCondition, messages: [] });
   const [reengagementPreview, setReengagementPreview] = useState<Follower[] | null>(null);
   const [reengagementSending, setReengagementSending] = useState(false);
+
+  // リッチメニュー
+  interface RichMenuArea { actionType: "none" | "uri" | "message" | "postback"; uri: string; text: string; data: string; label: string }
+  interface RichMenu {
+    id: string;
+    line_account_id: string;
+    name: string;
+    line_rich_menu_id: string | null;
+    image_url: string | null;
+    size_type: "large" | "compact";
+    chat_bar_text: string;
+    selected: boolean;
+    is_default: boolean;
+    template_type: string;
+    areas: RichMenuArea[];
+    status: string;
+    deployed_at: string | null;
+    created_at: string;
+  }
+  const [richMenus, setRichMenus] = useState<RichMenu[]>([]);
+  const emptyRichMenu: Omit<RichMenu, "id" | "line_account_id" | "line_rich_menu_id" | "status" | "deployed_at" | "created_at"> = {
+    name: "",
+    image_url: null,
+    size_type: "large",
+    chat_bar_text: "メニュー",
+    selected: true,
+    is_default: false,
+    template_type: "L1",
+    areas: [],
+  };
+  const [richMenuForm, setRichMenuForm] = useState<typeof emptyRichMenu>(emptyRichMenu);
+  const [editingRichMenuId, setEditingRichMenuId] = useState<string | null>(null);
+  const [showRichMenuEditor, setShowRichMenuEditor] = useState(false);
+  const [richMenuDeploying, setRichMenuDeploying] = useState(false);
 
   // アンケート
   interface SurveyDef { id: string; name: string; status: string; description: string | null; response_count: number; questions: Array<{ id: string; question_text: string; question_type: string; options: Array<{ label: string; value: string }>; is_required: boolean; save_to_field_id: string | null; label_mapping: Record<string, string> }>; created_at: string }
@@ -817,6 +851,14 @@ export default function LineDashboard() {
     try {
       const res = await fetch(`/api/line/surveys?account_id=${selectedAccount.id}`);
       if (res.ok) setSurveys(await res.json());
+    } catch { /* */ }
+  }, [selectedAccount?.id]);
+
+  const fetchRichMenus = useCallback(async () => {
+    if (!selectedAccount?.id) { setRichMenus([]); return; }
+    try {
+      const res = await fetch(`/api/line/rich-menus?account_id=${selectedAccount.id}`);
+      if (res.ok) setRichMenus(await res.json());
     } catch { /* */ }
   }, [selectedAccount?.id]);
 
@@ -1756,8 +1798,9 @@ export default function LineDashboard() {
       fetchReengagements();
       fetchSurveys();
       fetchRegForms();
+      fetchRichMenus();
     }
-  }, [selectedAccount, fetchStepSequences, fetchTestFollowers, fetchLabels, fetchActionRules, fetchTemplates, fetchCustomFields, fetchReminders, fetchNewsletters, fetchReengagements, fetchSurveys, fetchRegForms]);
+  }, [selectedAccount, fetchStepSequences, fetchTestFollowers, fetchLabels, fetchActionRules, fetchTemplates, fetchCustomFields, fetchReminders, fetchNewsletters, fetchReengagements, fetchSurveys, fetchRegForms, fetchRichMenus]);
 
   useEffect(() => {
     if (project?.id) {
@@ -3568,6 +3611,7 @@ export default function LineDashboard() {
     { key: "step", label: "ステップ配信", icon: Icons.step },
     { key: "schedule", label: "予約配信", icon: Icons.schedule },
     { key: "sent", label: "送信済み", icon: Icons.download },
+    { key: "rich-menu", label: "リッチメニュー", icon: Icons.template },
     { key: "labels", label: "ラベル管理", icon: Icons.label },
     { key: "actions", label: "アクション管理", icon: Icons.settings },
     { key: "templates", label: "テンプレート管理", icon: Icons.document },
@@ -5590,6 +5634,454 @@ export default function LineDashboard() {
             </main>
           </>
         )}
+
+        {/* ============================================================ */}
+        {/* アカウント詳細: リッチメニュー */}
+        {/* ============================================================ */}
+        {mainView === "account-detail" && accountSubView === "rich-menu" && (() => {
+          const RICH_MENU_TEMPLATES: ReadonlyArray<{
+            value: string;
+            label: string;
+            sizeType: "large" | "compact";
+            areas: ReadonlyArray<{ x: number; y: number; w: number; h: number; label: string }>;
+          }> = [
+            { value: "L1", label: "L-1 フル", sizeType: "large", areas: [{ x:0,y:0,w:100,h:100,label:"A" }] },
+            { value: "L2", label: "L-2 縦2分割", sizeType: "large", areas: [{ x:0,y:0,w:50,h:100,label:"A" }, { x:50,y:0,w:50,h:100,label:"B" }] },
+            { value: "L3", label: "L-3 横2分割", sizeType: "large", areas: [{ x:0,y:0,w:100,h:50,label:"A" }, { x:0,y:50,w:100,h:50,label:"B" }] },
+            { value: "L4", label: "L-4 2×2", sizeType: "large", areas: [{ x:0,y:0,w:50,h:50,label:"A" }, { x:50,y:0,w:50,h:50,label:"B" }, { x:0,y:50,w:50,h:50,label:"C" }, { x:50,y:50,w:50,h:50,label:"D" }] },
+            { value: "L5", label: "L-5 縦3分割", sizeType: "large", areas: [{ x:0,y:0,w:33,h:100,label:"A" }, { x:33,y:0,w:34,h:100,label:"B" }, { x:67,y:0,w:33,h:100,label:"C" }] },
+            { value: "L6", label: "L-6 3×2", sizeType: "large", areas: [{ x:0,y:0,w:33,h:50,label:"A" }, { x:33,y:0,w:34,h:50,label:"B" }, { x:67,y:0,w:33,h:50,label:"C" }, { x:0,y:50,w:33,h:50,label:"D" }, { x:33,y:50,w:34,h:50,label:"E" }, { x:67,y:50,w:33,h:50,label:"F" }] },
+            { value: "L7", label: "L-7 上1+下2", sizeType: "large", areas: [{ x:0,y:0,w:100,h:50,label:"A" }, { x:0,y:50,w:50,h:50,label:"B" }, { x:50,y:50,w:50,h:50,label:"C" }] },
+            { value: "L8", label: "L-8 上2+下1", sizeType: "large", areas: [{ x:0,y:0,w:50,h:50,label:"A" }, { x:50,y:0,w:50,h:50,label:"B" }, { x:0,y:50,w:100,h:50,label:"C" }] },
+            { value: "C1", label: "小-1 フル", sizeType: "compact", areas: [{ x:0,y:0,w:100,h:100,label:"A" }] },
+            { value: "C2", label: "小-2 縦2分割", sizeType: "compact", areas: [{ x:0,y:0,w:50,h:100,label:"A" }, { x:50,y:0,w:50,h:100,label:"B" }] },
+            { value: "C3", label: "小-3 縦3分割", sizeType: "compact", areas: [{ x:0,y:0,w:33,h:100,label:"A" }, { x:33,y:0,w:34,h:100,label:"B" }, { x:67,y:0,w:33,h:100,label:"C" }] },
+          ];
+
+          const openRichMenuEditor = (menu: RichMenu | null) => {
+            if (menu) {
+              setEditingRichMenuId(menu.id);
+              setRichMenuForm({
+                name: menu.name,
+                image_url: menu.image_url,
+                size_type: menu.size_type,
+                chat_bar_text: menu.chat_bar_text,
+                selected: menu.selected,
+                is_default: menu.is_default,
+                template_type: menu.template_type,
+                areas: menu.areas,
+              });
+            } else {
+              setEditingRichMenuId(null);
+              setRichMenuForm(emptyRichMenu);
+            }
+            setShowRichMenuEditor(true);
+          };
+
+          const selectedTemplate = RICH_MENU_TEMPLATES.find((t) => t.value === richMenuForm.template_type) ?? RICH_MENU_TEMPLATES[0];
+
+          const saveRichMenu = async () => {
+            if (!selectedAccount) return;
+            if (!richMenuForm.name.trim()) { alert("管理名称を入力してください"); return; }
+            if (!richMenuForm.image_url) { alert("画像をアップロードしてください"); return; }
+            try {
+              if (editingRichMenuId) {
+                const res = await fetch("/api/line/rich-menus", {
+                  method: "PUT",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ id: editingRichMenuId, ...richMenuForm }),
+                });
+                if (!res.ok) { const d = await res.json().catch(() => ({})); alert(`保存失敗: ${d.error ?? res.status}`); return; }
+              } else {
+                const res = await fetch("/api/line/rich-menus", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ line_account_id: selectedAccount.id, ...richMenuForm }),
+                });
+                if (!res.ok) { const d = await res.json().catch(() => ({})); alert(`作成失敗: ${d.error ?? res.status}`); return; }
+              }
+              await fetchRichMenus();
+              setShowRichMenuEditor(false);
+            } catch (e) {
+              alert(`エラー: ${(e as Error).message}`);
+            }
+          };
+
+          const deployRichMenu = async (menu: RichMenu) => {
+            if (!confirm(`「${menu.name}」を LINE に適用しますか？\n※既存のリッチメニューは置き換えられます`)) return;
+            setRichMenuDeploying(true);
+            try {
+              const res = await fetch("/api/line/rich-menus/deploy", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ id: menu.id }),
+              });
+              const data = await res.json();
+              if (res.ok) {
+                alert(`適用完了: richMenuId=${data.line_rich_menu_id}`);
+                await fetchRichMenus();
+              } else {
+                alert(`適用失敗: ${data.error ?? res.status}`);
+              }
+            } catch (e) {
+              alert(`適用エラー: ${(e as Error).message}`);
+            } finally {
+              setRichMenuDeploying(false);
+            }
+          };
+
+          return (
+          <>
+            <header className="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between flex-shrink-0">
+              <h1 className="text-base font-bold text-gray-800">リッチメニュー</h1>
+              {!showRichMenuEditor && (
+                <button
+                  onClick={() => openRichMenuEditor(null)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded-md transition"
+                >
+                  {Icons.plus} 新規作成
+                </button>
+              )}
+            </header>
+            <main className="flex-1 overflow-y-auto p-6">
+              {showRichMenuEditor ? (
+                <div className="max-w-4xl bg-white border border-gray-200 rounded-lg p-6 space-y-5">
+                  <div className="flex items-center justify-between">
+                    <h2 className="text-sm font-bold text-gray-800">
+                      {editingRichMenuId ? "リッチメニュー編集" : "新規リッチメニュー"}
+                    </h2>
+                    <button onClick={() => setShowRichMenuEditor(false)} className="text-gray-400 hover:text-gray-600">
+                      {Icons.close}
+                    </button>
+                  </div>
+
+                  {/* 管理名称 */}
+                  <div>
+                    <label className="text-sm text-gray-700 font-medium block mb-1.5">管理名称 <span className="text-[10px] text-white bg-red-500 px-1.5 py-0.5 rounded">必須</span></label>
+                    <input
+                      type="text"
+                      value={richMenuForm.name}
+                      onChange={(e) => setRichMenuForm({ ...richMenuForm, name: e.target.value })}
+                      placeholder="例: 通常メニュー"
+                      className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                    />
+                  </div>
+
+                  {/* サイズ */}
+                  <div>
+                    <label className="text-sm text-gray-700 font-medium block mb-1.5">サイズ</label>
+                    <div className="flex gap-3">
+                      <label className="flex items-center gap-1.5 cursor-pointer">
+                        <input
+                          type="radio"
+                          name="rm-size"
+                          checked={richMenuForm.size_type === "large"}
+                          onChange={() => setRichMenuForm({ ...richMenuForm, size_type: "large", template_type: "L1", areas: [] })}
+                          className="accent-[#06C755]"
+                        />
+                        <span className="text-sm">大 (2500×1686)</span>
+                      </label>
+                      <label className="flex items-center gap-1.5 cursor-pointer">
+                        <input
+                          type="radio"
+                          name="rm-size"
+                          checked={richMenuForm.size_type === "compact"}
+                          onChange={() => setRichMenuForm({ ...richMenuForm, size_type: "compact", template_type: "C1", areas: [] })}
+                          className="accent-[#06C755]"
+                        />
+                        <span className="text-sm">小 (2500×843)</span>
+                      </label>
+                    </div>
+                  </div>
+
+                  {/* 画像 */}
+                  <div>
+                    <label className="text-sm text-gray-700 font-medium block mb-1.5">画像ファイル <span className="text-[10px] text-white bg-red-500 px-1.5 py-0.5 rounded">必須</span></label>
+                    <div className="flex items-center gap-3">
+                      <label className="cursor-pointer px-3 py-1.5 bg-gray-100 hover:bg-gray-200 border border-gray-300 rounded-md text-xs text-gray-700 transition">
+                        ファイルを選択
+                        <input
+                          type="file"
+                          accept="image/jpeg,image/png"
+                          className="hidden"
+                          onChange={async (e) => {
+                            const file = e.target.files?.[0];
+                            if (!file) return;
+                            const fd = new FormData();
+                            fd.append("file", file);
+                            try {
+                              const res = await fetch("/api/line/upload-image", { method: "POST", body: fd });
+                              const data = await res.json();
+                              if (res.ok && data.url) {
+                                setRichMenuForm({ ...richMenuForm, image_url: data.url });
+                              } else {
+                                alert(data.error ?? "アップロード失敗");
+                              }
+                            } catch (err) {
+                              alert(`アップロードエラー: ${(err as Error).message}`);
+                            } finally {
+                              e.target.value = "";
+                            }
+                          }}
+                        />
+                      </label>
+                      <span className="text-xs text-gray-500">{richMenuForm.image_url ? "アップロード済み" : "選択されていません"}</span>
+                    </div>
+                    <p className="text-[11px] text-gray-500 mt-1">
+                      推奨: {richMenuForm.size_type === "large" ? "2500×1686px" : "2500×843px"} / JPEG or PNG / 1MB以下
+                    </p>
+                    {richMenuForm.image_url && (
+                      <div className="mt-2 relative inline-block max-w-md">
+                        <img src={richMenuForm.image_url} alt="preview" className="w-full rounded border border-gray-200" />
+                        {selectedTemplate.areas.map((a) => (
+                          <div
+                            key={a.label}
+                            className="absolute border-2 border-[#06C755] bg-[#06C755]/10 flex items-center justify-center text-[#06C755] font-bold text-lg pointer-events-none"
+                            style={{ left: `${a.x}%`, top: `${a.y}%`, width: `${a.w}%`, height: `${a.h}%` }}
+                          >
+                            {a.label}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* レイアウト */}
+                  <div>
+                    <label className="text-sm text-gray-700 font-medium block mb-2">レイアウト</label>
+                    <div className="grid grid-cols-3 sm:grid-cols-6 gap-3">
+                      {RICH_MENU_TEMPLATES.filter((t) => t.sizeType === richMenuForm.size_type).map((tpl) => {
+                        const isActive = richMenuForm.template_type === tpl.value;
+                        return (
+                          <label key={tpl.value} className="flex flex-col items-start cursor-pointer group">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const nextAreas = tpl.areas.map((a) => {
+                                  const existing = richMenuForm.areas.find((x) => x.label === a.label);
+                                  return existing ?? { label: a.label, actionType: "none" as const, uri: "", text: "", data: "" };
+                                });
+                                setRichMenuForm({ ...richMenuForm, template_type: tpl.value, areas: nextAreas });
+                              }}
+                              className={`w-full aspect-[3/2] bg-white border-2 ${isActive ? "border-[#06C755]" : "border-gray-200 group-hover:border-gray-300"} rounded-sm relative overflow-hidden transition`}
+                            >
+                              {tpl.areas.map((a) => (
+                                <div
+                                  key={a.label}
+                                  className="absolute flex items-center justify-center text-xl font-bold text-[#06C755] border border-[#06C755]"
+                                  style={{ left: `${a.x}%`, top: `${a.y}%`, width: `${a.w}%`, height: `${a.h}%` }}
+                                >
+                                  {a.label}
+                                </div>
+                              ))}
+                            </button>
+                            <div className="flex items-center gap-1.5 mt-1.5">
+                              <input
+                                type="radio"
+                                name={`rm-tpl`}
+                                checked={isActive}
+                                onChange={() => {
+                                  const nextAreas = tpl.areas.map((a) => {
+                                    const existing = richMenuForm.areas.find((x) => x.label === a.label);
+                                    return existing ?? { label: a.label, actionType: "none" as const, uri: "", text: "", data: "" };
+                                  });
+                                  setRichMenuForm({ ...richMenuForm, template_type: tpl.value, areas: nextAreas });
+                                }}
+                                className="accent-[#06C755]"
+                              />
+                              <span className="text-xs">{tpl.label}</span>
+                            </div>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* エリアごとのアクション */}
+                  {richMenuForm.areas.length > 0 && (
+                    <div>
+                      <label className="text-sm text-gray-700 font-medium block mb-2">アクション</label>
+                      <div className="space-y-2">
+                        {richMenuForm.areas.map((area, ai) => (
+                          <div key={ai} className="border border-gray-300 rounded-md">
+                            <div className="px-3 py-2 bg-gray-50 border-b border-gray-300 text-sm text-gray-700">エリア{area.label}</div>
+                            <div className="p-3 space-y-2">
+                              <select
+                                value={area.actionType}
+                                onChange={(e) => {
+                                  const next = [...richMenuForm.areas];
+                                  next[ai] = { ...next[ai], actionType: e.target.value as RichMenuArea["actionType"] };
+                                  setRichMenuForm({ ...richMenuForm, areas: next });
+                                }}
+                                className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm bg-white"
+                              >
+                                <option value="none">何もしない</option>
+                                <option value="uri">URLを開く</option>
+                                <option value="message">メッセージを送信</option>
+                                <option value="postback">Postback（アクション実行）</option>
+                              </select>
+                              {area.actionType !== "none" && (
+                                <input
+                                  type="text"
+                                  value={area.label ?? ""}
+                                  onChange={(e) => {
+                                    const next = [...richMenuForm.areas];
+                                    next[ai] = { ...next[ai], label: e.target.value };
+                                    setRichMenuForm({ ...richMenuForm, areas: next });
+                                  }}
+                                  placeholder={`表示ラベル（初期値: 「エリア${area.label}」のキー）`}
+                                  className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm"
+                                />
+                              )}
+                              {area.actionType === "uri" && (
+                                <input
+                                  type="url"
+                                  value={area.uri}
+                                  onChange={(e) => {
+                                    const next = [...richMenuForm.areas];
+                                    next[ai] = { ...next[ai], uri: e.target.value };
+                                    setRichMenuForm({ ...richMenuForm, areas: next });
+                                  }}
+                                  placeholder="https://example.com"
+                                  className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm"
+                                />
+                              )}
+                              {area.actionType === "message" && (
+                                <input
+                                  type="text"
+                                  value={area.text}
+                                  onChange={(e) => {
+                                    const next = [...richMenuForm.areas];
+                                    next[ai] = { ...next[ai], text: e.target.value };
+                                    setRichMenuForm({ ...richMenuForm, areas: next });
+                                  }}
+                                  placeholder="タップ時に送信するメッセージ"
+                                  className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm"
+                                />
+                              )}
+                              {area.actionType === "postback" && (
+                                <input
+                                  type="text"
+                                  value={area.data}
+                                  onChange={(e) => {
+                                    const next = [...richMenuForm.areas];
+                                    next[ai] = { ...next[ai], data: e.target.value };
+                                    setRichMenuForm({ ...richMenuForm, areas: next });
+                                  }}
+                                  placeholder="postback データ（例: action=open_survey）"
+                                  className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm"
+                                />
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* チャットバーテキスト / 初期表示 / デフォルト */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="text-sm text-gray-700 font-medium block mb-1.5">メニュー開閉ボタンのテキスト</label>
+                      <input
+                        type="text"
+                        value={richMenuForm.chat_bar_text}
+                        onChange={(e) => setRichMenuForm({ ...richMenuForm, chat_bar_text: e.target.value.slice(0, 14) })}
+                        maxLength={14}
+                        className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                      />
+                      <p className="text-[10px] text-gray-400 mt-1">最大14文字</p>
+                    </div>
+                    <div className="flex items-end gap-4">
+                      <label className="flex items-center gap-1.5 cursor-pointer">
+                        <input type="checkbox" checked={richMenuForm.selected} onChange={(e) => setRichMenuForm({ ...richMenuForm, selected: e.target.checked })} className="accent-[#06C755]" />
+                        <span className="text-sm">初期表示する</span>
+                      </label>
+                      <label className="flex items-center gap-1.5 cursor-pointer">
+                        <input type="checkbox" checked={richMenuForm.is_default} onChange={(e) => setRichMenuForm({ ...richMenuForm, is_default: e.target.checked })} className="accent-[#06C755]" />
+                        <span className="text-sm">デフォルトに設定</span>
+                      </label>
+                    </div>
+                  </div>
+
+                  <div className="flex justify-end gap-2 pt-2 border-t border-gray-200">
+                    <button onClick={() => setShowRichMenuEditor(false)} className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-md">キャンセル</button>
+                    <button onClick={saveRichMenu} className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded-md">
+                      {editingRichMenuId ? "更新" : "作成"}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="max-w-6xl">
+                  {richMenus.length === 0 ? (
+                    <div className="bg-white rounded-lg border border-gray-200 p-16 text-center text-gray-400">
+                      <p className="text-lg mb-2">リッチメニューがありません</p>
+                      <p className="text-sm">「新規作成」から作ってください</p>
+                    </div>
+                  ) : (
+                    <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="border-b border-gray-200 text-gray-500 text-left bg-gray-50">
+                            <th className="px-5 py-3 font-medium">管理名称</th>
+                            <th className="px-5 py-3 font-medium w-24">サイズ</th>
+                            <th className="px-5 py-3 font-medium w-28">レイアウト</th>
+                            <th className="px-5 py-3 font-medium w-28">ステータス</th>
+                            <th className="px-5 py-3 font-medium w-20">デフォ</th>
+                            <th className="px-5 py-3 font-medium w-56"></th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {richMenus.map((rm) => (
+                            <tr key={rm.id} className="border-b border-gray-100 hover:bg-gray-50 cursor-pointer" onClick={() => openRichMenuEditor(rm)}>
+                              <td className="px-5 py-3 text-gray-800">{rm.name}</td>
+                              <td className="px-5 py-3 text-gray-500 text-xs">{rm.size_type === "large" ? "大" : "小"}</td>
+                              <td className="px-5 py-3 text-gray-500 text-xs font-mono">{rm.template_type}</td>
+                              <td className="px-5 py-3">
+                                <span className={`px-2 py-0.5 text-xs rounded-full font-medium ${rm.status === "deployed" ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"}`}>
+                                  {rm.status === "deployed" ? "適用済" : "下書き"}
+                                </span>
+                              </td>
+                              <td className="px-5 py-3">
+                                {rm.is_default && <span className="px-2 py-0.5 text-[10px] bg-blue-100 text-blue-700 rounded">DEFAULT</span>}
+                              </td>
+                              <td className="px-5 py-3" onClick={(e) => e.stopPropagation()}>
+                                <div className="flex items-center justify-end gap-2">
+                                  <button
+                                    disabled={richMenuDeploying}
+                                    onClick={() => deployRichMenu(rm)}
+                                    className="px-2.5 py-1 text-xs font-medium rounded-md bg-[#06C755] hover:bg-[#05a648] text-white disabled:opacity-50"
+                                  >
+                                    {rm.status === "deployed" ? "再適用" : "LINEに適用"}
+                                  </button>
+                                  <button
+                                    onClick={async () => {
+                                      if (!confirm(`「${rm.name}」を削除しますか？`)) return;
+                                      await fetch("/api/line/rich-menus", {
+                                        method: "DELETE",
+                                        headers: { "Content-Type": "application/json" },
+                                        body: JSON.stringify({ id: rm.id }),
+                                      });
+                                      fetchRichMenus();
+                                    }}
+                                    className="px-2 py-1 text-xs text-red-500 hover:bg-red-50 rounded-md"
+                                  >
+                                    削除
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              )}
+            </main>
+          </>
+          );
+        })()}
 
         {/* ============================================================ */}
         {/* アカウント詳細: 友だち追加ページ */}
