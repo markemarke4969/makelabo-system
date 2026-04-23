@@ -9,7 +9,8 @@ export async function POST(request: NextRequest) {
     password,
     name,
     closer_name,
-    ipath_id,
+    is_closer,
+    is_admin,
     owner_project_ids,
     viewer_project_ids,
     project_ids, // 互換用
@@ -37,7 +38,8 @@ export async function POST(request: NextRequest) {
     user_metadata: {
       name: name ?? null,
       closer_name: closer_name ?? null,
-      ipath_id: ipath_id ?? null,
+      is_closer: !!is_closer,
+      is_admin: !!is_admin,
     },
   });
 

@@ -10,7 +10,11 @@ export type ConditionField =
   | "inflow_route"            // 登録経路 → line_followers.inflow_route_id
   | "followed_at_date"        // 配信基準日時(日付)   → line_followers.followed_at
   | "followed_at_datetime"    // 配信基準日時(日時刻) → line_followers.followed_at
+  | "followed_at_range_from"  // 登録日(開始) → followed_at >= value
+  | "followed_at_range_to"    // 登録日(終了) → followed_at <= value
   | "label"                   // ラベル (クライアント側 state)
+  | "label_has"               // ラベルあり（指定ラベルがついている人）
+  | "label_not_has"           // ラベルなし（指定ラベルがついていない人）
   // --- UTAGE 互換のため UI に出すが、現時点では DB に該当カラムが無いため未対応 ---
   | "name"
   | "email"
@@ -65,7 +69,11 @@ export const FIELD_LABELS: Record<ConditionField, string> = {
   inflow_route: "登録経路",
   followed_at_date: "配信基準日時(日付)",
   followed_at_datetime: "配信基準日時(日時刻)",
+  followed_at_range_from: "登録日時(開始)",
+  followed_at_range_to: "登録日時(終了)",
   label: "ラベル",
+  label_has: "ラベルあり(指定ラベル)",
+  label_not_has: "ラベルなし(指定ラベル)",
   name: "お名前",
   email: "メールアドレス",
   phone: "電話番号",
@@ -97,7 +105,11 @@ export const SUPPORTED_FIELDS: ConditionField[] = [
   "inflow_route",
   "followed_at_date",
   "followed_at_datetime",
+  "followed_at_range_from",
+  "followed_at_range_to",
   "label",
+  "label_has",
+  "label_not_has",
 ];
 
 export function isSupportedField(f: ConditionField): boolean {
@@ -109,18 +121,28 @@ const TEXT_OPS: ConditionOp[] = ["eq", "neq", "contains", "not_contains", "blank
 const DATE_OPS: ConditionOp[] = ["eq", "neq", "gte", "lte", "gt", "lt", "blank", "not_blank"];
 const LABEL_OPS: ConditionOp[] = ["eq", "neq", "blank", "not_blank"];
 
+const RANGE_OPS: ConditionOp[] = ["gte", "lte"];
+const HAS_OPS: ConditionOp[] = ["eq"];
+
 export function operatorsForField(f: ConditionField): ConditionOp[] {
   switch (f) {
     case "followed_at_date":
     case "followed_at_datetime":
     case "age":
       return DATE_OPS;
+    case "followed_at_range_from":
+      return RANGE_OPS;
+    case "followed_at_range_to":
+      return RANGE_OPS;
     case "label":
     case "inflow_route":
     case "scenario":
     case "broadcast":
     case "gender":
       return LABEL_OPS;
+    case "label_has":
+    case "label_not_has":
+      return HAS_OPS;
     default:
       return TEXT_OPS;
   }
@@ -133,11 +155,15 @@ export function inputKindForRow(row: ConditionRow): InputKind {
   if (row.op === "blank" || row.op === "not_blank") return "none";
   switch (row.field) {
     case "followed_at_date":
+    case "followed_at_range_from":
+    case "followed_at_range_to":
       return "date";
     case "followed_at_datetime":
       return "datetime-local";
     case "inflow_route":
     case "label":
+    case "label_has":
+    case "label_not_has":
     case "gender":
     case "scenario":
     case "broadcast":
@@ -180,6 +206,16 @@ function evalRow(row: ConditionRow, f: FollowerLite): boolean {
     case "followed_at_datetime":
       target = f.followed_at ? new Date(f.followed_at) : null;
       break;
+    case "followed_at_range_from":
+      // 登録日(開始): followed_at >= value
+      if (!f.followed_at) return false;
+      target = new Date(f.followed_at);
+      break;
+    case "followed_at_range_to":
+      // 登録日(終了): followed_at <= value (当日の終わりまで)
+      if (!f.followed_at) return false;
+      target = new Date(f.followed_at);
+      break;
     case "label":
       // ラベルは配列評価: eq = 含む, neq = 含まない
       if (op === "blank") return (f.label_ids?.length ?? 0) === 0;
@@ -187,6 +223,12 @@ function evalRow(row: ConditionRow, f: FollowerLite): boolean {
       if (op === "eq") return (f.label_ids ?? []).includes(value);
       if (op === "neq") return !(f.label_ids ?? []).includes(value);
       return true;
+    case "label_has":
+      // 指定ラベルがついている人
+      return (f.label_ids ?? []).includes(value);
+    case "label_not_has":
+      // 指定ラベルがついていない人
+      return !(f.label_ids ?? []).includes(value);
   }
 
   if (op === "blank") return target === null || target === "" || (target instanceof Date && isNaN(target.getTime()));
@@ -199,7 +241,11 @@ function evalRow(row: ConditionRow, f: FollowerLite): boolean {
     const rv = value ? new Date(value) : null;
     if (!rv || isNaN(rv.getTime())) return false;
     const a = target.getTime();
-    const b = rv.getTime();
+    let b = rv.getTime();
+    // followed_at_range_to の場合、日付の終わりまで含める（23:59:59.999）
+    if (field === "followed_at_range_to" && value.length <= 10) {
+      b = new Date(value + "T23:59:59.999Z").getTime();
+    }
     switch (op) {
       case "eq": return a === b;
       case "neq": return a !== b;

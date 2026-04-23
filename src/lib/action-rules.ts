@@ -359,6 +359,54 @@ export async function executeAction(
       return { ok: true };
     }
 
+    if (rule.action_type === "cross_account_label") {
+      const targetAccountId = cfg.target_account_id as string | undefined;
+      const labelName = cfg.label_name as string | undefined;
+      if (!targetAccountId || !labelName) return { ok: false, error: "target_account_id and label_name required" };
+
+      // 対象アカウントで同一UserIDのフォロワーを検索
+      const { data: targetFollower } = await supabase
+        .from("line_followers")
+        .select("id")
+        .eq("line_account_id", targetAccountId)
+        .eq("line_user_id", ctx.line_user_id)
+        .maybeSingle();
+
+      if (!targetFollower) {
+        return { ok: false, error: `UserID ${ctx.line_user_id} not found in target account` };
+      }
+
+      // 対象アカウントのラベルを検索（なければ作成）
+      let { data: label } = await supabase
+        .from("line_labels")
+        .select("id")
+        .eq("account_id", targetAccountId)
+        .eq("name", labelName)
+        .maybeSingle();
+
+      if (!label) {
+        const { data: newLabel, error: createErr } = await supabase
+          .from("line_labels")
+          .insert({ account_id: targetAccountId, name: labelName, color: "#3B82F6" })
+          .select("id")
+          .single();
+        if (createErr) return { ok: false, error: createErr.message };
+        label = newLabel;
+      }
+
+      if (!label) return { ok: false, error: "failed to create label" };
+
+      // ラベル付与
+      const { error: assignErr } = await supabase
+        .from("line_follower_labels")
+        .upsert(
+          { label_id: label.id, follower_id: targetFollower.id },
+          { onConflict: "label_id,follower_id" },
+        );
+      if (assignErr) return { ok: false, error: assignErr.message };
+      return { ok: true };
+    }
+
     return { ok: false, error: `unknown action_type: ${rule.action_type}` };
   } catch (e) {
     return { ok: false, error: (e as Error).message };

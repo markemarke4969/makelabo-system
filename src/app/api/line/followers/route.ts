@@ -5,20 +5,52 @@ export async function GET(request: NextRequest) {
   const testOnly = request.nextUrl.searchParams.get("test_only") === "1";
   const accountId = request.nextUrl.searchParams.get("account_id");
   const projectId = request.nextUrl.searchParams.get("project_id");
+  // クローザーログイン時: closer_visible=true のグループのアカウントのみに限定
+  const closerVisibleOnly = request.nextUrl.searchParams.get("closer_visible_only") === "1";
+
+  // クローザー絞り込み: 表示可能なグループ名リストを取得
+  let allowedGroupNames: string[] | null = null;
+  if (closerVisibleOnly && projectId) {
+    const { data: visGroups, error: visErr } = await supabase
+      .from("line_account_groups")
+      .select("group_name")
+      .eq("project_id", projectId)
+      .eq("closer_visible", true);
+    if (visErr) {
+      return Response.json({ error: visErr.message }, { status: 500 });
+    }
+    allowedGroupNames = (visGroups ?? []).map((g) => g.group_name);
+    // クローザー可視のグループが無い場合は空配列
+    if (allowedGroupNames.length === 0) {
+      return Response.json([]);
+    }
+  }
 
   // project_id 指定時: line_accounts からその project に属する account_id を全取得し .in() で絞る
   let accountIdsFromProject: string[] | null = null;
   if (projectId && !accountId) {
-    const { data: accs, error: accErr } = await supabase
+    let accQuery = supabase
       .from("line_accounts")
-      .select("id")
+      .select("id, group_name")
       .eq("project_id", projectId);
+    if (allowedGroupNames) accQuery = accQuery.in("group_name", allowedGroupNames);
+    const { data: accs, error: accErr } = await accQuery;
     if (accErr) {
       return Response.json({ error: accErr.message }, { status: 500 });
     }
     accountIdsFromProject = (accs ?? []).map((a) => a.id);
     // その案件にアカウントが0件なら即空配列を返す
     if (accountIdsFromProject.length === 0) {
+      return Response.json([]);
+    }
+  } else if (accountId && allowedGroupNames) {
+    // 単一アカウント指定でクローザー絞り込み時、そのアカウントが可視グループ内か確認
+    const { data: acc } = await supabase
+      .from("line_accounts")
+      .select("group_name")
+      .eq("id", accountId)
+      .maybeSingle();
+    if (!acc || !acc.group_name || !allowedGroupNames.includes(acc.group_name)) {
       return Response.json([]);
     }
   }
@@ -50,7 +82,7 @@ export async function GET(request: NextRequest) {
 
 export async function PATCH(request: NextRequest) {
   const body = await request.json();
-  const { id, display_name, memo, is_test } = body;
+  const { id, display_name, memo, is_test, closer_id } = body;
 
   if (!id) {
     return Response.json({ error: "id is required" }, { status: 400 });
@@ -60,6 +92,7 @@ export async function PATCH(request: NextRequest) {
   if (display_name !== undefined) updates.display_name = display_name;
   if (memo !== undefined) updates.memo = memo;
   if (is_test !== undefined) updates.is_test = is_test;
+  if (closer_id !== undefined) updates.closer_id = closer_id;
 
   let { error } = await supabase
     .from("line_followers")

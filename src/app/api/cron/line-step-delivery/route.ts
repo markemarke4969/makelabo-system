@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { supabase } from "@/lib/supabase";
-import { buildLineMessage, pushLineMessages } from "@/lib/line";
+import { buildLineMessage, pushLineMessages, summarizeBuiltMessage } from "@/lib/line";
 import { buildReplacerContext, buildBranchEvalContext, defaultContext } from "@/lib/line-replacer";
 
 export const maxDuration = 300;
@@ -171,13 +171,15 @@ async function runStepDelivery(): Promise<{
       if (res.ok) {
         sent++;
         maxSentStep = Math.max(maxSentStep, msg.step_order);
-        // チャット画面表示用ログ
+        // チャット画面表示用ログ: 実際の送信内容を1行要約で残す
+        const builtType = (lineMsg.type as string) || "text";
+        const summary = summarizeBuiltMessage(lineMsg, payload);
         await supabase.from("line_messages").insert({
           line_account_id: enr.account_id,
           line_user_id: enr.line_user_id,
           direction: "outgoing",
-          message_type: "step",
-          message_text: `[ステップ配信] step ${msg.step_order}`,
+          message_type: builtType,
+          message_text: summary,
           sent_at: new Date().toISOString(),
         });
       } else {

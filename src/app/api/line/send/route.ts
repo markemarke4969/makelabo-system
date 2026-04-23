@@ -1,39 +1,7 @@
 import { NextRequest } from "next/server";
 import { supabase } from "@/lib/supabase";
-import { buildLineMessage, pushLineMessages } from "@/lib/line";
+import { buildLineMessage, pushLineMessages, summarizeBuiltMessage } from "@/lib/line";
 import { buildReplacerContext, buildBranchEvalContext, defaultContext } from "@/lib/line-replacer";
-
-// チャット履歴に残す1行表示を組み立てる。
-// text は本文をそのまま、それ以外は種別ラベル + 補足情報。
-function summarizeMessage(
-  built: Record<string, unknown>,
-  source: Record<string, unknown>,
-): string {
-  const t = (built.type as string) ?? "";
-  if (t === "text") return (built.text as string) ?? "";
-  if (t === "image") return "[画像]";
-  if (t === "video") return "[動画]";
-  if (t === "audio") return "[音声]";
-  if (t === "sticker") return "[スタンプ]";
-  if (t === "template") {
-    const tpl = (built.template as Record<string, unknown>) ?? {};
-    const tplType = tpl.type as string;
-    if (tplType === "buttons") {
-      const text = (tpl.text as string) ?? (built.altText as string) ?? "ボタン";
-      return `[ボタン] ${text}`;
-    }
-    if (tplType === "carousel") {
-      const cols = (tpl.columns as unknown[]) ?? [];
-      return `[カルーセル ${cols.length}件]`;
-    }
-    return `[テンプレート] ${(built.altText as string) ?? ""}`;
-  }
-  // source から推測
-  const srcType = (source.msgType as string) ?? "";
-  if (srcType === "text") return (source.body as string) ?? "";
-  if (srcType === "branch") return "[条件分岐メッセージ]";
-  return `[${srcType || t || "メッセージ"}]`;
-}
 
 export async function POST(request: NextRequest) {
   const body = await request.json();
@@ -149,7 +117,7 @@ export async function POST(request: NextRequest) {
         line_user_id,
         direction: "outgoing",
         message_type: srcType,
-        message_text: summarizeMessage(built, source),
+        message_text: summarizeBuiltMessage(built, source),
         sent_at: nowIso,
       };
     });

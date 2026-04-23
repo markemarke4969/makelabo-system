@@ -1,42 +1,45 @@
 import { NextRequest } from "next/server";
-import { supabase } from "@/lib/supabase";
+import { supabase, supabaseAdmin } from "@/lib/supabase";
 
 export async function GET(request: NextRequest) {
   const projectId = request.nextUrl.searchParams.get("project_id");
   const accountId = request.nextUrl.searchParams.get("account_id"); // 後方互換
 
-  // 集計付き取得。line_inflow_clicks が未作成の環境では fallback。
-  const withClicks = async () => {
-    let q = supabase
-      .from("line_inflow_routes")
-      .select("*, click_count:line_inflow_clicks(count)")
-      .order("created_at", { ascending: false });
-    if (projectId) q = q.eq("project_id", projectId);
-    else if (accountId) q = q.eq("account_id", accountId);
-    return q;
-  };
+  // 流入経路本体を取得（embed は Supabase の FK認識が不安定なため使わない）
+  let q = supabase
+    .from("line_inflow_routes")
+    .select("*")
+    .order("created_at", { ascending: false });
+  if (projectId) q = q.eq("project_id", projectId);
+  else if (accountId) q = q.eq("account_id", accountId);
 
-  const withoutClicks = async () => {
-    let q = supabase
-      .from("line_inflow_routes")
-      .select("*")
-      .order("created_at", { ascending: false });
-    if (projectId) q = q.eq("project_id", projectId);
-    else if (accountId) q = q.eq("account_id", accountId);
-    return q;
-  };
-
-  let { data, error } = await withClicks();
-  if (error) {
-    ({ data, error } = await withoutClicks());
-  }
-
+  const { data, error } = await q;
   if (error) {
     return Response.json({ error: error.message }, { status: 500 });
   }
 
   const routes = data ?? [];
   const routeIds = routes.map((r: any) => r.id as string);
+
+  // クリック数を直接集計（RLS回避のため service role クライアント使用）
+  const clickCountMap = new Map<string, number>();
+  if (routeIds.length > 0) {
+    const { data: clicks, error: cErr } = await supabaseAdmin
+      .from("line_inflow_clicks")
+      .select("inflow_route_id")
+      .in("inflow_route_id", routeIds);
+    if (cErr) {
+      console.warn("[inflow-routes GET] line_inflow_clicks 集計エラー:", cErr.message);
+    } else if (clicks) {
+      for (const c of clicks as { inflow_route_id: string | null }[]) {
+        if (!c.inflow_route_id) continue;
+        clickCountMap.set(
+          c.inflow_route_id,
+          (clickCountMap.get(c.inflow_route_id) ?? 0) + 1,
+        );
+      }
+    }
+  }
 
   // 実フォロワー数を line_followers.inflow_route_id から集計
   // 列が未追加の環境では 0 扱いで fallback
@@ -46,7 +49,11 @@ export async function GET(request: NextRequest) {
       .from("line_followers")
       .select("inflow_route_id")
       .in("inflow_route_id", routeIds);
-    if (!fErr && followers) {
+    if (fErr && /inflow_route_id/.test(fErr.message)) {
+      console.warn(
+        "[inflow-routes GET] line_followers.inflow_route_id カラム未作成。friend_count は 0 固定。migration (supabase-schema-line-inflow-followers.sql) を実行してください。",
+      );
+    } else if (!fErr && followers) {
       for (const f of followers as { inflow_route_id: string | null }[]) {
         if (!f.inflow_route_id) continue;
         followerCountMap.set(
@@ -57,16 +64,11 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  const formatted = routes.map((route: any) => {
-    const clickCount = Array.isArray(route.click_count)
-      ? route.click_count[0]?.count ?? 0
-      : route.click_count ?? 0;
-    return {
-      ...route,
-      click_count: clickCount,
-      follower_count: followerCountMap.get(route.id) ?? 0,
-    };
-  });
+  const formatted = routes.map((route: any) => ({
+    ...route,
+    click_count: clickCountMap.get(route.id) ?? 0,
+    follower_count: followerCountMap.get(route.id) ?? 0,
+  }));
 
   return Response.json(formatted);
 }

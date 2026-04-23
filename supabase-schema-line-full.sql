@@ -92,12 +92,14 @@ create table if not exists line_messages (
   line_message_id text,
   reply_token text,
   sent_at timestamptz not null default now(),
-  created_at timestamptz not null default now()
+  created_at timestamptz not null default now(),
+  is_read boolean not null default false
 );
 
 create index if not exists idx_line_messages_account_id on line_messages(line_account_id);
 create index if not exists idx_line_messages_user_id on line_messages(line_user_id);
 create index if not exists idx_line_messages_sent_at on line_messages(sent_at desc);
+create index if not exists idx_line_messages_unread on line_messages(line_user_id, direction) where is_read = false;
 
 -- ========================================
 -- 6. Webhook 受信ログ（診断用）

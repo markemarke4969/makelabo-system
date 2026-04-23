@@ -212,6 +212,42 @@ export function buildLineMessage(
 }
 
 /**
+ * buildLineMessage で組み立てたメッセージと元の payload から、
+ * line_messages.message_text に保存する1行表示を作る。
+ * text は本文そのまま、それ以外は種別ラベル + 補足情報。
+ */
+export function summarizeBuiltMessage(
+  built: Record<string, unknown> | null | undefined,
+  source: Record<string, unknown> | null | undefined,
+): string {
+  const b = built ?? {};
+  const s = source ?? {};
+  const t = (b.type as string) ?? "";
+  if (t === "text") return (b.text as string) ?? "";
+  if (t === "image") return "[画像]";
+  if (t === "video") return "[動画]";
+  if (t === "audio") return "[音声]";
+  if (t === "sticker") return "[スタンプ]";
+  if (t === "template") {
+    const tpl = (b.template as Record<string, unknown>) ?? {};
+    const tplType = tpl.type as string;
+    if (tplType === "buttons") {
+      const text = (tpl.text as string) ?? (b.altText as string) ?? "ボタン";
+      return `[ボタン] ${text}`;
+    }
+    if (tplType === "carousel") {
+      const cols = (tpl.columns as unknown[]) ?? [];
+      return `[カルーセル ${cols.length}件]`;
+    }
+    return `[テンプレート] ${(b.altText as string) ?? ""}`;
+  }
+  const srcType = (s.msgType as string) ?? "";
+  if (srcType === "text") return (s.body as string) ?? "";
+  if (srcType === "branch") return "[条件分岐メッセージ]";
+  return `[${srcType || t || "メッセージ"}]`;
+}
+
+/**
  * LINE Push Message API を叩く（1ユーザーに最大5メッセージまで）
  * 成功なら { ok: true }、失敗なら { ok: false, status, error }
  */

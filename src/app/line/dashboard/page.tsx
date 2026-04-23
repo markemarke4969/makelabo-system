@@ -15,6 +15,8 @@ import {
   inputKindForRow,
   emptyDeliveryCondition,
   isSupportedField,
+  evalCondition,
+  FollowerLite,
 } from "@/lib/delivery-conditions";
 
 // ============================================================
@@ -143,11 +145,11 @@ interface InflowGroup {
 // メインビュー
 type MainView = "accounts" | "account-detail" | "settings";
 // アカウント詳細内のサブビュー
-type AccountSubView = "followers" | "chat" | "step" | "schedule" | "friend-page" | "labels" | "templates" | "inflow" | "actions" | "custom-fields" | "reminders" | "newsletter";
+type AccountSubView = "followers" | "chat" | "step" | "schedule" | "sent" | "friend-page" | "labels" | "templates" | "inflow" | "actions" | "custom-fields" | "reminders" | "newsletter" | "reengagement" | "surveys" | "reg-forms" | "reports";
 
 // アクションルール
 type ActionTriggerType = "follow" | "label_added" | "message_received" | "sequence_completed";
-type ActionActionType = "start_sequence" | "label_add" | "label_remove" | "move_sequence" | "webhook";
+type ActionActionType = "start_sequence" | "label_add" | "label_remove" | "move_sequence" | "webhook" | "cross_account_label";
 interface ActionRuleCondition {
   type: "label_in" | "inflow_route_in" | "days_after_follow";
   label_ids?: string[];
@@ -168,6 +170,17 @@ interface ActionRule {
 }
 
 const DEFAULT_GREETING_MESSAGE = "{display_name}さん、友達追加ありがとうございます！";
+
+// 商談ステータス定義
+const DEAL_STATUSES = [
+  { value: "", label: "未設定", color: "#9CA3AF", bgClass: "bg-gray-100 text-gray-600" },
+  { value: "未対応", label: "未対応", color: "#EF4444", bgClass: "bg-red-100 text-red-700" },
+  { value: "商談中", label: "商談中", color: "#F59E0B", bgClass: "bg-yellow-100 text-yellow-700" },
+  { value: "成約", label: "成約", color: "#10B981", bgClass: "bg-green-100 text-green-700" },
+  { value: "失注", label: "失注", color: "#6B7280", bgClass: "bg-gray-200 text-gray-600" },
+  { value: "保留", label: "保留", color: "#8B5CF6", bgClass: "bg-purple-100 text-purple-700" },
+] as const;
+const DEAL_STATUS_LABEL_PREFIX = "商談:";
 
 // ============================================================
 // 絵文字データ
@@ -282,8 +295,14 @@ export default function LineDashboard() {
   // 案件情報
   const [project, setProject] = useState<{ id: string; name: string; color: string; code: string | null } | null>(null);
   const [authChecked, setAuthChecked] = useState(false);
+  // 現在のユーザー情報
+  const [currentUser, setCurrentUser] = useState<{ id: string; is_closer: boolean; is_admin: boolean; closer_name: string | null } | null>(null);
+  // グループのクローザー表示設定
+  const [groupSettings, setGroupSettings] = useState<Record<string, boolean>>({});
+  // クローザー一覧（担当クローザー選択用）
+  const [closerUsers, setCloserUsers] = useState<Array<{ id: string; name: string | null; closer_name: string | null }>>([]);
 
-  // 案件チェック（認証はオプション）
+  // 案件チェック + ユーザー情報取得
   useEffect(() => {
     const stored = sessionStorage.getItem("line_project");
     if (!stored) {
@@ -295,7 +314,19 @@ export default function LineDashboard() {
       setAuthChecked(true);
     } catch {
       router.push("/line/projects");
+      return;
     }
+    // 現在のユーザーのメタデータを取得
+    const supabase = createClient();
+    supabase.auth.getUser().then(({ data }) => {
+      const meta = (data.user?.user_metadata ?? {}) as Record<string, unknown>;
+      setCurrentUser({
+        id: data.user?.id ?? "",
+        is_closer: !!(meta.is_closer),
+        is_admin: !!(meta.is_admin),
+        closer_name: (meta.closer_name as string | null) ?? null,
+      });
+    });
   }, [router]);
 
   // ビュー状態
@@ -316,15 +347,22 @@ export default function LineDashboard() {
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [followerPage, setFollowerPage] = useState(1);
+  const FOLLOWERS_PER_PAGE = 50;
   const [chatSearch, setChatSearch] = useState("");
   const [memoText, setMemoText] = useState("");
   const [showAddAccount, setShowAddAccount] = useState(false);
   const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>({});
   const [needsAction, setNeedsAction] = useState<Set<string>>(new Set());
+  const [soundEnabled, setSoundEnabled] = useState(true);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
   const [labels, setLabels] = useState<Label[]>([]);
   const [showAddLabel, setShowAddLabel] = useState(false);
   const [newLabelName, setNewLabelName] = useState("");
   const [expandedLabelId, setExpandedLabelId] = useState<string | null>(null);
+  const [labelUserPage, setLabelUserPage] = useState(1);
+  const [labelUserSearch, setLabelUserSearch] = useState("");
+  const LABEL_USERS_PER_PAGE = 30;
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [showGroupManager, setShowGroupManager] = useState(false);
   const [editingGroupName, setEditingGroupName] = useState<{ old: string; new: string } | null>(null);
@@ -342,6 +380,8 @@ export default function LineDashboard() {
 
   // Feature 2: Label selection in chat sidebar
   const [showLabelPicker, setShowLabelPicker] = useState(false);
+  // 同一案件内の別アカウントの同一UserIDにもラベルを付与/解除するか
+  const [crossAccountLabel, setCrossAccountLabel] = useState(false);
 
   // Feature 3: Memo save feedback
   const [memoSaving, setMemoSaving] = useState(false);
@@ -374,6 +414,40 @@ export default function LineDashboard() {
   const [showNewsletterModal, setShowNewsletterModal] = useState(false);
   const [newsletterForm, setNewsletterForm] = useState({ name: "", subject: "", body_text: "" });
 
+  // Lpro同期ログ
+  const [syncLogs, setSyncLogs] = useState<Array<{ id: string; synced_at: string; total_rows: number; updated_count: number; created_count: number; skipped_count: number; error_count: number; duration_ms: number }>>([]);
+
+  // 掘り起こし配信
+  interface ReengagementBroadcast { id: string; name: string; status: string; target_condition: DeliveryCondition | null; sent_at: string | null; sent_count: number; created_at: string; messages: Array<{ id: string; msg_type: string; payload: Record<string, unknown>; body: string | null }> }
+  const [reengagements, setReengagements] = useState<ReengagementBroadcast[]>([]);
+  const [showReengagementModal, setShowReengagementModal] = useState(false);
+  const [reengagementForm, setReengagementForm] = useState<{ name: string; condition: "all" | "filtered"; targetCondition: DeliveryCondition; messages: BroadcastMessage[] }>({ name: "", condition: "all", targetCondition: emptyDeliveryCondition, messages: [] });
+  const [reengagementPreview, setReengagementPreview] = useState<Follower[] | null>(null);
+  const [reengagementSending, setReengagementSending] = useState(false);
+
+  // アンケート
+  interface SurveyDef { id: string; name: string; status: string; description: string | null; response_count: number; questions: Array<{ id: string; question_text: string; question_type: string; options: Array<{ label: string; value: string }>; is_required: boolean; save_to_field_id: string | null; label_mapping: Record<string, string> }>; created_at: string }
+  const [surveys, setSurveys] = useState<SurveyDef[]>([]);
+  const [showSurveyModal, setShowSurveyModal] = useState(false);
+  const [surveyForm, setSurveyForm] = useState({ name: "", description: "", questions: [{ question_text: "", question_type: "text" as string, options: [] as Array<{ label: string; value: string }>, is_required: true, save_to_field_id: "" }] });
+
+  // SMS
+  const [showSmsModal, setShowSmsModal] = useState(false);
+  const [smsBalance, setSmsBalance] = useState(0);
+  const [smsForm, setSmsForm] = useState({ phone_number: "", message_text: "" });
+  const [smsChargeAmount, setSmsChargeAmount] = useState(100);
+
+  // 登録フォーム
+  interface RegFormDef { id: string; name: string; status: string; description: string | null; submission_count: number; fields: Array<{ id: string; field_label: string; field_type: string; options: Array<{ label: string; value: string }>; is_required: boolean; placeholder: string | null; save_to_field_id: string | null }>; created_at: string }
+  const [regForms, setRegForms] = useState<RegFormDef[]>([]);
+  const [showRegFormModal, setShowRegFormModal] = useState(false);
+
+  // レポート
+  interface MonthlyReport { id: string; report_month: string; report_data: { month: string; delivery: { total: number }; new_followers: { total: number; by_inflow: Array<{ name: string; count: number }>; daily?: Array<{ date: string; total: number; routes: Array<{ name: string; count: number }> }> }; closer_stats: Record<string, { total: number; seiyaku: number; shicchu: number }>; label_stats: Array<{ name: string; count: number }> }; status: string; sent_at: string | null; created_at: string }
+  const [reports, setReports] = useState<MonthlyReport[]>([]);
+  const [reportGenerating, setReportGenerating] = useState(false);
+  const [regFormForm, setRegFormForm] = useState({ name: "", description: "", fields: [{ field_label: "メールアドレス", field_type: "email" as string, options: [] as Array<{ label: string; value: string }>, is_required: true, placeholder: "example@email.com", save_to_field_id: "" }] });
+
   // Feature 6: Mobile responsive
   const [showMobileSidebar, setShowMobileSidebar] = useState(false);
   const [showMobileChat, setShowMobileChat] = useState(false);
@@ -401,6 +475,9 @@ export default function LineDashboard() {
   const [inflowRoutes, setInflowRoutes] = useState<InflowRoute[]>([]);
   const [showInflowModal, setShowInflowModal] = useState(false);
   const [inflowForm, setInflowForm] = useState({ name: "", code: "", url: "", description: "", group_id: "" });
+  const [inflowSaveMsg, setInflowSaveMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [inflowSaving, setInflowSaving] = useState(false);
+  const [inflowRoutesLastFetched, setInflowRoutesLastFetched] = useState<Date | null>(null);
   const [editingInflow, setEditingInflow] = useState<InflowRoute | null>(null);
 
   // Inflow groups（登録経路グループ）
@@ -640,13 +717,17 @@ export default function LineDashboard() {
     setLoading(true);
     try {
       // 個別アカウント選択中はそのアカウントのフォロワーのみ。未選択時は案件単位で取得。
+      const closerFlag =
+        currentUser?.is_closer && !currentUser?.is_admin
+          ? `&closer_visible_only=1&project_id=${project.id}`
+          : "";
       const url = selectedAccount?.id
-        ? `/api/line/followers?account_id=${selectedAccount.id}`
-        : `/api/line/followers?project_id=${project.id}`;
+        ? `/api/line/followers?account_id=${selectedAccount.id}${closerFlag}`
+        : `/api/line/followers?project_id=${project.id}${closerFlag ? "&closer_visible_only=1" : ""}`;
       const res = await fetch(url);
       setFollowers(await res.json());
     } catch { /* */ } finally { setLoading(false); }
-  }, [project?.id, selectedAccount?.id]);
+  }, [project?.id, selectedAccount?.id, currentUser?.is_closer, currentUser?.is_admin]);
 
   const fetchMessages = useCallback(async (userId?: string) => {
     try {
@@ -664,6 +745,80 @@ export default function LineDashboard() {
       setAccounts(await res.json());
     } catch { /* */ }
   }, [project?.id]);
+
+  const fetchGroupSettings = useCallback(async () => {
+    if (!project?.id) return;
+    try {
+      const res = await fetch(`/api/line/account-groups?project_id=${project.id}`);
+      if (res.ok) {
+        const groups = await res.json();
+        const map: Record<string, boolean> = {};
+        for (const g of groups) map[g.group_name] = !!g.closer_visible;
+        setGroupSettings(map);
+      }
+    } catch { /* */ }
+  }, [project?.id]);
+
+  const fetchCloserUsers = useCallback(async () => {
+    try {
+      const res = await fetch("/api/line/users");
+      if (res.ok) {
+        const users = await res.json();
+        setCloserUsers(
+          users
+            .filter((u: { is_closer: boolean }) => u.is_closer)
+            .map((u: { id: string; name: string | null; closer_name: string | null }) => ({
+              id: u.id,
+              name: u.name,
+              closer_name: u.closer_name,
+            }))
+        );
+      }
+    } catch { /* */ }
+  }, []);
+
+  const fetchReports = useCallback(async () => {
+    if (!project?.id) return;
+    try {
+      const res = await fetch(`/api/line/reports?project_id=${project.id}`);
+      if (res.ok) setReports(await res.json());
+    } catch { /* */ }
+  }, [project?.id]);
+
+  const fetchRegForms = useCallback(async () => {
+    if (!selectedAccount?.id) return;
+    try {
+      const res = await fetch(`/api/line/registration-forms?account_id=${selectedAccount.id}`);
+      if (res.ok) setRegForms(await res.json());
+    } catch { /* */ }
+  }, [selectedAccount?.id]);
+
+  const fetchSmsBalance = useCallback(async () => {
+    if (!project?.id) return;
+    try {
+      const res = await fetch(`/api/line/sms?project_id=${project.id}&type=balance`);
+      if (res.ok) {
+        const data = await res.json();
+        setSmsBalance(data.balance ?? 0);
+      }
+    } catch { /* */ }
+  }, [project?.id]);
+
+  const fetchSurveys = useCallback(async () => {
+    if (!selectedAccount?.id) return;
+    try {
+      const res = await fetch(`/api/line/surveys?account_id=${selectedAccount.id}`);
+      if (res.ok) setSurveys(await res.json());
+    } catch { /* */ }
+  }, [selectedAccount?.id]);
+
+  const fetchReengagements = useCallback(async () => {
+    if (!selectedAccount?.id) return;
+    try {
+      const res = await fetch(`/api/line/reengagement?account_id=${selectedAccount.id}`);
+      if (res.ok) setReengagements(await res.json());
+    } catch { /* */ }
+  }, [selectedAccount?.id]);
 
   // 全案件取得（所属変更セレクト用）
   const fetchAllProjects = useCallback(async () => {
@@ -684,11 +839,29 @@ export default function LineDashboard() {
 
   // 流入経路一覧取得（案件単位）
   const fetchInflowRoutes = useCallback(async () => {
-    if (!project?.id) return;
+    if (!project?.id) {
+      setInflowRoutes([]);
+      return;
+    }
     try {
-      const res = await fetch(`/api/line/inflow-routes?project_id=${project.id}`);
-      if (res.ok) setInflowRoutes(await res.json());
-    } catch { /* */ }
+      // キャッシュを回避して確実に最新を取得
+      const res = await fetch(
+        `/api/line/inflow-routes?project_id=${project.id}&_t=${Date.now()}`,
+        { cache: "no-store" },
+      );
+      if (res.ok) {
+        const json = (await res.json()) as InflowRoute[];
+        console.log("[fetchInflowRoutes] got", json.length, "routes for project", project.id);
+        setInflowRoutes(json);
+        setInflowRoutesLastFetched(new Date());
+      } else {
+        const data = await res.json().catch(() => ({}));
+        console.error("[fetchInflowRoutes] HTTP", res.status, data);
+        setInflowRoutes([]);
+      }
+    } catch (e) {
+      console.error("[fetchInflowRoutes] network error", e);
+    }
   }, [project?.id]);
 
   // 流入経路グループ一覧取得
@@ -776,17 +949,13 @@ export default function LineDashboard() {
   // 未読件数を計算（全メッセージから取得）
   const fetchUnreadCounts = useCallback(async () => {
     try {
-      const res = await fetch("/api/line/messages");
-      const allMessages: Message[] = await res.json();
-      const counts: Record<string, number> = {};
-      for (const m of allMessages) {
-        if (m.direction === "incoming" && !m.is_read) {
-          counts[m.line_user_id] = (counts[m.line_user_id] || 0) + 1;
-        }
-      }
-      setUnreadCounts(counts);
+      const url = selectedAccount?.id
+        ? `/api/line/messages/unread-counts?account_id=${selectedAccount.id}`
+        : "/api/line/messages/unread-counts";
+      const res = await fetch(url);
+      setUnreadCounts(await res.json());
     } catch { /* */ }
-  }, []);
+  }, [selectedAccount?.id]);
 
   // 既読にする
   const markAsRead = async (lineUserId: string) => {
@@ -971,8 +1140,15 @@ export default function LineDashboard() {
   };
 
   // 通常表示用のグループ（本番のみ。サブ・BAN は除外）
+  // クローザーの場合はcloser_visibleなグループのみ表示
+  const isCloserUser = currentUser?.is_closer && !currentUser?.is_admin;
   const sortedGroupedAccounts = accounts
     .filter((acc) => !acc.role || acc.role === "main")
+    .filter((acc) => {
+      if (!isCloserUser) return true;
+      const group = acc.group_name || "未分類";
+      return !!groupSettings[group];
+    })
     .reduce<Record<string, LineAccount[]>>((groups, acc) => {
       const group = acc.group_name || "未分類";
       if (!groups[group]) groups[group] = [];
@@ -1110,6 +1286,7 @@ export default function LineDashboard() {
           line_user_id: lineUserId,
           account_id: selectedAccount.id,
           assigned,
+          cross_account: crossAccountLabel,
         }),
       });
       if (!res.ok) {
@@ -1375,6 +1552,62 @@ export default function LineDashboard() {
     return labels.filter((l) => l.assigned_users.includes(lineUserId));
   };
 
+  // 商談ステータスをラベルから取得
+  const getDealStatus = (lineUserId: string): string => {
+    const userLabels = getUserLabels(lineUserId);
+    const statusLabel = userLabels.find((l) => l.name.startsWith(DEAL_STATUS_LABEL_PREFIX));
+    return statusLabel ? statusLabel.name.replace(DEAL_STATUS_LABEL_PREFIX, "") : "";
+  };
+
+  // 商談ステータス変更（ラベル自動付与/削除）
+  const changeDealStatus = async (lineUserId: string, newStatus: string) => {
+    if (!selectedAccount) return;
+    const userLabels = getUserLabels(lineUserId);
+
+    // 既存の商談ステータスラベルを削除
+    for (const label of userLabels) {
+      if (label.name.startsWith(DEAL_STATUS_LABEL_PREFIX)) {
+        await toggleLabelUser(label.id, lineUserId);
+      }
+    }
+
+    if (!newStatus) return; // 「未設定」なら削除のみ
+
+    // 新しいステータスラベルを付与（なければ作成）
+    const labelName = `${DEAL_STATUS_LABEL_PREFIX}${newStatus}`;
+    let targetLabel = labels.find((l) => l.name === labelName);
+
+    if (!targetLabel) {
+      const statusDef = DEAL_STATUSES.find((s) => s.value === newStatus);
+      const res = await fetch("/api/line/labels", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          account_id: selectedAccount.id,
+          name: labelName,
+          color: statusDef?.color ?? "#3B82F6",
+          sort_order: 1000,
+        }),
+      });
+      if (res.ok) {
+        await fetchLabels();
+        // 再取得後のラベルを探す
+        const updatedRes = await fetch(`/api/line/labels?account_id=${selectedAccount.id}`);
+        if (updatedRes.ok) {
+          const updatedLabels = await updatedRes.json();
+          targetLabel = updatedLabels.find((l: { name: string }) => l.name === labelName);
+        }
+      }
+    }
+
+    if (targetLabel) {
+      // まだ付与されていない場合のみ付与
+      if (!targetLabel.assigned_users.includes(lineUserId)) {
+        await toggleLabelUser(targetLabel.id, lineUserId);
+      }
+    }
+  };
+
   const resetForm = () => {
     setForm({ account_name: "", channel_id: "", basic_id: "", channel_secret: "", channel_access_token: "", group_name: "", project_id: "", role: "main", greeting_message: DEFAULT_GREETING_MESSAGE, newsletter_from_email: "", newsletter_from_name: "" });
     setEditingId(null);
@@ -1452,6 +1685,10 @@ export default function LineDashboard() {
   const saveAccount = async () => {
     // 新規登録時のみ secret/token を必須にする。編集時は空欄なら既存値を維持
     if (!editingId) {
+      if (!form.group_name || !form.group_name.trim()) {
+        setSaveMsg({ ok: false, text: "グループを選択してください（グループ未所属のアカウントは追加できません）" });
+        return;
+      }
       if (!form.channel_id || !form.channel_secret || !form.channel_access_token) {
         setSaveMsg({ ok: false, text: "チャネルID・シークレット・アクセストークンは必須です" });
         return;
@@ -1492,7 +1729,11 @@ export default function LineDashboard() {
     fetchAccounts();
     fetchUnreadCounts();
     fetchAllProjects();
-  }, [fetchFollowers, fetchAccounts, fetchUnreadCounts, fetchAllProjects]);
+    fetchGroupSettings();
+    fetchCloserUsers();
+    fetchSmsBalance();
+    fetchReports();
+  }, [fetchFollowers, fetchAccounts, fetchUnreadCounts, fetchAllProjects, fetchGroupSettings, fetchCloserUsers, fetchSmsBalance, fetchReports]);
 
   useEffect(() => {
     if (selectedAccount) {
@@ -1504,8 +1745,11 @@ export default function LineDashboard() {
       fetchCustomFields();
       fetchReminders();
       fetchNewsletters();
+      fetchReengagements();
+      fetchSurveys();
+      fetchRegForms();
     }
-  }, [selectedAccount, fetchStepSequences, fetchTestFollowers, fetchLabels, fetchActionRules, fetchTemplates, fetchCustomFields, fetchReminders, fetchNewsletters]);
+  }, [selectedAccount, fetchStepSequences, fetchTestFollowers, fetchLabels, fetchActionRules, fetchTemplates, fetchCustomFields, fetchReminders, fetchNewsletters, fetchReengagements, fetchSurveys, fetchRegForms]);
 
   useEffect(() => {
     if (project?.id) {
@@ -1517,6 +1761,66 @@ export default function LineDashboard() {
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  // 通知音のON/OFF をlocalStorageから復元
+  useEffect(() => {
+    const stored = localStorage.getItem("line_sound_enabled");
+    if (stored !== null) setSoundEnabled(stored === "true");
+  }, []);
+
+  // Supabaseリアルタイム購読: 新着メッセージ
+  useEffect(() => {
+    const supabase = createClient();
+    const channel = supabase
+      .channel("line-messages-realtime")
+      .on(
+        "postgres_changes" as "system",
+        { event: "INSERT", schema: "public", table: "line_messages" } as Record<string, unknown>,
+        (payload: { new: { line_user_id: string; direction: string; message_text?: string; line_account_id?: string } }) => {
+          const newMsg = payload.new;
+          if (newMsg.direction !== "incoming") return;
+
+          // 未読カウント更新
+          setUnreadCounts((prev) => ({
+            ...prev,
+            [newMsg.line_user_id]: (prev[newMsg.line_user_id] || 0) + 1,
+          }));
+
+          // 現在開いているチャットのメッセージなら自動追加
+          if (selectedUser && newMsg.line_user_id === selectedUser.line_user_id) {
+            fetchMessages(selectedUser.line_user_id);
+          }
+
+          // ブラウザ通知
+          if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+            const senderName = followers.find((f) => f.line_user_id === newMsg.line_user_id)?.display_name ?? "不明";
+            new Notification("LINE 新着メッセージ", {
+              body: `${senderName}: ${newMsg.message_text ?? "(メディア)"}`,
+              icon: "/favicon.ico",
+            });
+          }
+
+          // 通知音
+          if (soundEnabled && audioRef.current) {
+            audioRef.current.currentTime = 0;
+            audioRef.current.play().catch(() => {});
+          }
+        },
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedUser?.line_user_id, soundEnabled, fetchMessages]);
+
+  // ブラウザ通知の許可リクエスト（初回）
+  useEffect(() => {
+    if (typeof Notification !== "undefined" && Notification.permission === "default") {
+      Notification.requestPermission();
+    }
+  }, []);
 
   const sendMessage = async () => {
     if (!chatInput.trim() || !selectedUser) return;
@@ -1764,12 +2068,16 @@ export default function LineDashboard() {
     setShowLabelPicker(false);
     setMemoSaveMsg(null);
     fetchMessages(f.line_user_id);
+    // 自動既読はしない: ユーザーが「既読」ボタンを押したタイミングで解除する
     // On mobile, show chat fullscreen
     setShowMobileChat(true);
   };
 
   const downloadCSV = (type: "followers" | "messages") => {
     const params = new URLSearchParams({ type });
+    if (selectedAccount?.id) {
+      params.set("account_id", selectedAccount.id);
+    }
     if (type === "messages" && selectedUser) {
       params.set("user_id", selectedUser.line_user_id);
     }
@@ -1807,9 +2115,12 @@ export default function LineDashboard() {
   });
 
   const filteredFollowers = followers.filter((f) => {
-    if (!searchQuery) return true;
-    return f.display_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      f.line_user_id.includes(searchQuery);
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return true;
+    return (
+      (f.display_name?.toLowerCase().includes(q) ?? false) ||
+      f.line_user_id.toLowerCase().includes(q)
+    );
   });
 
   // 対象者確認モーダルを開く
@@ -1888,7 +2199,11 @@ export default function LineDashboard() {
       "inflow_route",
       "followed_at_date",
       "followed_at_datetime",
+      "followed_at_range_from",
+      "followed_at_range_to",
       "label",
+      "label_has",
+      "label_not_has",
       "name",
       "email",
       "phone",
@@ -1977,13 +2292,13 @@ export default function LineDashboard() {
                           </option>
                         ))}
                       </select>
-                    ) : kind === "select" && row.field === "label" ? (
+                    ) : kind === "select" && (row.field === "label" || row.field === "label_has" || row.field === "label_not_has") ? (
                       <select
                         value={row.value}
                         onChange={(e) => updateRow(idx, { value: e.target.value })}
                         className="flex-1 border border-gray-300 rounded-md px-2 py-1.5 text-xs bg-white"
                       >
-                        <option value="">-- 選択してください --</option>
+                        <option value="">-- ラベルを選択 --</option>
                         {labels.map((l) => (
                           <option key={l.id} value={l.id}>
                             {l.name}
@@ -2201,7 +2516,7 @@ export default function LineDashboard() {
                           )}
                           {customFields.length === 0 && (
                             <p className="text-gray-300 italic">
-                              独自変数を使うには「カスタムフィールド管理」でフィールドを登録してください
+                              独自変数を使うには「独自置き換え文字管理」でフィールドを登録してください
                             </p>
                           )}
                         </div>
@@ -2755,7 +3070,7 @@ export default function LineDashboard() {
                 onChange={() => setForm({ ...form, timingMode: "immediate" })}
                 className="accent-blue-600"
               />
-              シナリオ登録直後
+              今すぐ
             </label>
             <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
               <input
@@ -2958,13 +3273,18 @@ export default function LineDashboard() {
     { key: "followers", label: "LINE 友だち", icon: Icons.users },
     { key: "step", label: "ステップ配信", icon: Icons.step },
     { key: "schedule", label: "予約配信", icon: Icons.schedule },
+    { key: "sent", label: "送信済み", icon: Icons.download },
     { key: "labels", label: "ラベル管理", icon: Icons.label },
     { key: "actions", label: "アクション管理", icon: Icons.settings },
     { key: "templates", label: "テンプレート管理", icon: Icons.document },
-    { key: "custom-fields", label: "カスタムフィールド", icon: Icons.settings },
+    { key: "custom-fields", label: "独自置き換え文字", icon: Icons.settings },
+    { key: "surveys", label: "アンケート", icon: Icons.document },
+    { key: "reg-forms", label: "登録フォーム", icon: Icons.friendAdd },
+    { key: "reengagement", label: "掘り起こし配信", icon: Icons.send },
     { key: "reminders", label: "リマインダ配信", icon: Icons.schedule },
     { key: "newsletter", label: "メルマガ", icon: Icons.document },
     { key: "inflow", label: "流入経路", icon: Icons.friendAdd },
+    { key: "reports", label: "レポート", icon: Icons.download },
   ];
 
   // ============================================================
@@ -3124,31 +3444,8 @@ export default function LineDashboard() {
         {/* ============================================================ */}
         {mainView === "accounts" && (
           <>
-            <header className="bg-white border-b border-gray-200 px-4 md:px-6 py-3 flex items-center justify-between flex-shrink-0">
+            <header className="bg-white border-b border-gray-200 px-4 md:px-6 py-3 flex items-center flex-shrink-0">
               <h1 className="text-base font-bold text-gray-800">アカウント一覧</h1>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => { resetForm(); setShowAddAccount(true); }}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded-md transition"
-                >
-                  {Icons.plus}
-                  <span className="hidden sm:inline">追加</span>
-                </button>
-                <button
-                  onClick={() => setShowGroupManager(true)}
-                  className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white text-xs font-medium rounded-md transition"
-                >
-                  {Icons.folder}
-                  グループ管理
-                </button>
-                <button
-                  onClick={enterSortMode}
-                  className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 bg-orange-500 hover:bg-orange-600 text-white text-xs font-medium rounded-md transition"
-                >
-                  {Icons.sort}
-                  表示順変更
-                </button>
-              </div>
             </header>
 
             <main className="flex-1 overflow-y-auto p-4 md:p-6">
@@ -3166,8 +3463,14 @@ export default function LineDashboard() {
                         <input type="text" value={form.account_name} onChange={(e) => setForm({ ...form, account_name: e.target.value })} placeholder="ハピネスサロン音声相談LINE" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400" />
                       </div>
                       <div>
-                        <label className="text-xs text-gray-500 block mb-1 font-medium">グループ名</label>
-                        <input type="text" value={form.group_name} onChange={(e) => setForm({ ...form, group_name: e.target.value })} placeholder="ハピネスサロン" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400" />
+                        <label className="text-xs text-gray-500 block mb-1 font-medium">グループ <span className="text-red-500">*</span></label>
+                        {editingId ? (
+                          <input type="text" value={form.group_name} onChange={(e) => setForm({ ...form, group_name: e.target.value })} placeholder="ハピネスサロン" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400" />
+                        ) : (
+                          <div className={`w-full border rounded-lg px-3 py-2 text-sm ${form.group_name ? "bg-gray-50 text-gray-700 border-gray-200" : "bg-red-50 text-red-600 border-red-200"}`}>
+                            {form.group_name || "※ グループを選んで「追加」ボタンから登録してください"}
+                          </div>
+                        )}
                       </div>
                       <div>
                         <label className="text-xs text-gray-500 block mb-1 font-medium">チャネルID <span className="text-red-500">*</span></label>
@@ -3285,6 +3588,23 @@ export default function LineDashboard() {
                                     <span className="text-xs text-gray-400 ml-2">({groupAccs.length} アカウント)</span>
                                   </div>
                                   <div className="flex items-center gap-1.5">
+                                    <label className="flex items-center gap-1 cursor-pointer" title="クローザーに表示">
+                                      <input
+                                        type="checkbox"
+                                        checked={!!groupSettings[groupName]}
+                                        onChange={async (e) => {
+                                          const val = e.target.checked;
+                                          setGroupSettings((prev) => ({ ...prev, [groupName]: val }));
+                                          await fetch("/api/line/account-groups", {
+                                            method: "PUT",
+                                            headers: { "Content-Type": "application/json" },
+                                            body: JSON.stringify({ project_id: project?.id, group_name: groupName, closer_visible: val }),
+                                          });
+                                        }}
+                                        className="accent-orange-500 w-3.5 h-3.5"
+                                      />
+                                      <span className="text-[10px] text-orange-600">CL表示</span>
+                                    </label>
                                     <button
                                       onClick={() => setEditingGroupName({ old: groupName, new: groupName })}
                                       className="px-2.5 py-1 text-xs text-blue-600 hover:bg-blue-50 rounded-md transition"
@@ -3422,14 +3742,33 @@ export default function LineDashboard() {
               ) : accounts.length === 0 ? (
                 <div className="bg-white rounded-lg border border-gray-200 p-16 text-center text-gray-400">
                   <p className="text-lg mb-2">LINEアカウントが登録されていません</p>
-                  <p className="text-sm mb-4">「+ 追加」ボタンから新規登録してください</p>
+                  <p className="text-sm mb-4">まずグループを作成してください。アカウントはグループ内の「+追加」ボタンから登録します。</p>
+                  <div className="flex justify-center gap-2">
+                    <button
+                      onClick={() => setShowGroupManager(true)}
+                      className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white text-xs font-medium rounded-md transition"
+                    >
+                      {Icons.folder}
+                      グループ管理
+                    </button>
+                  </div>
                 </div>
               ) : (
                 <div className="space-y-5 max-w-5xl">
-                  {Object.entries(sortedGroupedAccounts).map(([groupName, groupAccs]) => (
+                  {/* 未分類以外のグループ */}
+                  {Object.entries(sortedGroupedAccounts)
+                    .filter(([groupName]) => groupName !== "未分類")
+                    .map(([groupName, groupAccs]) => (
                     <div key={groupName} className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-                      <div className="px-5 py-3 bg-gray-50 border-b border-gray-200">
+                      <div className="px-5 py-3 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
                         <h3 className="text-sm font-bold text-gray-700">{groupName}</h3>
+                        <button
+                          onClick={() => { resetForm(); setForm((f) => ({ ...f, group_name: groupName })); setShowAddAccount(true); }}
+                          className="flex items-center gap-1 px-2 py-1 bg-blue-600 hover:bg-blue-700 text-white text-[11px] font-medium rounded transition"
+                        >
+                          {Icons.plus}
+                          追加
+                        </button>
                       </div>
                       {groupAccs.map((acc, i) => (
                         <div
@@ -3454,6 +3793,59 @@ export default function LineDashboard() {
                       ))}
                     </div>
                   ))}
+
+                  {/* アクションボタン（アカウント一覧の下・未分類の上） */}
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <button
+                      onClick={() => setShowGroupManager(true)}
+                      className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white text-xs font-medium rounded-md transition"
+                    >
+                      {Icons.folder}
+                      グループ管理
+                    </button>
+                    {(!currentUser || currentUser.is_admin) && (
+                      <button
+                        onClick={enterSortMode}
+                        className="flex items-center gap-1.5 px-3 py-1.5 bg-orange-500 hover:bg-orange-600 text-white text-xs font-medium rounded-md transition"
+                      >
+                        {Icons.sort}
+                        表示順変更
+                      </button>
+                    )}
+                  </div>
+
+                  {/* 未分類グループ（既存データのみ表示、新規追加は不可） */}
+                  <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+                    <div className="px-5 py-3 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
+                      <h3 className="text-sm font-bold text-gray-700">未分類</h3>
+                      <span className="text-[10px] text-gray-400">新規追加はグループ内から行ってください</span>
+                    </div>
+                    {sortedGroupedAccounts["未分類"] && sortedGroupedAccounts["未分類"].length > 0 ? (
+                      sortedGroupedAccounts["未分類"].map((acc, i) => (
+                        <div
+                          key={acc.id}
+                          onClick={() => openAccount(acc)}
+                          className={`flex items-center justify-between px-5 py-3.5 hover:bg-blue-50/50 cursor-pointer transition-colors ${i < sortedGroupedAccounts["未分類"].length - 1 ? "border-b border-gray-100" : ""}`}
+                        >
+                          <div className="flex items-center gap-3">
+                            <div className="w-9 h-9 rounded-full bg-[#06C755] flex items-center justify-center">{LINE_ICON}</div>
+                            <div>
+                              <div className="text-sm font-medium text-gray-800">{acc.account_name ?? "未設定"}</div>
+                              {acc.basic_id && <div className="text-xs text-gray-400">@{acc.basic_id}</div>}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-4">
+                            <span className={`text-xs px-2 py-0.5 rounded-full ${acc.is_active ? "bg-green-100 text-green-600" : "bg-gray-100 text-gray-400"}`}>
+                              {acc.is_active ? "有効" : "無効"}
+                            </span>
+                            {Icons.chevronRight}
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="px-5 py-4 text-center text-gray-400 text-xs">アカウントなし</div>
+                    )}
+                  </div>
                 </div>
               )}
             </main>
@@ -3470,7 +3862,20 @@ export default function LineDashboard() {
               <div className="px-3 py-3 border-b border-gray-200">
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-sm font-bold text-gray-700">LINE チャット</span>
-                  <button onClick={() => fetchFollowers()} className="text-xs text-blue-600 hover:text-blue-800">更新</button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => {
+                        const next = !soundEnabled;
+                        setSoundEnabled(next);
+                        localStorage.setItem("line_sound_enabled", String(next));
+                      }}
+                      className={`text-xs px-1.5 py-0.5 rounded transition ${soundEnabled ? "text-blue-600 bg-blue-50" : "text-gray-400 bg-gray-100"}`}
+                      title={soundEnabled ? "通知音 ON" : "通知音 OFF"}
+                    >
+                      {soundEnabled ? "\uD83D\uDD14" : "\uD83D\uDD15"}
+                    </button>
+                    <button onClick={() => { fetchFollowers(); fetchUnreadCounts(); }} className="text-xs text-blue-600 hover:text-blue-800">更新</button>
+                  </div>
                 </div>
                 <div className="relative">
                   <span className="absolute left-2.5 top-1/2 -translate-y-1/2">{Icons.search}</span>
@@ -3516,8 +3921,20 @@ export default function LineDashboard() {
                             <span className="text-[10px] text-gray-400">{fmtShort(f.followed_at)}</span>
                           </div>
                         </div>
-                        <div className="text-xs text-gray-400 truncate mt-0.5">
-                          {f.status === "following" ? "友だち" : f.status === "blocked" ? "ブロック中" : "解除済み"}
+                        <div className="flex items-center gap-1.5 mt-0.5">
+                          <span className="text-xs text-gray-400 truncate">
+                            {f.status === "following" ? "友だち" : f.status === "blocked" ? "ブロック中" : "解除済み"}
+                          </span>
+                          {(() => {
+                            const ds = getDealStatus(f.line_user_id);
+                            if (!ds) return null;
+                            const def = DEAL_STATUSES.find((s) => s.value === ds);
+                            return def ? (
+                              <span className={`px-1.5 py-0.5 text-[9px] font-medium rounded ${def.bgClass}`}>
+                                {def.label}
+                              </span>
+                            ) : null;
+                          })()}
                         </div>
                       </div>
                     </button>
@@ -3608,13 +4025,116 @@ export default function LineDashboard() {
                                 {m.direction === "outgoing" && (
                                   <span className="text-[10px] text-white/60 mb-0.5">{fmtTime(m.sent_at)}</span>
                                 )}
-                                <div className={`max-w-[75%] rounded-2xl px-3.5 py-2 text-[13px] shadow-sm leading-relaxed ${
-                                  m.direction === "outgoing"
-                                    ? "bg-[#06C755] text-white rounded-br-md"
-                                    : "bg-white text-gray-800 rounded-bl-md"
-                                }`}>
-                                  {m.message_text ?? `[${m.message_type}]`}
-                                </div>
+                                {(() => {
+                                  const ev = m.raw_event as Record<string, unknown> | null;
+                                  const msg = (ev?.message ?? {}) as Record<string, unknown>;
+                                  const bubbleCls = `max-w-[75%] rounded-2xl text-[13px] shadow-sm leading-relaxed ${
+                                    m.direction === "outgoing"
+                                      ? "bg-[#06C755] text-white rounded-br-md"
+                                      : "bg-white text-gray-800 rounded-bl-md"
+                                  }`;
+
+                                  // スタンプ
+                                  if (m.message_type === "sticker") {
+                                    const stickerId = msg.stickerId as string | undefined;
+                                    return (
+                                      <div className={`${bubbleCls} p-2`}>
+                                        {stickerId ? (
+                                          <img
+                                            src={`https://stickershop.line-scdn.net/stickershop/v1/sticker/${stickerId}/android/sticker.png`}
+                                            alt="スタンプ"
+                                            className="w-24 h-24 object-contain"
+                                            onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; (e.target as HTMLImageElement).parentElement!.textContent = "[スタンプ]"; }}
+                                          />
+                                        ) : (
+                                          <span className="text-gray-400">[スタンプ]</span>
+                                        )}
+                                      </div>
+                                    );
+                                  }
+
+                                  // 画像
+                                  if (m.message_type === "image") {
+                                    return (
+                                      <div className={`${bubbleCls} p-2`}>
+                                        <div className="flex items-center gap-1.5 text-xs opacity-70">
+                                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
+                                          画像
+                                        </div>
+                                      </div>
+                                    );
+                                  }
+
+                                  // 動画
+                                  if (m.message_type === "video") {
+                                    return (
+                                      <div className={`${bubbleCls} p-2`}>
+                                        <div className="flex items-center gap-1.5 text-xs opacity-70">
+                                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
+                                          動画
+                                        </div>
+                                      </div>
+                                    );
+                                  }
+
+                                  // 音声
+                                  if (m.message_type === "audio") {
+                                    return (
+                                      <div className={`${bubbleCls} p-2`}>
+                                        <div className="flex items-center gap-1.5 text-xs opacity-70">
+                                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" /></svg>
+                                          音声
+                                        </div>
+                                      </div>
+                                    );
+                                  }
+
+                                  // 位置情報
+                                  if (m.message_type === "location") {
+                                    const title = (msg.title as string) ?? "";
+                                    const address = (msg.address as string) ?? "";
+                                    return (
+                                      <div className={`${bubbleCls} px-3.5 py-2`}>
+                                        <div className="flex items-center gap-1.5 text-xs opacity-70 mb-1">
+                                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                                          位置情報
+                                        </div>
+                                        {title && <div className="font-medium text-xs">{title}</div>}
+                                        {address && <div className="text-xs opacity-70">{address}</div>}
+                                      </div>
+                                    );
+                                  }
+
+                                  // テキスト（絵文字処理付き）
+                                  const text = m.message_text ?? `[${m.message_type}]`;
+                                  const emojis = (msg.emojis ?? []) as Array<{ index: number; length: number; productId: string; emojiId: string }>;
+
+                                  if (emojis.length > 0 && m.message_text) {
+                                    // LINE絵文字を画像に置き換え
+                                    const parts: React.ReactNode[] = [];
+                                    let lastIndex = 0;
+                                    for (const emoji of emojis) {
+                                      if (emoji.index > lastIndex) {
+                                        parts.push(m.message_text.slice(lastIndex, emoji.index));
+                                      }
+                                      parts.push(
+                                        <img
+                                          key={`${emoji.productId}-${emoji.emojiId}-${emoji.index}`}
+                                          src={`https://stickershop.line-scdn.net/sticonshop/v1/sticon/${emoji.productId}/android/${emoji.emojiId}.png`}
+                                          alt="emoji"
+                                          className="inline-block w-5 h-5 align-text-bottom"
+                                        />
+                                      );
+                                      lastIndex = emoji.index + emoji.length;
+                                    }
+                                    if (lastIndex < m.message_text.length) {
+                                      parts.push(m.message_text.slice(lastIndex));
+                                    }
+                                    return <div className={`${bubbleCls} px-3.5 py-2`}>{parts}</div>;
+                                  }
+
+                                  return <div className={`${bubbleCls} px-3.5 py-2`}>{text}</div>;
+                                })()}
                                 {m.direction === "incoming" && (
                                   <span className="text-[10px] text-white/60 mb-0.5">{fmtTime(m.sent_at)}</span>
                                 )}
@@ -3848,8 +4368,19 @@ export default function LineDashboard() {
                           + 追加
                         </button>
                         {showLabelPicker && (
-                          <div className="absolute right-0 top-full mt-1 w-52 bg-white rounded-lg shadow-xl border border-gray-200 z-30 max-h-60 overflow-y-auto">
+                          <div className="absolute right-0 top-full mt-1 w-60 bg-white rounded-lg shadow-xl border border-gray-200 z-30 max-h-72 overflow-y-auto">
                             <div className="px-3 py-2 border-b border-gray-100 text-xs font-medium text-gray-500">ラベルを選択</div>
+                            <label className="flex items-start gap-2 px-3 py-2 border-b border-gray-100 text-[11px] text-gray-600 cursor-pointer hover:bg-gray-50">
+                              <input
+                                type="checkbox"
+                                checked={crossAccountLabel}
+                                onChange={(e) => setCrossAccountLabel(e.target.checked)}
+                                className="mt-0.5 accent-blue-600"
+                              />
+                              <span className="leading-tight">
+                                同一案件の別アカウントでも<br />同名ラベルを同時に付与/解除
+                              </span>
+                            </label>
                             {labels.length === 0 ? (
                               <div className="px-3 py-4 text-center text-xs text-gray-400">
                                 ラベルがありません。<br />「ラベル管理」から作成してください。
@@ -3897,6 +4428,52 @@ export default function LineDashboard() {
                         <span className="text-xs text-gray-400">ラベルなし</span>
                       )}
                     </div>
+                  </div>
+
+                  {/* 担当クローザー */}
+                  <div className="px-4 py-3 border-b border-gray-200">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-xs font-medium text-gray-500">担当クローザー</span>
+                    </div>
+                    <select
+                      value={(selectedUser as Follower & { closer_id?: string }).closer_id ?? ""}
+                      onChange={async (e) => {
+                        const closerId = e.target.value || null;
+                        try {
+                          await fetch("/api/line/followers", {
+                            method: "PATCH",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ id: selectedUser.id, closer_id: closerId }),
+                          });
+                          setSelectedUser((prev) => prev ? { ...prev, closer_id: closerId } as typeof prev : null);
+                          setFollowers((prev) =>
+                            prev.map((f) => f.id === selectedUser.id ? { ...f, closer_id: closerId } as typeof f : f)
+                          );
+                        } catch { /* */ }
+                      }}
+                      className="w-full border border-gray-200 rounded-md px-2 py-1.5 text-xs text-gray-700 focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                    >
+                      <option value="">未割り当て</option>
+                      {closerUsers.map((u) => (
+                        <option key={u.id} value={u.id}>{u.name ?? u.closer_name ?? u.id.slice(0, 8)}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* 商談ステータス */}
+                  <div className="px-4 py-3 border-b border-gray-200">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-xs font-medium text-gray-500">商談ステータス</span>
+                    </div>
+                    <select
+                      value={getDealStatus(selectedUser.line_user_id)}
+                      onChange={(e) => changeDealStatus(selectedUser.line_user_id, e.target.value)}
+                      className="w-full border border-gray-200 rounded-md px-2 py-1.5 text-xs text-gray-700 focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                    >
+                      {DEAL_STATUSES.map((s) => (
+                        <option key={s.value} value={s.value}>{s.label}</option>
+                      ))}
+                    </select>
                   </div>
 
                   {/* Feature 3: メモ with save */}
@@ -4037,8 +4614,8 @@ export default function LineDashboard() {
                 <input
                   type="text"
                   value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="読者を検索..."
+                  onChange={(e) => { setSearchQuery(e.target.value); setFollowerPage(1); }}
+                  placeholder="名前で検索..."
                   className="w-full pl-9 pr-4 py-1.5 border border-gray-200 rounded-lg text-sm bg-white focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
                 />
               </div>
@@ -4046,87 +4623,138 @@ export default function LineDashboard() {
             <main className="flex-1 overflow-y-auto p-4 md:p-6">
               <div className="bg-white rounded-lg border border-gray-200 overflow-hidden max-w-5xl overflow-x-auto">
                 {filteredFollowers.length === 0 ? (
-                  <div className="p-16 text-center text-gray-400">読者がいません</div>
-                ) : (
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b border-gray-200 text-gray-500 text-left bg-gray-50">
-                        <th className="px-3 py-3 w-10">
-                          <input
-                            type="checkbox"
-                            checked={filteredFollowers.length > 0 && filteredFollowers.every((f) => selectedIds.has(f.id))}
-                            onChange={() => toggleSelectAll(filteredFollowers.map((f) => f.id))}
-                            className="accent-blue-600 w-4 h-4 cursor-pointer"
-                          />
-                        </th>
-                        <th className="px-5 py-3 font-medium">ユーザー</th>
-                        <th className="px-5 py-3 font-medium hidden md:table-cell">ステータス</th>
-                        <th className="px-5 py-3 font-medium hidden md:table-cell">友だち追加日</th>
-                        <th className="px-5 py-3 font-medium">操作</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filteredFollowers.map((f) => (
-                        <tr key={f.id} className={`border-b border-gray-100 hover:bg-gray-50 transition ${selectedIds.has(f.id) ? "bg-blue-50/50" : ""}`}>
-                          <td className="px-3 py-3">
-                            <input
-                              type="checkbox"
-                              checked={selectedIds.has(f.id)}
-                              onChange={() => toggleSelect(f.id)}
-                              className="accent-blue-600 w-4 h-4 cursor-pointer"
-                            />
-                          </td>
-                          <td className="px-5 py-3">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setUserDetailTarget(f);
-                                setUserDetailForm({
-                                  display_name: f.display_name ?? "",
-                                  memo: f.memo ?? "",
-                                  is_test: !!f.is_test,
-                                });
-                                setShowUserDetail(true);
-                              }}
-                              className="flex items-center gap-3 text-left hover:opacity-80 cursor-pointer group"
-                            >
-                              {f.picture_url ? (
-                                <img src={f.picture_url} alt="" className="w-9 h-9 rounded-full object-cover" />
-                              ) : (
-                                <div className="w-9 h-9 rounded-full bg-gray-200 flex items-center justify-center text-gray-400">{Icons.user}</div>
-                              )}
-                              <div>
-                                <div className="font-medium text-gray-800 group-hover:text-blue-600 group-hover:underline">
-                                  {f.display_name ?? "名前なし"}
-                                  {f.is_test && <span className="ml-1.5 px-1.5 py-0.5 text-[10px] bg-purple-100 text-purple-700 rounded">TEST</span>}
+                  <div className="p-16 text-center text-gray-400">友だちがいません</div>
+                ) : (() => {
+                  const totalPages = Math.ceil(filteredFollowers.length / FOLLOWERS_PER_PAGE);
+                  const currentPage = Math.min(followerPage, totalPages);
+                  const pagedFollowers = filteredFollowers.slice((currentPage - 1) * FOLLOWERS_PER_PAGE, currentPage * FOLLOWERS_PER_PAGE);
+
+                  // ページネーション番号の生成
+                  const getPageNumbers = (): (number | "...")[] => {
+                    const pages: (number | "...")[] = [];
+                    if (totalPages <= 7) {
+                      for (let i = 1; i <= totalPages; i++) pages.push(i);
+                    } else {
+                      pages.push(1);
+                      if (currentPage > 3) pages.push("...");
+                      const start = Math.max(2, currentPage - 1);
+                      const end = Math.min(totalPages - 1, currentPage + 1);
+                      for (let i = start; i <= end; i++) pages.push(i);
+                      if (currentPage < totalPages - 2) pages.push("...");
+                      pages.push(totalPages);
+                    }
+                    return pages;
+                  };
+
+                  return (
+                    <>
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="border-b border-gray-200 text-gray-500 text-left bg-gray-50">
+                            <th className="px-3 py-3 w-10">
+                              <input
+                                type="checkbox"
+                                checked={pagedFollowers.length > 0 && pagedFollowers.every((f) => selectedIds.has(f.id))}
+                                onChange={() => toggleSelectAll(pagedFollowers.map((f) => f.id))}
+                                className="accent-blue-600 w-4 h-4 cursor-pointer"
+                              />
+                            </th>
+                            <th className="px-5 py-3 font-medium">ユーザー</th>
+                            <th className="px-5 py-3 font-medium hidden md:table-cell">ステータス</th>
+                            <th className="px-5 py-3 font-medium hidden md:table-cell">友だち追加日</th>
+                            <th className="px-5 py-3 font-medium">操作</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {pagedFollowers.map((f) => (
+                            <tr key={f.id} className={`border-b border-gray-100 hover:bg-gray-50 transition ${selectedIds.has(f.id) ? "bg-blue-50/50" : ""}`}>
+                              <td className="px-3 py-3">
+                                <input
+                                  type="checkbox"
+                                  checked={selectedIds.has(f.id)}
+                                  onChange={() => toggleSelect(f.id)}
+                                  className="accent-blue-600 w-4 h-4 cursor-pointer"
+                                />
+                              </td>
+                              <td className="px-5 py-3">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setUserDetailTarget(f);
+                                    setUserDetailForm({
+                                      display_name: f.display_name ?? "",
+                                      memo: f.memo ?? "",
+                                      is_test: !!f.is_test,
+                                    });
+                                    setShowUserDetail(true);
+                                  }}
+                                  className="flex items-center gap-3 text-left hover:opacity-80 cursor-pointer group"
+                                >
+                                  {f.picture_url ? (
+                                    <img src={f.picture_url} alt="" className="w-9 h-9 rounded-full object-cover" />
+                                  ) : (
+                                    <div className="w-9 h-9 rounded-full bg-gray-200 flex items-center justify-center text-gray-400">{Icons.user}</div>
+                                  )}
+                                  <div>
+                                    <div className="font-medium text-gray-800 group-hover:text-blue-600 group-hover:underline">
+                                      {f.display_name ?? "名前なし"}
+                                      {f.is_test && <span className="ml-1.5 px-1.5 py-0.5 text-[10px] bg-purple-100 text-purple-700 rounded">TEST</span>}
+                                    </div>
+                                    <div className="text-xs text-gray-400 font-mono">{f.line_user_id.slice(0, 12)}...</div>
+                                  </div>
+                                </button>
+                              </td>
+                              <td className="px-5 py-3 hidden md:table-cell"><StatusBadge status={f.status} /></td>
+                              <td className="px-5 py-3 text-gray-500 hidden md:table-cell">{fmtShort(f.followed_at)}</td>
+                              <td className="px-5 py-3">
+                                <div className="flex items-center gap-2">
+                                  <button
+                                    onClick={() => { setAccountSubView("chat"); openChat(f); }}
+                                    className="px-3 py-1 bg-[#06C755] hover:bg-[#05a648] text-white text-xs font-medium rounded-md transition"
+                                  >
+                                    チャット
+                                  </button>
+                                  <button
+                                    onClick={() => deleteFollower(f.id, f.display_name ?? f.line_user_id.slice(0, 10))}
+                                    className="px-3 py-1 bg-red-500 hover:bg-red-600 text-white text-xs font-medium rounded-md transition"
+                                  >
+                                    削除
+                                  </button>
                                 </div>
-                                <div className="text-xs text-gray-400 font-mono">{f.line_user_id.slice(0, 12)}...</div>
-                              </div>
-                            </button>
-                          </td>
-                          <td className="px-5 py-3 hidden md:table-cell"><StatusBadge status={f.status} /></td>
-                          <td className="px-5 py-3 text-gray-500 hidden md:table-cell">{fmtShort(f.followed_at)}</td>
-                          <td className="px-5 py-3">
-                            <div className="flex items-center gap-2">
-                              <button
-                                onClick={() => { setAccountSubView("chat"); openChat(f); }}
-                                className="px-3 py-1 bg-[#06C755] hover:bg-[#05a648] text-white text-xs font-medium rounded-md transition"
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+
+                      {/* ページネーション */}
+                      {totalPages > 1 && (
+                        <div className="flex justify-end items-center gap-1 px-5 py-3 border-t border-gray-200">
+                          {getPageNumbers().map((p, idx) =>
+                            p === "..." ? (
+                              <span key={`dots-${idx}`} className="px-2 py-1 text-xs text-gray-400 select-none">...</span>
+                            ) : p === currentPage ? (
+                              <span
+                                key={p}
+                                className="px-2.5 py-1 text-xs font-bold text-blue-600 border-b-2 border-blue-600 select-none"
                               >
-                                チャット
-                              </button>
+                                {p}
+                              </span>
+                            ) : (
                               <button
-                                onClick={() => deleteFollower(f.id, f.display_name ?? f.line_user_id.slice(0, 10))}
-                                className="px-3 py-1 bg-red-500 hover:bg-red-600 text-white text-xs font-medium rounded-md transition"
+                                key={p}
+                                onClick={() => setFollowerPage(p)}
+                                className="px-2.5 py-1 text-xs text-gray-600 hover:text-blue-600 hover:bg-blue-50 rounded transition"
                               >
-                                削除
+                                {p}
                               </button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
+                            )
+                          )}
+                        </div>
+                      )}
+                    </>
+                  );
+                })()}
               </div>
             </main>
           </>
@@ -4156,6 +4784,12 @@ export default function LineDashboard() {
                     title="ラベル付与・シーケンス移動・Webhook等のアクションを追加"
                   >
                     {Icons.plus} アクション追加
+                  </button>
+                  <button
+                    onClick={() => setShowSmsModal(true)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-orange-500 hover:bg-orange-600 text-white text-xs font-medium rounded-md transition"
+                  >
+                    {Icons.plus} SMS追加
                   </button>
                 </div>
               )}
@@ -4239,7 +4873,7 @@ export default function LineDashboard() {
                               }}
                               className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:border-blue-400 focus:outline-none"
                             >
-                              <option value="immediate">登録直後</option>
+                              <option value="immediate">今すぐ</option>
                               <option value="absolute">N日後の指定時刻</option>
                               <option value="relative">N日N時間N分後</option>
                             </select>
@@ -4315,116 +4949,72 @@ export default function LineDashboard() {
                 </div>
               )}
 
-              <div className="max-w-5xl space-y-4">
+              <div className="max-w-6xl">
                 {stepSequences.filter((s) => (s.kind ?? "step") === "step").length === 0 ? (
                   <div className="bg-white rounded-lg border border-gray-200 p-16 text-center text-gray-400">
                     <p className="text-lg mb-2">ステップ配信がありません</p>
-                    <p className="text-sm">「新規シーケンス」から作成してください</p>
+                    <p className="text-sm">「新規追加」から作成してください</p>
                   </div>
                 ) : (
-                  stepSequences.filter((s) => (s.kind ?? "step") === "step").map((seq) => (
-                    <div key={seq.id} className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-                      {/* シーケンスヘッダー: 管理名称の行をクリックで編集画面を開く */}
-                      <div
-                        onClick={() => openEditStep(seq)}
-                        className="flex items-center justify-between px-5 py-3 bg-gray-50 border-b border-gray-200 cursor-pointer hover:bg-gray-100 transition"
-                      >
-                        <div className="flex items-center gap-3 min-w-0">
-                          <h3 className="text-sm font-bold text-gray-800 truncate">{seq.name}</h3>
-                          <span className={`px-2 py-0.5 text-xs rounded-full font-medium flex-shrink-0 ${
-                            seq.status === "active" ? "bg-green-100 text-green-700" : seq.status === "paused" ? "bg-yellow-100 text-yellow-700" : "bg-gray-100 text-gray-500"
-                          }`}>
-                            {seq.status === "active" ? "稼働中" : seq.status === "paused" ? "一時停止" : "下書き"}
-                          </span>
-                          <span className="text-xs text-gray-400 flex-shrink-0">{seq.messages?.length ?? 0}通</span>
-                        </div>
-                        <div className="flex items-center gap-2 flex-shrink-0" onClick={(e) => e.stopPropagation()}>
-                          <button
-                            onClick={async () => {
-                              const newStatus = seq.status === "active" ? "paused" : "active";
-                              await fetch("/api/line/step-sequences", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: seq.id, status: newStatus }) });
-                              fetchStepSequences();
-                            }}
-                            className={`px-3 py-1 text-xs font-medium rounded-md transition ${seq.status === "active" ? "bg-yellow-100 text-yellow-700 hover:bg-yellow-200" : "bg-green-100 text-green-700 hover:bg-green-200"}`}
+                  <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-gray-200 text-gray-500 text-left bg-gray-50">
+                          <th className="px-5 py-3 font-medium w-20">媒体</th>
+                          <th className="px-5 py-3 font-medium">管理名称</th>
+                          <th className="px-5 py-3 font-medium w-28 text-right">ステップ数</th>
+                          <th className="px-5 py-3 font-medium w-28">ステータス</th>
+                          <th className="px-5 py-3 font-medium w-48"></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {stepSequences.filter((s) => (s.kind ?? "step") === "step").map((seq) => (
+                          <tr
+                            key={seq.id}
+                            onClick={() => openEditStep(seq)}
+                            className="border-b border-gray-100 hover:bg-gray-50 cursor-pointer"
                           >
-                            {seq.status === "active" ? "一時停止" : "稼働開始"}
-                          </button>
-                          <button
-                            onClick={async () => {
-                              if (!confirm(`「${seq.name}」を削除しますか？`)) return;
-                              await fetch("/api/line/step-sequences", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: seq.id }) });
-                              fetchStepSequences();
-                            }}
-                            className="px-2 py-1 text-xs text-red-500 hover:bg-red-50 rounded-md transition"
-                          >
-                            削除
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* ステップメッセージ概要（クリックで編集画面） */}
-                      {(!seq.messages || seq.messages.length === 0) ? (
-                        <button
-                          type="button"
-                          onClick={() => openEditStep(seq)}
-                          className="w-full px-5 py-6 text-center text-sm text-gray-400 hover:bg-gray-50"
-                        >
-                          メッセージがありません（クリックして編集）
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => openEditStep(seq)}
-                          className="w-full text-left"
-                        >
-                          <table className="w-full text-sm">
-                            <thead>
-                              <tr className="border-b border-gray-200 text-gray-500 text-left bg-gray-50/50">
-                                <th className="px-5 py-2.5 font-medium w-16">順番</th>
-                                <th className="px-5 py-2.5 font-medium w-20">媒体</th>
-                                <th className="px-5 py-2.5 font-medium">管理名称</th>
-                                <th className="px-5 py-2.5 font-medium w-28">送信タイミング</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {seq.messages.slice().sort((a, b) => a.step_order - b.step_order).map((msg) => {
-                                let timing: string;
-                                if (msg.timing_mode === "absolute" && msg.delivery_time) {
-                                  timing = msg.delivery_days ? `${msg.delivery_days}日後 ${msg.delivery_time}` : `当日 ${msg.delivery_time}`;
-                                } else if (msg.delay_minutes === 0) {
-                                  timing = "登録直後";
-                                } else if (msg.delay_minutes < 60) {
-                                  timing = `${msg.delay_minutes}分後`;
-                                } else if (msg.delay_minutes < 1440) {
-                                  const h = Math.floor(msg.delay_minutes / 60);
-                                  const m = msg.delay_minutes % 60;
-                                  timing = m > 0 ? `${h}時間${m}分後` : `${h}時間後`;
-                                } else {
-                                  const d = Math.floor(msg.delay_minutes / 1440);
-                                  const h = Math.floor((msg.delay_minutes % 1440) / 60);
-                                  timing = h > 0 ? `${d}日${h}時間後` : `${d}日後`;
-                                }
-                                return (
-                                  <tr key={msg.id} className="border-b border-gray-100 hover:bg-gray-50">
-                                    <td className="px-5 py-2.5 text-gray-500">{msg.step_order}</td>
-                                    <td className="px-5 py-2.5">
-                                      <span className={`px-2 py-0.5 text-xs rounded font-medium ${
-                                        msg.media === "LINE" ? "bg-[#06C755]/10 text-[#06C755]" : msg.media === "email" ? "bg-blue-100 text-blue-700" : msg.media === "sms" ? "bg-purple-100 text-purple-700" : "bg-gray-100 text-gray-600"
-                                      }`}>
-                                        {msg.media}
-                                      </span>
-                                    </td>
-                                    <td className="px-5 py-2.5 text-gray-800">{msg.title}</td>
-                                    <td className="px-5 py-2.5 text-gray-500">{timing}</td>
-                                  </tr>
-                                );
-                              })}
-                            </tbody>
-                          </table>
-                        </button>
-                      )}
-                    </div>
-                  ))
+                            <td className="px-5 py-3">
+                              <span className="px-2 py-0.5 text-xs rounded font-medium bg-[#06C755]/10 text-[#06C755]">LINE</span>
+                            </td>
+                            <td className="px-5 py-3 text-gray-800">{seq.name}</td>
+                            <td className="px-5 py-3 text-gray-500 text-right">{seq.messages?.length ?? 0}通</td>
+                            <td className="px-5 py-3">
+                              <span className={`px-2 py-0.5 text-xs rounded-full font-medium ${
+                                seq.status === "active" ? "bg-green-100 text-green-700" : seq.status === "paused" ? "bg-yellow-100 text-yellow-700" : "bg-gray-100 text-gray-500"
+                              }`}>
+                                {seq.status === "active" ? "稼働中" : seq.status === "paused" ? "一時停止" : "下書き"}
+                              </span>
+                            </td>
+                            <td className="px-5 py-3" onClick={(e) => e.stopPropagation()}>
+                              <div className="flex items-center justify-end gap-2">
+                                <button
+                                  onClick={async () => {
+                                    const newStatus = seq.status === "active" ? "paused" : "active";
+                                    await fetch("/api/line/step-sequences", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: seq.id, status: newStatus }) });
+                                    fetchStepSequences();
+                                  }}
+                                  className={`px-2.5 py-1 text-xs font-medium rounded-md transition ${seq.status === "active" ? "bg-yellow-100 text-yellow-700 hover:bg-yellow-200" : "bg-green-100 text-green-700 hover:bg-green-200"}`}
+                                >
+                                  {seq.status === "active" ? "一時停止" : "稼働開始"}
+                                </button>
+                                <button
+                                  onClick={async () => {
+                                    if (!confirm(`「${seq.name}」を削除しますか？`)) return;
+                                    await fetch("/api/line/step-sequences", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: seq.id }) });
+                                    fetchStepSequences();
+                                  }}
+                                  className="px-2 py-1 text-xs text-red-500 hover:bg-red-50 rounded-md transition"
+                                >
+                                  削除
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 )}
               </div>
             </main>
@@ -4441,12 +5031,27 @@ export default function LineDashboard() {
             </header>
             <main className="flex-1 overflow-y-auto p-6">
               {!showScheduleCreator && (
-                <div className="max-w-5xl mb-4">
+                <div className="max-w-5xl mb-4 flex gap-2 flex-wrap">
                   <button
                     onClick={() => { setScheduleCreatorForm({ ...emptyBroadcast, timingMode: "datetime" }); setShowScheduleCreator(true); }}
                     className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded-md transition"
+                    title="新しい予約配信を作成"
                   >
                     {Icons.plus} 新規追加
+                  </button>
+                  <button
+                    onClick={() => { setAccountSubView("actions"); openNewActionRule(); }}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-purple-600 hover:bg-purple-700 text-white text-xs font-medium rounded-md transition"
+                    title="ラベル付与・シーケンス移動・Webhook等のアクションを追加"
+                  >
+                    {Icons.plus} アクション追加
+                  </button>
+                  <button
+                    onClick={() => setShowSmsModal(true)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-orange-500 hover:bg-orange-600 text-white text-xs font-medium rounded-md transition"
+                    title="SMS送信・クレジットチャージ"
+                  >
+                    {Icons.plus} SMS追加
                   </button>
                 </div>
               )}
@@ -4465,131 +5070,215 @@ export default function LineDashboard() {
                 </div>
               )}
               {!showScheduleCreator && (
-                <div className="max-w-5xl space-y-4">
-                  {stepSequences.filter((s) => s.kind === "schedule").length === 0 ? (
+                <div className="max-w-6xl">
+                  {stepSequences.filter((s) => s.kind === "schedule" && !s.sent_at).length === 0 ? (
                     <div className="bg-white rounded-lg border border-gray-200 p-16 text-center text-gray-400">
-                      <p className="text-lg mb-2">予約配信がありません</p>
-                      <p className="text-sm">「新規追加」から作成してください</p>
+                      <p className="text-lg mb-2">予約中の配信がありません</p>
+                      <p className="text-sm">「新規追加」から作成してください（送信済みは左メニューの「送信済み」から確認できます）</p>
                     </div>
                   ) : (
-                    stepSequences
-                      .filter((s) => s.kind === "schedule")
-                      .sort((a, b) => {
-                        const at = a.scheduled_at ? new Date(a.scheduled_at).getTime() : 0;
-                        const bt = b.scheduled_at ? new Date(b.scheduled_at).getTime() : 0;
-                        return bt - at;
-                      })
-                      .map((seq) => {
-                        const scheduled = seq.scheduled_at
-                          ? new Date(seq.scheduled_at).toLocaleString("ja-JP", {
-                              year: "numeric",
-                              month: "2-digit",
-                              day: "2-digit",
-                              hour: "2-digit",
-                              minute: "2-digit",
+                    <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="border-b border-gray-200 text-gray-500 text-left bg-gray-50">
+                            <th className="px-5 py-3 font-medium w-20">媒体</th>
+                            <th className="px-5 py-3 font-medium">管理名称</th>
+                            <th className="px-5 py-3 font-medium w-44">送信日時</th>
+                            <th className="px-5 py-3 font-medium w-28">ステータス</th>
+                            <th className="px-5 py-3 font-medium w-64"></th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {stepSequences
+                            .filter((s) => s.kind === "schedule" && !s.sent_at)
+                            .sort((a, b) => {
+                              const at = a.scheduled_at ? new Date(a.scheduled_at).getTime() : 0;
+                              const bt = b.scheduled_at ? new Date(b.scheduled_at).getTime() : 0;
+                              return bt - at;
                             })
-                          : "日時未設定";
-                        const isSent = !!seq.sent_at;
-                        const isOverdue =
-                          !isSent &&
-                          !!seq.scheduled_at &&
-                          new Date(seq.scheduled_at).getTime() < Date.now();
-                        return (
-                          <div
-                            key={seq.id}
-                            className="bg-white rounded-lg border border-gray-200 overflow-hidden"
-                          >
-                            <div
-                              onClick={() => openEditSchedule(seq)}
-                              className="flex items-center justify-between px-5 py-3 bg-gray-50 border-b border-gray-200 cursor-pointer hover:bg-gray-100 transition"
-                            >
-                              <div className="flex items-center gap-3 min-w-0">
-                                <h3 className="text-sm font-bold text-gray-800 truncate">
-                                  {seq.name}
-                                </h3>
-                                {isSent ? (
-                                  <span className="px-2 py-0.5 text-xs rounded-full font-medium flex-shrink-0 bg-gray-200 text-gray-600">
-                                    送信済み
-                                  </span>
-                                ) : seq.status === "paused" ? (
-                                  <span className="px-2 py-0.5 text-xs rounded-full font-medium flex-shrink-0 bg-yellow-100 text-yellow-700">
-                                    一時停止
-                                  </span>
-                                ) : isOverdue ? (
-                                  <span className="px-2 py-0.5 text-xs rounded-full font-medium flex-shrink-0 bg-orange-100 text-orange-700">
-                                    送信待ち
-                                  </span>
-                                ) : (
-                                  <span className="px-2 py-0.5 text-xs rounded-full font-medium flex-shrink-0 bg-green-100 text-green-700">
-                                    予約中
-                                  </span>
-                                )}
-                                <span className="text-xs text-gray-400 flex-shrink-0">
-                                  {seq.messages?.length ?? 0}通
-                                </span>
-                              </div>
-                              <div
-                                className="flex items-center gap-2 flex-shrink-0"
-                                onClick={(e) => e.stopPropagation()}
-                              >
-                                <span className="text-xs text-gray-500">
-                                  {isSent ? `送信: ${new Date(seq.sent_at!).toLocaleString("ja-JP", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}` : `予定: ${scheduled}`}
-                                </span>
-                                {!isSent && (
-                                  <button
-                                    onClick={async () => {
-                                      const newStatus =
-                                        seq.status === "active" ? "paused" : "active";
-                                      await fetch("/api/line/step-sequences", {
-                                        method: "PUT",
-                                        headers: { "Content-Type": "application/json" },
-                                        body: JSON.stringify({
-                                          id: seq.id,
-                                          status: newStatus,
-                                        }),
-                                      });
-                                      fetchStepSequences();
-                                    }}
-                                    className={`px-3 py-1 text-xs font-medium rounded-md transition ${seq.status === "active" ? "bg-yellow-100 text-yellow-700 hover:bg-yellow-200" : "bg-green-100 text-green-700 hover:bg-green-200"}`}
-                                  >
-                                    {seq.status === "active" ? "一時停止" : "再開"}
-                                  </button>
-                                )}
-                                <button
-                                  onClick={async () => {
-                                    if (!confirm(`「${seq.name}」を削除しますか？`)) return;
-                                    await fetch("/api/line/step-sequences", {
-                                      method: "DELETE",
-                                      headers: { "Content-Type": "application/json" },
-                                      body: JSON.stringify({ id: seq.id }),
-                                    });
-                                    fetchStepSequences();
-                                  }}
-                                  className="px-2 py-1 text-xs text-red-500 hover:bg-red-50 rounded-md transition"
+                            .map((seq) => {
+                              const scheduled = seq.scheduled_at
+                                ? new Date(seq.scheduled_at).toLocaleString("ja-JP", {
+                                    year: "numeric",
+                                    month: "2-digit",
+                                    day: "2-digit",
+                                    hour: "2-digit",
+                                    minute: "2-digit",
+                                  })
+                                : "日時未設定";
+                              const isOverdue =
+                                !!seq.scheduled_at &&
+                                new Date(seq.scheduled_at).getTime() < Date.now();
+                              return (
+                                <tr
+                                  key={seq.id}
+                                  onClick={() => openEditSchedule(seq)}
+                                  className="border-b border-gray-100 hover:bg-gray-50 cursor-pointer"
                                 >
-                                  削除
-                                </button>
-                              </div>
-                            </div>
-                            <button
-                              type="button"
-                              onClick={() => openEditSchedule(seq)}
-                              className="w-full text-left px-5 py-3 text-xs text-gray-600 hover:bg-gray-50"
-                            >
-                              {seq.messages && seq.messages.length > 0
-                                ? seq.messages
-                                    .slice()
-                                    .sort((a, b) => a.step_order - b.step_order)
-                                    .map((m) => m.title)
-                                    .join(" / ")
-                                : "メッセージがありません（クリックして編集）"}
-                            </button>
-                          </div>
-                        );
-                      })
+                                  <td className="px-5 py-3">
+                                    <span className="px-2 py-0.5 text-xs rounded font-medium bg-[#06C755]/10 text-[#06C755]">LINE</span>
+                                  </td>
+                                  <td className="px-5 py-3 text-gray-800">{seq.name}</td>
+                                  <td className="px-5 py-3 text-gray-500">{scheduled}</td>
+                                  <td className="px-5 py-3">
+                                    {seq.status === "paused" ? (
+                                      <span className="px-2 py-0.5 text-xs rounded-full font-medium bg-yellow-100 text-yellow-700">一時停止</span>
+                                    ) : isOverdue ? (
+                                      <span className="px-2 py-0.5 text-xs rounded-full font-medium bg-orange-100 text-orange-700">送信待ち</span>
+                                    ) : (
+                                      <span className="px-2 py-0.5 text-xs rounded-full font-medium bg-green-100 text-green-700">予約中</span>
+                                    )}
+                                  </td>
+                                  <td className="px-5 py-3" onClick={(e) => e.stopPropagation()}>
+                                    <div className="flex items-center justify-end gap-2">
+                                      <button
+                                        onClick={async () => {
+                                          if (!confirm(`「${seq.name}」を今すぐ送信しますか？`)) return;
+                                          const res = await fetch("/api/line/step-sequences/send-now", {
+                                            method: "POST",
+                                            headers: { "Content-Type": "application/json" },
+                                            body: JSON.stringify({ id: seq.id }),
+                                          });
+                                          const data = await res.json().catch(() => ({}));
+                                          if (res.ok) {
+                                            alert(`送信完了: ${data.sent ?? 0}件成功 / ${data.failed ?? 0}件失敗`);
+                                            fetchStepSequences();
+                                          } else {
+                                            alert(`送信失敗: ${data.error ?? res.status}`);
+                                          }
+                                        }}
+                                        className="px-2.5 py-1 text-xs font-medium rounded-md bg-blue-600 hover:bg-blue-700 text-white transition"
+                                      >
+                                        今すぐ送信
+                                      </button>
+                                      <button
+                                        onClick={async () => {
+                                          const newStatus = seq.status === "active" ? "paused" : "active";
+                                          await fetch("/api/line/step-sequences", {
+                                            method: "PUT",
+                                            headers: { "Content-Type": "application/json" },
+                                            body: JSON.stringify({ id: seq.id, status: newStatus }),
+                                          });
+                                          fetchStepSequences();
+                                        }}
+                                        className={`px-2.5 py-1 text-xs font-medium rounded-md transition ${seq.status === "active" ? "bg-yellow-100 text-yellow-700 hover:bg-yellow-200" : "bg-green-100 text-green-700 hover:bg-green-200"}`}
+                                      >
+                                        {seq.status === "active" ? "一時停止" : "再開"}
+                                      </button>
+                                      <button
+                                        onClick={async () => {
+                                          if (!confirm(`「${seq.name}」を削除しますか？`)) return;
+                                          await fetch("/api/line/step-sequences", {
+                                            method: "DELETE",
+                                            headers: { "Content-Type": "application/json" },
+                                            body: JSON.stringify({ id: seq.id }),
+                                          });
+                                          fetchStepSequences();
+                                        }}
+                                        className="px-2 py-1 text-xs text-red-500 hover:bg-red-50 rounded-md transition"
+                                      >
+                                        削除
+                                      </button>
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                        </tbody>
+                      </table>
+                    </div>
                   )}
                 </div>
               )}
+            </main>
+          </>
+        )}
+
+        {/* ============================================================ */}
+        {/* アカウント詳細: 送信済み（予約配信） */}
+        {/* ============================================================ */}
+        {mainView === "account-detail" && accountSubView === "sent" && (
+          <>
+            <header className="bg-white border-b border-gray-200 px-6 py-3 flex-shrink-0">
+              <h1 className="text-base font-bold text-gray-800">送信済み</h1>
+            </header>
+            <main className="flex-1 overflow-y-auto p-6">
+              <div className="max-w-6xl">
+                {stepSequences.filter((s) => s.kind === "schedule" && !!s.sent_at).length === 0 ? (
+                  <div className="bg-white rounded-lg border border-gray-200 p-16 text-center text-gray-400">
+                    <p className="text-lg mb-2">送信済みの配信がありません</p>
+                    <p className="text-sm">予約配信を送信すると、ここに履歴が残ります</p>
+                  </div>
+                ) : (
+                  <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-gray-200 text-gray-500 text-left bg-gray-50">
+                          <th className="px-5 py-3 font-medium w-20">媒体</th>
+                          <th className="px-5 py-3 font-medium">管理名称</th>
+                          <th className="px-5 py-3 font-medium w-44">送信日時</th>
+                          <th className="px-5 py-3 font-medium w-28">ステータス</th>
+                          <th className="px-5 py-3 font-medium w-24"></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {stepSequences
+                          .filter((s) => s.kind === "schedule" && !!s.sent_at)
+                          .sort((a, b) => {
+                            const at = a.sent_at ? new Date(a.sent_at).getTime() : 0;
+                            const bt = b.sent_at ? new Date(b.sent_at).getTime() : 0;
+                            return bt - at;
+                          })
+                          .map((seq) => {
+                            const sentStr = seq.sent_at
+                              ? new Date(seq.sent_at).toLocaleString("ja-JP", {
+                                  year: "numeric",
+                                  month: "2-digit",
+                                  day: "2-digit",
+                                  hour: "2-digit",
+                                  minute: "2-digit",
+                                })
+                              : "";
+                            return (
+                              <tr
+                                key={seq.id}
+                                onClick={() => openEditSchedule(seq)}
+                                className="border-b border-gray-100 hover:bg-gray-50 cursor-pointer"
+                              >
+                                <td className="px-5 py-3">
+                                  <span className="px-2 py-0.5 text-xs rounded font-medium bg-[#06C755]/10 text-[#06C755]">LINE</span>
+                                </td>
+                                <td className="px-5 py-3 text-gray-800">{seq.name}</td>
+                                <td className="px-5 py-3 text-gray-500">{sentStr}</td>
+                                <td className="px-5 py-3">
+                                  <span className="px-2 py-0.5 text-xs rounded-full font-medium bg-gray-200 text-gray-600">送信済み</span>
+                                </td>
+                                <td className="px-5 py-3" onClick={(e) => e.stopPropagation()}>
+                                  <div className="flex items-center justify-end gap-2">
+                                    <button
+                                      onClick={async () => {
+                                        if (!confirm(`「${seq.name}」を削除しますか？履歴が消えます。`)) return;
+                                        await fetch("/api/line/step-sequences", {
+                                          method: "DELETE",
+                                          headers: { "Content-Type": "application/json" },
+                                          body: JSON.stringify({ id: seq.id }),
+                                        });
+                                        fetchStepSequences();
+                                      }}
+                                      className="px-2 py-1 text-xs text-red-500 hover:bg-red-50 rounded-md transition"
+                                    >
+                                      削除
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
             </main>
           </>
         )}
@@ -4646,9 +5335,11 @@ export default function LineDashboard() {
         {/* ============================================================ */}
         {mainView === "account-detail" && accountSubView === "labels" && (
           <>
-            <header className="bg-white border-b border-gray-200 px-4 md:px-6 py-3 flex items-center justify-between flex-shrink-0">
+            <header className="bg-white border-b border-gray-200 px-4 md:px-6 py-3 flex-shrink-0">
               <h1 className="text-base font-bold text-gray-800">ラベル管理</h1>
-              <div className="flex items-center gap-2">
+            </header>
+            <main className="flex-1 overflow-y-auto p-4 md:p-6">
+              <div className="flex items-center gap-2 flex-wrap mb-4">
                 <button
                   onClick={() => { setNewLabelName(""); setShowAddLabel(true); }}
                   className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded-md transition"
@@ -4656,17 +5347,15 @@ export default function LineDashboard() {
                   {Icons.plus}
                   追加
                 </button>
-                <button className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white text-xs font-medium rounded-md transition">
+                <button className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white text-xs font-medium rounded-md transition">
                   {Icons.folder}
                   グループ管理
                 </button>
-                <button className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 bg-orange-500 hover:bg-orange-600 text-white text-xs font-medium rounded-md transition">
+                <button className="flex items-center gap-1.5 px-3 py-1.5 bg-orange-500 hover:bg-orange-600 text-white text-xs font-medium rounded-md transition">
                   {Icons.sort}
                   並び替え
                 </button>
               </div>
-            </header>
-            <main className="flex-1 overflow-y-auto p-4 md:p-6">
               {/* ラベル追加モーダル */}
               {showAddLabel && (
                 <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
@@ -4729,7 +5418,7 @@ export default function LineDashboard() {
                             </div>
                             <div className="flex items-center gap-2">
                               <button
-                                onClick={() => setExpandedLabelId(isExpanded ? null : label.id)}
+                                onClick={() => { setExpandedLabelId(isExpanded ? null : label.id); setLabelUserPage(1); setLabelUserSearch(""); }}
                                 className={`px-3 py-1.5 text-xs font-medium rounded-md transition ${
                                   isExpanded
                                     ? "bg-blue-100 text-blue-700 hover:bg-blue-200"
@@ -4749,48 +5438,93 @@ export default function LineDashboard() {
                           </div>
 
                           {/* 付与者リスト（展開時） */}
-                          {isExpanded && (
+                          {isExpanded && (() => {
+                            const searchedFollowers = labelUserSearch
+                              ? assignedFollowers.filter((f) => f.display_name?.toLowerCase().includes(labelUserSearch.toLowerCase()) || f.line_user_id.includes(labelUserSearch))
+                              : assignedFollowers;
+                            const totalLabelPages = Math.ceil(searchedFollowers.length / LABEL_USERS_PER_PAGE);
+                            const currentLabelPage = Math.min(labelUserPage, Math.max(1, totalLabelPages));
+                            const pagedLabelFollowers = searchedFollowers.slice((currentLabelPage - 1) * LABEL_USERS_PER_PAGE, currentLabelPage * LABEL_USERS_PER_PAGE);
+
+                            const getLabelPageNumbers = (): (number | "...")[] => {
+                              const pages: (number | "...")[] = [];
+                              if (totalLabelPages <= 7) {
+                                for (let i = 1; i <= totalLabelPages; i++) pages.push(i);
+                              } else {
+                                pages.push(1);
+                                if (currentLabelPage > 3) pages.push("...");
+                                const start = Math.max(2, currentLabelPage - 1);
+                                const end = Math.min(totalLabelPages - 1, currentLabelPage + 1);
+                                for (let i = start; i <= end; i++) pages.push(i);
+                                if (currentLabelPage < totalLabelPages - 2) pages.push("...");
+                                pages.push(totalLabelPages);
+                              }
+                              return pages;
+                            };
+
+                            return (
                             <div className="border-t border-gray-200">
-                              {/* 付与ボタン付きフォロワー一覧 */}
-                              <div className="px-5 py-3 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
-                                <span className="text-xs font-medium text-gray-500">
+                              <div className="px-5 py-3 bg-gray-50 border-b border-gray-200 flex items-center justify-between gap-3">
+                                <span className="text-xs font-medium text-gray-500 flex-shrink-0">
                                   付与済み: {assignedFollowers.length} 人
                                 </span>
-                                <span className="text-xs text-gray-400">
-                                  最新の付与者から表示
-                                </span>
+                                <div className="relative flex-1 max-w-xs">
+                                  <span className="absolute left-2.5 top-1/2 -translate-y-1/2">{Icons.search}</span>
+                                  <input
+                                    type="text"
+                                    value={labelUserSearch}
+                                    onChange={(e) => { setLabelUserSearch(e.target.value); setLabelUserPage(1); }}
+                                    placeholder="名前で検索"
+                                    className="w-full pl-8 pr-3 py-1.5 border border-gray-200 rounded-md text-xs bg-white focus:border-blue-400 focus:outline-none"
+                                  />
+                                </div>
                               </div>
 
-                              {assignedFollowers.length === 0 ? (
+                              {searchedFollowers.length === 0 ? (
                                 <div className="px-5 py-6 text-center text-sm text-gray-400">
-                                  このラベルが付与されたユーザーはいません
+                                  {labelUserSearch ? "該当するユーザーが見つかりません" : "このラベルが付与されたユーザーはいません"}
                                 </div>
                               ) : (
-                                <div className="divide-y divide-gray-100">
-                                  {assignedFollowers.map((f) => (
-                                    <div key={f.id} className="flex items-center justify-between px-5 py-2.5 hover:bg-gray-50">
-                                      <div className="flex items-center gap-3">
-                                        {f.picture_url ? (
-                                          <img src={f.picture_url} alt="" className="w-8 h-8 rounded-full object-cover" />
-                                        ) : (
-                                          <div className="w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center text-gray-400">
-                                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" /></svg>
+                                <>
+                                  <div className="divide-y divide-gray-100">
+                                    {pagedLabelFollowers.map((f) => (
+                                      <div key={f.id} className="flex items-center justify-between px-5 py-2.5 hover:bg-gray-50">
+                                        <div className="flex items-center gap-3">
+                                          {f.picture_url ? (
+                                            <img src={f.picture_url} alt="" className="w-8 h-8 rounded-full object-cover" />
+                                          ) : (
+                                            <div className="w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center text-gray-400">
+                                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" /></svg>
+                                            </div>
+                                          )}
+                                          <div>
+                                            <span className="text-sm text-gray-800">{f.display_name ?? "名前なし"}</span>
+                                            <span className="text-xs text-gray-400 ml-2">{fmtShort(f.followed_at)}</span>
                                           </div>
-                                        )}
-                                        <div>
-                                          <span className="text-sm text-gray-800">{f.display_name ?? "名前なし"}</span>
-                                          <span className="text-xs text-gray-400 ml-2">{fmtShort(f.followed_at)}</span>
                                         </div>
+                                        <button
+                                          onClick={() => toggleLabelUser(label.id, f.line_user_id)}
+                                          className="text-xs text-red-400 hover:text-red-600 hover:bg-red-50 px-2 py-1 rounded transition"
+                                        >
+                                          解除
+                                        </button>
                                       </div>
-                                      <button
-                                        onClick={() => toggleLabelUser(label.id, f.line_user_id)}
-                                        className="text-xs text-red-400 hover:text-red-600 hover:bg-red-50 px-2 py-1 rounded transition"
-                                      >
-                                        解除
-                                      </button>
+                                    ))}
+                                  </div>
+                                  {totalLabelPages > 1 && (
+                                    <div className="flex justify-end items-center gap-1 px-5 py-2.5 border-t border-gray-200">
+                                      {getLabelPageNumbers().map((p, idx) =>
+                                        p === "..." ? (
+                                          <span key={`dots-${idx}`} className="px-2 py-1 text-xs text-gray-400 select-none">...</span>
+                                        ) : p === currentLabelPage ? (
+                                          <span key={p} className="px-2.5 py-1 text-xs font-bold text-blue-600 border-b-2 border-blue-600 select-none">{p}</span>
+                                        ) : (
+                                          <button key={p} onClick={() => setLabelUserPage(p)} className="px-2.5 py-1 text-xs text-gray-600 hover:text-blue-600 hover:bg-blue-50 rounded transition">{p}</button>
+                                        )
+                                      )}
                                     </div>
-                                  ))}
-                                </div>
+                                  )}
+                                </>
                               )}
 
                               {/* 未付与のフォロワーを追加するセクション */}
@@ -4826,7 +5560,8 @@ export default function LineDashboard() {
                                 </>
                               )}
                             </div>
-                          )}
+                            );
+                          })()}
                         </div>
                       );
                     })}
@@ -4842,17 +5577,19 @@ export default function LineDashboard() {
         {/* ============================================================ */}
         {mainView === "account-detail" && accountSubView === "actions" && (
           <>
-            <header className="bg-white border-b border-gray-200 px-4 md:px-6 py-3 flex items-center justify-between flex-shrink-0">
+            <header className="bg-white border-b border-gray-200 px-4 md:px-6 py-3 flex-shrink-0">
               <h1 className="text-base font-bold text-gray-800">アクション管理</h1>
-              <button
-                onClick={openNewActionRule}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded-md transition"
-              >
-                {Icons.plus}
-                新規ルール
-              </button>
             </header>
             <main className="flex-1 overflow-y-auto p-4 md:p-6">
+              <div className="mb-4">
+                <button
+                  onClick={openNewActionRule}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded-md transition"
+                >
+                  {Icons.plus}
+                  新規追加
+                </button>
+              </div>
               <div className="max-w-5xl space-y-3">
                 {actionRules.length === 0 ? (
                   <div className="bg-white rounded-lg border border-gray-200 p-16 text-center text-gray-400">
@@ -4873,6 +5610,7 @@ export default function LineDashboard() {
                       label_remove: "ラベル削除",
                       move_sequence: "別シナリオへ移動",
                       webhook: "Webhook送信",
+                      cross_account_label: "別アカウントにラベル付与",
                     };
                     return (
                       <div key={rule.id} className="bg-white rounded-lg border border-gray-200 p-4">
@@ -5163,6 +5901,7 @@ export default function LineDashboard() {
                           <option value="label_remove">ラベル削除</option>
                           <option value="move_sequence">別シナリオへ移動</option>
                           <option value="webhook">Webhook送信</option>
+                          <option value="cross_account_label">別アカウントの同一UserIDにラベル付与</option>
                         </select>
 
                         {(actionForm.action_type === "start_sequence") && (
@@ -5242,6 +5981,45 @@ export default function LineDashboard() {
                           </div>
                         )}
 
+                        {actionForm.action_type === "cross_account_label" && (
+                          <div className="mt-2 space-y-2">
+                            <div>
+                              <label className="text-[10px] text-gray-400 block mb-1">対象アカウント（ラベルを付与する先）</label>
+                              <select
+                                value={(actionForm.action_config.target_account_id as string) ?? ""}
+                                onChange={(e) =>
+                                  setActionForm({
+                                    ...actionForm,
+                                    action_config: { ...actionForm.action_config, target_account_id: e.target.value },
+                                  })
+                                }
+                                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
+                              >
+                                <option value="">選択してください</option>
+                                {accounts.filter((a) => a.id !== selectedAccount?.id).map((a) => (
+                                  <option key={a.id} value={a.id}>{a.account_name ?? a.channel_id}</option>
+                                ))}
+                              </select>
+                            </div>
+                            <div>
+                              <label className="text-[10px] text-gray-400 block mb-1">付与するラベル名</label>
+                              <input
+                                type="text"
+                                value={(actionForm.action_config.label_name as string) ?? ""}
+                                onChange={(e) =>
+                                  setActionForm({
+                                    ...actionForm,
+                                    action_config: { ...actionForm.action_config, label_name: e.target.value },
+                                  })
+                                }
+                                placeholder="例: 音声相談LINE登録者"
+                                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
+                              />
+                              <p className="text-[10px] text-gray-400 mt-1">対象アカウントにラベルがなければ自動作成されます</p>
+                            </div>
+                          </div>
+                        )}
+
                         {actionForm.action_type === "webhook" && (
                           <div className="mt-2 space-y-2">
                             <div>
@@ -5300,21 +6078,23 @@ export default function LineDashboard() {
         {/* ============================================================ */}
         {mainView === "account-detail" && accountSubView === "templates" && (
           <>
-            <header className="bg-white border-b border-gray-200 px-4 md:px-6 py-3 flex items-center justify-between flex-shrink-0">
+            <header className="bg-white border-b border-gray-200 px-4 md:px-6 py-3 flex-shrink-0">
               <h1 className="text-base font-bold text-gray-800">テンプレート管理</h1>
-              <button
-                onClick={() => {
-                  setEditingTemplate(null);
-                  setTemplateForm({ name: "", messages: [emptyMessage()] as BroadcastMessage[] });
-                  setShowTemplateModal(true);
-                }}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded-md transition"
-              >
-                {Icons.plus}
-                新規作成
-              </button>
             </header>
             <main className="flex-1 overflow-y-auto p-4 md:p-6">
+              <div className="mb-4">
+                <button
+                  onClick={() => {
+                    setEditingTemplate(null);
+                    setTemplateForm({ name: "", messages: [emptyMessage()] as BroadcastMessage[] });
+                    setShowTemplateModal(true);
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded-md transition"
+                >
+                  {Icons.plus}
+                  新規追加
+                </button>
+              </div>
               {/* テンプレート作成/編集モーダル */}
               {showTemplateModal && (
                 <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 overflow-y-auto">
@@ -5478,12 +6258,12 @@ export default function LineDashboard() {
         )}
 
         {/* ============================================================ */}
-        {/* アカウント詳細: カスタムフィールド */}
+        {/* アカウント詳細: 独自置き換え文字 */}
         {/* ============================================================ */}
         {mainView === "account-detail" && accountSubView === "custom-fields" && (
           <>
             <header className="bg-white border-b border-gray-200 px-4 md:px-6 py-3 flex items-center justify-between flex-shrink-0">
-              <h1 className="text-base font-bold text-gray-800">カスタムフィールド管理</h1>
+              <h1 className="text-base font-bold text-gray-800">独自置き換え文字管理</h1>
               <button
                 onClick={() => { setCustomFieldForm({ field_key: "", field_label: "", field_type: "text" }); setShowCustomFieldModal(true); }}
                 className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded-md transition"
@@ -5496,7 +6276,7 @@ export default function LineDashboard() {
                 <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
                   <div className="bg-white rounded-xl shadow-xl w-full max-w-md mx-4">
                     <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
-                      <h3 className="font-bold text-gray-800">カスタムフィールド追加</h3>
+                      <h3 className="font-bold text-gray-800">独自置き換え文字追加</h3>
                       <button onClick={() => setShowCustomFieldModal(false)} className="text-gray-400 hover:text-gray-600">{Icons.close}</button>
                     </div>
                     <div className="p-5 space-y-3">
@@ -5574,7 +6354,7 @@ export default function LineDashboard() {
                 </div>
                 {customFields.length === 0 ? (
                   <div className="bg-white rounded-lg border border-gray-200 p-16 text-center text-gray-400">
-                    <p className="text-lg mb-2">カスタムフィールドがありません</p>
+                    <p className="text-lg mb-2">独自置き換え文字がありません</p>
                     <p className="text-sm">上のボタンから追加してください</p>
                   </div>
                 ) : (
@@ -5624,19 +6404,21 @@ export default function LineDashboard() {
         {/* ============================================================ */}
         {mainView === "account-detail" && accountSubView === "reminders" && (
           <>
-            <header className="bg-white border-b border-gray-200 px-4 md:px-6 py-3 flex items-center justify-between flex-shrink-0">
+            <header className="bg-white border-b border-gray-200 px-4 md:px-6 py-3 flex-shrink-0">
               <h1 className="text-base font-bold text-gray-800">リマインダ配信</h1>
-              <button
-                onClick={() => {
-                  setReminderForm({ name: "", base_date_field: "custom", messages: [{ offset_days: -1, offset_time: "09:00", body: "" }] });
-                  setShowReminderModal(true);
-                }}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded-md transition"
-              >
-                {Icons.plus} 新規リマインダ
-              </button>
             </header>
             <main className="flex-1 overflow-y-auto p-4 md:p-6">
+              <div className="mb-4">
+                <button
+                  onClick={() => {
+                    setReminderForm({ name: "", base_date_field: "custom", messages: [{ offset_days: -1, offset_time: "09:00", body: "" }] });
+                    setShowReminderModal(true);
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded-md transition"
+                >
+                  {Icons.plus} 新規追加
+                </button>
+              </div>
               {showReminderModal && (
                 <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
                   <div className="bg-white rounded-xl shadow-xl w-full max-w-lg mx-4">
@@ -5747,6 +6529,703 @@ export default function LineDashboard() {
         )}
 
         {/* ============================================================ */}
+        {/* アカウント詳細: アンケート */}
+        {/* ============================================================ */}
+        {mainView === "account-detail" && accountSubView === "surveys" && (
+          <>
+            <header className="bg-white border-b border-gray-200 px-4 md:px-6 py-3 flex-shrink-0">
+              <h1 className="text-base font-bold text-gray-800">アンケート</h1>
+            </header>
+            <main className="flex-1 overflow-y-auto p-4 md:p-6">
+              <div className="mb-4">
+                <button
+                  onClick={() => {
+                    setSurveyForm({ name: "", description: "", questions: [{ question_text: "", question_type: "text", options: [], is_required: true, save_to_field_id: "" }] });
+                    setShowSurveyModal(true);
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded-md transition"
+                >
+                  {Icons.plus}
+                  新規作成
+                </button>
+              </div>
+
+              {surveys.length === 0 ? (
+                <div className="bg-white rounded-lg border border-gray-200 p-16 text-center text-gray-400">
+                  <p className="text-lg mb-2">アンケートがありません</p>
+                  <p className="text-sm">「新規作成」からアンケートを作成してください</p>
+                </div>
+              ) : (
+                <div className="space-y-3 max-w-4xl">
+                  {surveys.map((s) => (
+                    <div key={s.id} className="bg-white rounded-lg border border-gray-200 p-4">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <h3 className="text-sm font-bold text-gray-800">{s.name}</h3>
+                            <span className={`px-2 py-0.5 text-[10px] rounded-full ${s.status === "active" ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"}`}>
+                              {s.status === "active" ? "公開中" : "非公開"}
+                            </span>
+                            <span className="text-xs text-gray-400">{s.response_count}件回答</span>
+                          </div>
+                          {s.description && <p className="text-xs text-gray-500 mt-1">{s.description}</p>}
+                          <div className="text-xs text-gray-400 mt-1">質問数: {s.questions.length}</div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => {
+                              const url = `${window.location.origin}/line/survey/${s.id}?uid={line_user_id}`;
+                              navigator.clipboard.writeText(url);
+                              alert(`アンケートURLをコピーしました\n\n${url}\n\nステップ配信のメッセージに貼り付けてください。\n{line_user_id}は自動で置換されます。`);
+                            }}
+                            className="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-medium rounded-md transition"
+                          >
+                            URL取得
+                          </button>
+                          <button
+                            onClick={async () => {
+                              if (!confirm("削除しますか？")) return;
+                              await fetch("/api/line/surveys", {
+                                method: "DELETE",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({ id: s.id }),
+                              });
+                              fetchSurveys();
+                            }}
+                            className="px-3 py-1.5 bg-red-500 hover:bg-red-600 text-white text-xs font-medium rounded-md transition"
+                          >
+                            削除
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* アンケート作成モーダル */}
+              {showSurveyModal && (
+                <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+                  <div className="bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+                    <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
+                      <h3 className="font-bold text-gray-800">アンケート新規作成</h3>
+                      <button onClick={() => setShowSurveyModal(false)} className="text-gray-400 hover:text-gray-600">{Icons.close}</button>
+                    </div>
+                    <div className="p-5 space-y-4">
+                      <div>
+                        <label className="text-xs text-gray-500 block mb-1 font-medium">アンケート名 <span className="text-red-500">*</span></label>
+                        <input type="text" value={surveyForm.name} onChange={(e) => setSurveyForm({ ...surveyForm, name: e.target.value })} placeholder="例: 初回ヒアリング" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400" />
+                      </div>
+                      <div>
+                        <label className="text-xs text-gray-500 block mb-1 font-medium">説明（任意）</label>
+                        <input type="text" value={surveyForm.description} onChange={(e) => setSurveyForm({ ...surveyForm, description: e.target.value })} placeholder="例: お客様の状況を確認するアンケートです" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400" />
+                      </div>
+
+                      <div>
+                        <div className="flex items-center justify-between mb-2">
+                          <label className="text-xs text-gray-500 font-medium">質問項目</label>
+                          <button
+                            onClick={() => setSurveyForm({ ...surveyForm, questions: [...surveyForm.questions, { question_text: "", question_type: "text", options: [], is_required: true, save_to_field_id: "" }] })}
+                            className="text-xs text-blue-600 hover:text-blue-800"
+                          >
+                            + 質問を追加
+                          </button>
+                        </div>
+                        <div className="space-y-3">
+                          {surveyForm.questions.map((q, idx) => (
+                            <div key={idx} className="border border-gray-200 rounded-lg p-3 space-y-2">
+                              <div className="flex items-center justify-between">
+                                <span className="text-xs font-bold text-gray-600">質問 {idx + 1}</span>
+                                {surveyForm.questions.length > 1 && (
+                                  <button onClick={() => setSurveyForm({ ...surveyForm, questions: surveyForm.questions.filter((_, i) => i !== idx) })} className="text-xs text-red-400 hover:text-red-600">削除</button>
+                                )}
+                              </div>
+                              <input type="text" value={q.question_text} onChange={(e) => { const qs = [...surveyForm.questions]; qs[idx] = { ...qs[idx], question_text: e.target.value }; setSurveyForm({ ...surveyForm, questions: qs }); }} placeholder="質問内容" className="w-full border border-gray-200 rounded-md px-3 py-1.5 text-sm focus:border-blue-400 focus:outline-none" />
+                              <div className="flex items-center gap-2">
+                                <select value={q.question_type} onChange={(e) => { const qs = [...surveyForm.questions]; qs[idx] = { ...qs[idx], question_type: e.target.value }; setSurveyForm({ ...surveyForm, questions: qs }); }} className="border border-gray-200 rounded-md px-2 py-1 text-xs">
+                                  <option value="text">テキスト入力</option>
+                                  <option value="email">メールアドレス</option>
+                                  <option value="phone">電話番号</option>
+                                  <option value="number">数値</option>
+                                  <option value="select">単一選択</option>
+                                  <option value="multi_select">複数選択</option>
+                                </select>
+                                <label className="flex items-center gap-1 text-xs text-gray-500 cursor-pointer">
+                                  <input type="checkbox" checked={q.is_required} onChange={(e) => { const qs = [...surveyForm.questions]; qs[idx] = { ...qs[idx], is_required: e.target.checked }; setSurveyForm({ ...surveyForm, questions: qs }); }} className="accent-blue-600" />
+                                  必須
+                                </label>
+                                <select value={q.save_to_field_id} onChange={(e) => { const qs = [...surveyForm.questions]; qs[idx] = { ...qs[idx], save_to_field_id: e.target.value }; setSurveyForm({ ...surveyForm, questions: qs }); }} className="border border-gray-200 rounded-md px-2 py-1 text-xs flex-1">
+                                  <option value="">保存先なし</option>
+                                  {customFields.map((cf) => (
+                                    <option key={cf.id} value={cf.id}>{cf.field_label}</option>
+                                  ))}
+                                </select>
+                              </div>
+                              {(q.question_type === "select" || q.question_type === "multi_select") && (
+                                <div className="space-y-1">
+                                  <span className="text-[10px] text-gray-400">選択肢</span>
+                                  {q.options.map((opt, oi) => (
+                                    <div key={oi} className="flex items-center gap-1">
+                                      <input type="text" value={opt.label} onChange={(e) => { const qs = [...surveyForm.questions]; const opts = [...qs[idx].options]; opts[oi] = { label: e.target.value, value: e.target.value }; qs[idx] = { ...qs[idx], options: opts }; setSurveyForm({ ...surveyForm, questions: qs }); }} placeholder={`選択肢${oi + 1}`} className="flex-1 border border-gray-200 rounded px-2 py-1 text-xs" />
+                                      <button onClick={() => { const qs = [...surveyForm.questions]; qs[idx] = { ...qs[idx], options: qs[idx].options.filter((_, i) => i !== oi) }; setSurveyForm({ ...surveyForm, questions: qs }); }} className="text-red-400 text-xs">x</button>
+                                    </div>
+                                  ))}
+                                  <button onClick={() => { const qs = [...surveyForm.questions]; qs[idx] = { ...qs[idx], options: [...qs[idx].options, { label: "", value: "" }] }; setSurveyForm({ ...surveyForm, questions: qs }); }} className="text-xs text-blue-600 hover:text-blue-800">+ 選択肢追加</button>
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex justify-end gap-2 px-5 py-4 border-t border-gray-200">
+                      <button onClick={() => setShowSurveyModal(false)} className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition">キャンセル</button>
+                      <button
+                        onClick={async () => {
+                          if (!surveyForm.name.trim()) { alert("アンケート名を入力してください"); return; }
+                          if (!selectedAccount) return;
+                          const res = await fetch("/api/line/surveys", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                              account_id: selectedAccount.id,
+                              name: surveyForm.name.trim(),
+                              description: surveyForm.description.trim() || null,
+                              questions: surveyForm.questions.filter((q) => q.question_text.trim()).map((q) => ({
+                                ...q,
+                                save_to_field_id: q.save_to_field_id || null,
+                              })),
+                            }),
+                          });
+                          if (res.ok) { setShowSurveyModal(false); fetchSurveys(); }
+                          else { const d = await res.json().catch(() => ({})); alert(d.error ?? "作成失敗"); }
+                        }}
+                        className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition"
+                      >
+                        作成
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </main>
+          </>
+        )}
+
+        {/* ============================================================ */}
+        {/* アカウント詳細: 登録フォーム */}
+        {/* ============================================================ */}
+        {mainView === "account-detail" && accountSubView === "reg-forms" && (
+          <>
+            <header className="bg-white border-b border-gray-200 px-4 md:px-6 py-3 flex-shrink-0">
+              <h1 className="text-base font-bold text-gray-800">登録フォーム</h1>
+            </header>
+            <main className="flex-1 overflow-y-auto p-4 md:p-6">
+              <div className="mb-4">
+                <button
+                  onClick={() => {
+                    setRegFormForm({ name: "", description: "", fields: [{ field_label: "メールアドレス", field_type: "email", options: [], is_required: true, placeholder: "example@email.com", save_to_field_id: "" }] });
+                    setShowRegFormModal(true);
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded-md transition"
+                >
+                  {Icons.plus} 新規作成
+                </button>
+              </div>
+              {regForms.length === 0 ? (
+                <div className="bg-white rounded-lg border border-gray-200 p-16 text-center text-gray-400">
+                  <p className="text-lg mb-2">登録フォームがありません</p>
+                  <p className="text-sm">「新規作成」からフォームを作成してください</p>
+                </div>
+              ) : (
+                <div className="space-y-3 max-w-4xl">
+                  {regForms.map((f) => (
+                    <div key={f.id} className="bg-white rounded-lg border border-gray-200 p-4 flex items-center justify-between">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h3 className="text-sm font-bold text-gray-800">{f.name}</h3>
+                          <span className={`px-2 py-0.5 text-[10px] rounded-full ${f.status === "active" ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"}`}>
+                            {f.status === "active" ? "公開中" : "非公開"}
+                          </span>
+                          <span className="text-xs text-gray-400">{f.submission_count}件送信</span>
+                        </div>
+                        <div className="text-xs text-gray-400 mt-1">項目数: {f.fields.length}</div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => {
+                            const url = `${window.location.origin}/line/form/${f.id}?uid={line_user_id}`;
+                            navigator.clipboard.writeText(url);
+                            alert(`フォームURLをコピーしました\n\n${url}`);
+                          }}
+                          className="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-medium rounded-md transition"
+                        >URL取得</button>
+                        <button
+                          onClick={async () => { if (!confirm("削除しますか？")) return; await fetch("/api/line/registration-forms", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: f.id }) }); fetchRegForms(); }}
+                          className="px-3 py-1.5 bg-red-500 hover:bg-red-600 text-white text-xs font-medium rounded-md transition"
+                        >削除</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {showRegFormModal && (
+                <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+                  <div className="bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+                    <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
+                      <h3 className="font-bold text-gray-800">登録フォーム新規作成</h3>
+                      <button onClick={() => setShowRegFormModal(false)} className="text-gray-400 hover:text-gray-600">{Icons.close}</button>
+                    </div>
+                    <div className="p-5 space-y-4">
+                      <div>
+                        <label className="text-xs text-gray-500 block mb-1 font-medium">フォーム名 <span className="text-red-500">*</span></label>
+                        <input type="text" value={regFormForm.name} onChange={(e) => setRegFormForm({ ...regFormForm, name: e.target.value })} placeholder="例: メールアドレス登録" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400" />
+                      </div>
+                      <div>
+                        <label className="text-xs text-gray-500 block mb-1 font-medium">説明（任意）</label>
+                        <input type="text" value={regFormForm.description} onChange={(e) => setRegFormForm({ ...regFormForm, description: e.target.value })} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400" />
+                      </div>
+                      <div>
+                        <div className="flex items-center justify-between mb-2">
+                          <label className="text-xs text-gray-500 font-medium">フォーム項目</label>
+                          <button onClick={() => setRegFormForm({ ...regFormForm, fields: [...regFormForm.fields, { field_label: "", field_type: "text", options: [], is_required: true, placeholder: "", save_to_field_id: "" }] })} className="text-xs text-blue-600 hover:text-blue-800">+ 項目追加</button>
+                        </div>
+                        <div className="space-y-3">
+                          {regFormForm.fields.map((f, idx) => (
+                            <div key={idx} className="border border-gray-200 rounded-lg p-3 space-y-2">
+                              <div className="flex items-center justify-between">
+                                <span className="text-xs font-bold text-gray-600">項目 {idx + 1}</span>
+                                {regFormForm.fields.length > 1 && <button onClick={() => setRegFormForm({ ...regFormForm, fields: regFormForm.fields.filter((_, i) => i !== idx) })} className="text-xs text-red-400">削除</button>}
+                              </div>
+                              <input type="text" value={f.field_label} onChange={(e) => { const fs = [...regFormForm.fields]; fs[idx] = { ...fs[idx], field_label: e.target.value }; setRegFormForm({ ...regFormForm, fields: fs }); }} placeholder="項目名" className="w-full border border-gray-200 rounded-md px-3 py-1.5 text-sm focus:border-blue-400 focus:outline-none" />
+                              <div className="flex items-center gap-2">
+                                <select value={f.field_type} onChange={(e) => { const fs = [...regFormForm.fields]; fs[idx] = { ...fs[idx], field_type: e.target.value }; setRegFormForm({ ...regFormForm, fields: fs }); }} className="border border-gray-200 rounded-md px-2 py-1 text-xs">
+                                  <option value="text">テキスト</option>
+                                  <option value="email">メールアドレス</option>
+                                  <option value="phone">電話番号</option>
+                                  <option value="number">数値</option>
+                                  <option value="textarea">複数行テキスト</option>
+                                  <option value="select">プルダウン</option>
+                                  <option value="radio">ラジオボタン</option>
+                                  <option value="checkbox">チェックボックス</option>
+                                  <option value="date">日付</option>
+                                </select>
+                                <label className="flex items-center gap-1 text-xs text-gray-500 cursor-pointer">
+                                  <input type="checkbox" checked={f.is_required} onChange={(e) => { const fs = [...regFormForm.fields]; fs[idx] = { ...fs[idx], is_required: e.target.checked }; setRegFormForm({ ...regFormForm, fields: fs }); }} className="accent-blue-600" />
+                                  必須
+                                </label>
+                                <select value={f.save_to_field_id} onChange={(e) => { const fs = [...regFormForm.fields]; fs[idx] = { ...fs[idx], save_to_field_id: e.target.value }; setRegFormForm({ ...regFormForm, fields: fs }); }} className="border border-gray-200 rounded-md px-2 py-1 text-xs flex-1">
+                                  <option value="">保存先なし</option>
+                                  {customFields.map((cf) => <option key={cf.id} value={cf.id}>{cf.field_label}</option>)}
+                                </select>
+                              </div>
+                              {(f.field_type === "select" || f.field_type === "radio" || f.field_type === "checkbox") && (
+                                <div className="space-y-1">
+                                  <span className="text-[10px] text-gray-400">選択肢</span>
+                                  {f.options.map((o, oi) => (
+                                    <div key={oi} className="flex items-center gap-1">
+                                      <input type="text" value={o.label} onChange={(e) => { const fs = [...regFormForm.fields]; const opts = [...fs[idx].options]; opts[oi] = { label: e.target.value, value: e.target.value }; fs[idx] = { ...fs[idx], options: opts }; setRegFormForm({ ...regFormForm, fields: fs }); }} placeholder={`選択肢${oi+1}`} className="flex-1 border border-gray-200 rounded px-2 py-1 text-xs" />
+                                      <button onClick={() => { const fs = [...regFormForm.fields]; fs[idx] = { ...fs[idx], options: fs[idx].options.filter((_,i) => i !== oi) }; setRegFormForm({ ...regFormForm, fields: fs }); }} className="text-red-400 text-xs">x</button>
+                                    </div>
+                                  ))}
+                                  <button onClick={() => { const fs = [...regFormForm.fields]; fs[idx] = { ...fs[idx], options: [...fs[idx].options, { label: "", value: "" }] }; setRegFormForm({ ...regFormForm, fields: fs }); }} className="text-xs text-blue-600">+ 選択肢追加</button>
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex justify-end gap-2 px-5 py-4 border-t border-gray-200">
+                      <button onClick={() => setShowRegFormModal(false)} className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition">キャンセル</button>
+                      <button
+                        onClick={async () => {
+                          if (!regFormForm.name.trim()) { alert("フォーム名を入力してください"); return; }
+                          if (!selectedAccount) return;
+                          const res = await fetch("/api/line/registration-forms", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                              account_id: selectedAccount.id,
+                              name: regFormForm.name.trim(),
+                              description: regFormForm.description.trim() || null,
+                              fields: regFormForm.fields.filter((f) => f.field_label.trim()).map((f) => ({ ...f, save_to_field_id: f.save_to_field_id || null })),
+                            }),
+                          });
+                          if (res.ok) { setShowRegFormModal(false); fetchRegForms(); }
+                          else { const d = await res.json().catch(() => ({})); alert(d.error ?? "作成失敗"); }
+                        }}
+                        className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition"
+                      >作成</button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </main>
+          </>
+        )}
+
+        {/* ============================================================ */}
+        {/* アカウント詳細: レポート */}
+        {/* ============================================================ */}
+        {mainView === "account-detail" && accountSubView === "reports" && (
+          <>
+            <header className="bg-white border-b border-gray-200 px-4 md:px-6 py-3 flex items-center justify-between flex-shrink-0">
+              <h1 className="text-base font-bold text-gray-800">レポート</h1>
+              <button
+                onClick={async () => {
+                  if (!project?.id) return;
+                  setReportGenerating(true);
+                  try {
+                    const res = await fetch("/api/line/reports", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ project_id: project.id }),
+                    });
+                    if (res.ok) {
+                      alert("レポート生成完了");
+                      fetchReports();
+                    } else {
+                      const d = await res.json().catch(() => ({}));
+                      alert(d.error ?? "生成失敗");
+                    }
+                  } catch { alert("生成エラー"); }
+                  finally { setReportGenerating(false); }
+                }}
+                disabled={reportGenerating}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs font-medium rounded-md transition"
+              >
+                {reportGenerating ? "生成中..." : "先月のレポートを生成"}
+              </button>
+            </header>
+            <main className="flex-1 overflow-y-auto p-4 md:p-6">
+              {reports.length === 0 ? (
+                <div className="bg-white rounded-lg border border-gray-200 p-16 text-center text-gray-400">
+                  <p className="text-lg mb-2">レポートがありません</p>
+                  <p className="text-sm">毎月1日に自動生成されます。手動で生成することもできます。</p>
+                </div>
+              ) : (
+                <div className="space-y-4 max-w-5xl">
+                  {reports.map((r) => (
+                    <div key={r.id} className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+                      <div className="px-5 py-3 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <h3 className="text-sm font-bold text-gray-800">{r.report_month} 月次レポート</h3>
+                          <span className={`px-2 py-0.5 text-[10px] rounded-full ${r.status === "sent" ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"}`}>
+                            {r.status === "sent" ? "送信済み" : "生成済み"}
+                          </span>
+                        </div>
+                        <span className="text-xs text-gray-400">{new Date(r.created_at).toLocaleString("ja-JP")}</span>
+                      </div>
+                      <div className="p-5 grid grid-cols-2 md:grid-cols-4 gap-4">
+                        <div className="bg-blue-50 rounded-lg p-3 text-center">
+                          <div className="text-2xl font-bold text-blue-700">{r.report_data.delivery.total}</div>
+                          <div className="text-xs text-blue-600">配信数</div>
+                        </div>
+                        <div className="bg-green-50 rounded-lg p-3 text-center">
+                          <div className="text-2xl font-bold text-green-700">{r.report_data.new_followers.total}</div>
+                          <div className="text-xs text-green-600">友達追加</div>
+                        </div>
+                        <div className="bg-purple-50 rounded-lg p-3 text-center">
+                          <div className="text-2xl font-bold text-purple-700">{Object.values(r.report_data.closer_stats).reduce((s, c) => s + c.seiyaku, 0)}</div>
+                          <div className="text-xs text-purple-600">成約数</div>
+                        </div>
+                        <div className="bg-gray-50 rounded-lg p-3 text-center">
+                          <div className="text-2xl font-bold text-gray-700">{Object.values(r.report_data.closer_stats).reduce((s, c) => s + c.shicchu, 0)}</div>
+                          <div className="text-xs text-gray-600">失注数</div>
+                        </div>
+                      </div>
+                      {/* 流入経路ランキング */}
+                      {r.report_data.new_followers.by_inflow.length > 0 && (
+                        <div className="px-5 pb-4">
+                          <h4 className="text-xs font-bold text-gray-600 mb-2">流入経路ランキング</h4>
+                          <div className="space-y-1">
+                            {r.report_data.new_followers.by_inflow.slice(0, 5).map((ir, idx) => (
+                              <div key={idx} className="flex items-center justify-between text-xs">
+                                <span className="text-gray-700">{idx + 1}. {ir.name}</span>
+                                <span className="font-medium text-gray-800">{ir.count}人</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      {/* 日別 × 流入経路 */}
+                      {r.report_data.new_followers.daily && r.report_data.new_followers.daily.length > 0 && (
+                        <div className="px-5 pb-4">
+                          <h4 className="text-xs font-bold text-gray-600 mb-2">日別の流入経路</h4>
+                          <div className="border border-gray-200 rounded-md overflow-hidden">
+                            <table className="w-full text-xs">
+                              <thead>
+                                <tr className="bg-gray-50 text-gray-500 text-left border-b border-gray-200">
+                                  <th className="px-3 py-2 font-medium w-28">日付</th>
+                                  <th className="px-3 py-2 font-medium w-16 text-right">合計</th>
+                                  <th className="px-3 py-2 font-medium">内訳（流入経路）</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {r.report_data.new_followers.daily.map((d) => (
+                                  <tr key={d.date} className="border-b border-gray-100 last:border-b-0">
+                                    <td className="px-3 py-2 text-gray-700 font-mono">{d.date}</td>
+                                    <td className="px-3 py-2 text-right font-medium text-gray-800">{d.total}人</td>
+                                    <td className="px-3 py-2">
+                                      <div className="flex flex-wrap gap-1">
+                                        {d.routes.map((route, idx) => (
+                                          <span key={idx} className="px-1.5 py-0.5 bg-blue-50 text-blue-700 rounded text-[11px]">
+                                            {route.name}: {route.count}
+                                          </span>
+                                        ))}
+                                      </div>
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      )}
+                      {/* ラベル別 */}
+                      {r.report_data.label_stats.length > 0 && (
+                        <div className="px-5 pb-4">
+                          <h4 className="text-xs font-bold text-gray-600 mb-2">ラベル別フォロワー数</h4>
+                          <div className="flex flex-wrap gap-2">
+                            {r.report_data.label_stats.slice(0, 10).map((ls, idx) => (
+                              <span key={idx} className="px-2 py-1 text-xs bg-gray-100 text-gray-700 rounded">
+                                {ls.name}: {ls.count}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </main>
+          </>
+        )}
+
+        {/* ============================================================ */}
+        {/* アカウント詳細: 掘り起こし配信 */}
+        {/* ============================================================ */}
+        {mainView === "account-detail" && accountSubView === "reengagement" && (
+          <>
+            <header className="bg-white border-b border-gray-200 px-4 md:px-6 py-3 flex items-center justify-between flex-shrink-0">
+              <h1 className="text-base font-bold text-gray-800">掘り起こし配信</h1>
+              <button
+                onClick={() => {
+                  setReengagementForm({ name: "", condition: "all", targetCondition: emptyDeliveryCondition, messages: [emptyMessage()] as BroadcastMessage[] });
+                  setReengagementPreview(null);
+                  setShowReengagementModal(true);
+                }}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded-md transition"
+              >
+                {Icons.plus}
+                新規作成
+              </button>
+            </header>
+            <main className="flex-1 overflow-y-auto p-4 md:p-6">
+              {reengagements.length === 0 ? (
+                <div className="bg-white rounded-lg border border-gray-200 p-16 text-center text-gray-400">
+                  <p className="text-lg mb-2">掘り起こし配信がありません</p>
+                  <p className="text-sm">「新規作成」から配信を作成してください</p>
+                </div>
+              ) : (
+                <div className="space-y-3 max-w-4xl">
+                  {reengagements.map((b) => (
+                    <div key={b.id} className="bg-white rounded-lg border border-gray-200 p-4 flex items-center justify-between">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h3 className="text-sm font-bold text-gray-800">{b.name}</h3>
+                          <span className={`px-2 py-0.5 text-[10px] rounded-full ${b.status === "sent" ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"}`}>
+                            {b.status === "sent" ? "送信済み" : "下書き"}
+                          </span>
+                        </div>
+                        <div className="text-xs text-gray-400 mt-1">
+                          {b.sent_at ? `送信: ${new Date(b.sent_at).toLocaleString("ja-JP")} (${b.sent_count}人)` : `作成: ${new Date(b.created_at).toLocaleString("ja-JP")}`}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {b.status !== "sent" && (
+                          <button
+                            onClick={async () => {
+                              if (!confirm(`「${b.name}」を送信しますか？\n対象者に即座に配信されます。`)) return;
+                              setReengagementSending(true);
+                              try {
+                                const res = await fetch("/api/line/reengagement", {
+                                  method: "PUT",
+                                  headers: { "Content-Type": "application/json" },
+                                  body: JSON.stringify({ id: b.id, action: "send" }),
+                                });
+                                const data = await res.json();
+                                if (res.ok) {
+                                  alert(`送信完了: ${data.sent_count}人に配信しました`);
+                                  fetchReengagements();
+                                } else {
+                                  alert(`送信失敗: ${data.error}`);
+                                }
+                              } catch (e) {
+                                alert(`送信エラー: ${(e as Error).message}`);
+                              } finally {
+                                setReengagementSending(false);
+                              }
+                            }}
+                            disabled={reengagementSending}
+                            className="px-3 py-1.5 bg-[#06C755] hover:bg-[#05a648] text-white text-xs font-medium rounded-md transition disabled:opacity-50"
+                          >
+                            {reengagementSending ? "送信中..." : "送信"}
+                          </button>
+                        )}
+                        <button
+                          onClick={async () => {
+                            if (!confirm("削除しますか？")) return;
+                            await fetch("/api/line/reengagement", {
+                              method: "DELETE",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({ id: b.id }),
+                            });
+                            fetchReengagements();
+                          }}
+                          className="px-3 py-1.5 bg-red-500 hover:bg-red-600 text-white text-xs font-medium rounded-md transition"
+                        >
+                          削除
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* 掘り起こし配信作成モーダル */}
+              {showReengagementModal && (
+                <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+                  <div className="bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+                    <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
+                      <h3 className="font-bold text-gray-800">掘り起こし配信 新規作成</h3>
+                      <button onClick={() => setShowReengagementModal(false)} className="text-gray-400 hover:text-gray-600">{Icons.close}</button>
+                    </div>
+                    <div className="p-5 space-y-4">
+                      <div>
+                        <label className="text-xs text-gray-500 block mb-1 font-medium">配信名 <span className="text-red-500">*</span></label>
+                        <input
+                          type="text"
+                          value={reengagementForm.name}
+                          onChange={(e) => setReengagementForm({ ...reengagementForm, name: e.target.value })}
+                          placeholder="例: 4月掘り起こし"
+                          className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                        />
+                      </div>
+
+                      {/* 配信条件 */}
+                      {renderDeliveryConditionSection(
+                        { ...emptyBroadcast, name: reengagementForm.name, condition: reengagementForm.condition, targetCondition: reengagementForm.targetCondition, messages: reengagementForm.messages },
+                        (f) => setReengagementForm({ ...reengagementForm, condition: f.condition, targetCondition: f.targetCondition }),
+                        "reengagement",
+                      )}
+
+                      {/* 対象者プレビュー */}
+                      <div className="px-5 py-3 border-b border-gray-200">
+                        <button
+                          onClick={() => {
+                            const cond = reengagementForm.condition === "filtered" ? reengagementForm.targetCondition : { ...emptyDeliveryCondition, mode: "all" as const };
+                            const matched = followers.filter((f) => {
+                              const userLabelIds = labels.filter((l) => l.assigned_users.includes(f.line_user_id)).map((l) => l.id);
+                              const lite: FollowerLite = {
+                                id: f.id,
+                                line_user_id: f.line_user_id,
+                                display_name: f.display_name,
+                                followed_at: f.followed_at,
+                                inflow_route_id: undefined,
+                                label_ids: userLabelIds,
+                              };
+                              return evalCondition(cond, lite);
+                            });
+                            setReengagementPreview(matched);
+                          }}
+                          className="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-medium rounded-md transition"
+                        >
+                          対象者プレビュー
+                        </button>
+                        {reengagementPreview !== null && (
+                          <div className="mt-2">
+                            <p className="text-xs text-gray-600 mb-1">対象者: <span className="font-bold">{reengagementPreview.length}人</span></p>
+                            {reengagementPreview.length > 0 && (
+                              <div className="max-h-32 overflow-y-auto border border-gray-200 rounded-md">
+                                {reengagementPreview.slice(0, 50).map((f) => (
+                                  <div key={f.id} className="px-3 py-1.5 text-xs text-gray-700 border-b border-gray-100 last:border-b-0">
+                                    {f.display_name ?? f.line_user_id.slice(0, 12)}
+                                  </div>
+                                ))}
+                                {reengagementPreview.length > 50 && (
+                                  <div className="px-3 py-1.5 text-xs text-gray-400">...他 {reengagementPreview.length - 50} 人</div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* メッセージ本文 */}
+                      <div>
+                        <label className="text-xs text-gray-500 block mb-1 font-medium">メッセージ本文</label>
+                        <textarea
+                          value={reengagementForm.messages[0]?.body ?? ""}
+                          onChange={(e) => {
+                            const msgs = [...reengagementForm.messages];
+                            msgs[0] = { ...msgs[0], body: e.target.value };
+                            setReengagementForm({ ...reengagementForm, messages: msgs });
+                          }}
+                          rows={5}
+                          placeholder="配信メッセージを入力..."
+                          className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm resize-none focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                        />
+                      </div>
+                    </div>
+                    <div className="flex justify-end gap-2 px-5 py-4 border-t border-gray-200">
+                      <button onClick={() => setShowReengagementModal(false)} className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition">キャンセル</button>
+                      <button
+                        onClick={async () => {
+                          if (!reengagementForm.name.trim()) { alert("配信名を入力してください"); return; }
+                          if (!selectedAccount) return;
+                          const cond = reengagementForm.condition === "filtered"
+                            ? { ...reengagementForm.targetCondition, mode: "filtered" as const }
+                            : { ...emptyDeliveryCondition, mode: "all" as const };
+                          const msgs = reengagementForm.messages.map((m) => ({
+                            msg_type: m.msgType,
+                            payload: { msgType: m.msgType, body: m.body },
+                            body: m.body,
+                          }));
+                          const res = await fetch("/api/line/reengagement", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                              account_id: selectedAccount.id,
+                              name: reengagementForm.name.trim(),
+                              target_condition: cond,
+                              messages: msgs,
+                            }),
+                          });
+                          if (res.ok) {
+                            setShowReengagementModal(false);
+                            fetchReengagements();
+                          } else {
+                            const data = await res.json().catch(() => ({}));
+                            alert(`作成失敗: ${data.error ?? res.status}`);
+                          }
+                        }}
+                        className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition"
+                      >
+                        保存
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </main>
+          </>
+        )}
+
+        {/* ============================================================ */}
         {/* アカウント詳細: メルマガ */}
         {/* ============================================================ */}
         {mainView === "account-detail" && accountSubView === "newsletter" && (
@@ -5781,7 +7260,7 @@ export default function LineDashboard() {
                         <label className="text-xs text-gray-500 block mb-1">本文</label>
                         <textarea value={newsletterForm.body_text} onChange={(e) => setNewsletterForm({ ...newsletterForm, body_text: e.target.value })} rows={8} placeholder="メール本文を入力..." className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm resize-none" />
                       </div>
-                      <p className="text-[10px] text-gray-400">※ メール配信にはカスタムフィールドの「メールアドレス」フィールドにデータが登録されているフォロワーが対象になります</p>
+                      <p className="text-[10px] text-gray-400">※ メール配信には独自置き換え文字の「メールアドレス」フィールドにデータが登録されているフォロワーが対象になります</p>
                     </div>
                     <div className="flex justify-end gap-2 px-5 py-4 border-t border-gray-200">
                       <button onClick={() => setShowNewsletterModal(false)} className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg">キャンセル</button>
@@ -5814,7 +7293,7 @@ export default function LineDashboard() {
                 <div className="bg-white rounded-lg border border-gray-200 p-4 mb-4">
                   <p className="text-xs text-gray-500">メルマガ配信の流れ:</p>
                   <ol className="text-xs text-gray-600 mt-1 space-y-0.5 list-decimal list-inside">
-                    <li>カスタムフィールドで「メールアドレス」フィールドを作成</li>
+                    <li>独自置き換え文字で「メールアドレス」フィールドを作成</li>
                     <li>フォロワーのメールアドレスを収集（LINEリッチメニューのフォームなど）</li>
                     <li>メルマガを作成して配信</li>
                   </ol>
@@ -5901,8 +7380,25 @@ export default function LineDashboard() {
         {mainView === "account-detail" && accountSubView === "inflow" && (
           <>
             <header className="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between flex-shrink-0">
-              <h1 className="text-base font-bold text-gray-800">流入経路</h1>
+              <div className="flex items-center gap-3">
+                <h1 className="text-base font-bold text-gray-800">流入経路</h1>
+                <span className="text-xs text-gray-400">
+                  {inflowRoutes.length} 件
+                  {inflowRoutesLastFetched && (
+                    <span className="ml-2 text-gray-300">
+                      最終更新 {inflowRoutesLastFetched.toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+                    </span>
+                  )}
+                </span>
+              </div>
               <div className="flex items-center gap-2">
+                <button
+                  onClick={() => { fetchInflowRoutes(); fetchInflowGroups(); }}
+                  className="px-3 py-1.5 bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 text-xs font-medium rounded-md transition"
+                  title="最新データを取得"
+                >
+                  ↻ 再読込
+                </button>
                 <a
                   href="/line/inflow-stats"
                   className="px-3 py-1.5 bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 text-xs font-medium rounded-md transition"
@@ -5959,35 +7455,128 @@ export default function LineDashboard() {
                         <label className="text-xs text-gray-500 block mb-1 font-medium">説明</label>
                         <textarea value={inflowForm.description} onChange={(e) => setInflowForm({ ...inflowForm, description: e.target.value })} rows={2} placeholder="メモ" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm resize-none focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400" />
                       </div>
+                      {inflowSaveMsg && (
+                        <div
+                          className={`px-3 py-2 rounded-lg text-xs border ${
+                            inflowSaveMsg.ok
+                              ? "bg-green-50 text-green-700 border-green-200"
+                              : "bg-red-50 text-red-600 border-red-200"
+                          }`}
+                        >
+                          {inflowSaveMsg.text}
+                        </div>
+                      )}
+                      <div className="text-[10px] text-gray-400 pt-1 border-t border-gray-100">
+                        案件: {project?.name ?? "(未読み込み)"} {project?.id ? `/ ID: ${project.id.slice(0, 8)}...` : ""}
+                      </div>
                     </div>
                     <div className="flex justify-end gap-2 px-5 py-4 border-t border-gray-200">
-                      <button onClick={() => setShowInflowModal(false)} className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition">キャンセル</button>
+                      <button onClick={() => { setShowInflowModal(false); setInflowSaveMsg(null); }} className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition">キャンセル</button>
                       <button
                         onClick={async () => {
-                          if (!inflowForm.name.trim() || !inflowForm.code.trim() || !project?.id) return;
+                          setInflowSaveMsg(null);
+                          if (!inflowForm.name.trim() || !inflowForm.code.trim()) {
+                            setInflowSaveMsg({ ok: false, text: "経路名と経路コードは必須です" });
+                            return;
+                          }
+                          if (!project?.id) {
+                            setInflowSaveMsg({
+                              ok: false,
+                              text: "案件情報が読み込まれていません。案件選択からやり直してください。",
+                            });
+                            return;
+                          }
+                          setInflowSaving(true);
                           const method = editingInflow ? "PUT" : "POST";
                           const body = editingInflow
                             ? { id: editingInflow.id, ...inflowForm }
                             : { project_id: project.id, ...inflowForm };
                           try {
-                            const res = await fetch("/api/line/inflow-routes", { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+                            console.log("[inflow-save] start", { method, body, project_id: project.id });
+                            const res = await fetch("/api/line/inflow-routes", {
+                              method,
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify(body),
+                              cache: "no-store",
+                            });
+                            const data = await res.json().catch(() => ({}));
+                            console.log("[inflow-save] response", { status: res.status, data });
                             if (res.ok) {
-                              setShowInflowModal(false);
-                              setEditingInflow(null);
-                              setInflowForm({ name: "", code: "", url: "", description: "", group_id: "" });
-                              await fetchInflowRoutes();
+                              setInflowSaveMsg({ ok: true, text: `保存しました (id: ${data.id ?? "-"})` });
+                              // ========== 楽観的状態更新 ==========
+                              // fetchInflowRoutes が失敗しても画面に確実に反映されるよう、
+                              // 保存成功したレコードを関数型更新で直接 state に反映する
+                              if (method === "POST" && data.id) {
+                                const newRoute: InflowRoute = {
+                                  id: data.id,
+                                  account_id: "",
+                                  name: inflowForm.name,
+                                  code: inflowForm.code,
+                                  url: inflowForm.url || null,
+                                  description: inflowForm.description || null,
+                                  is_active: true,
+                                  created_at: new Date().toISOString(),
+                                  follower_count: 0,
+                                  group_id: inflowForm.group_id || null,
+                                };
+                                setInflowRoutes((prev) => {
+                                  // 重複防止（既に入っていれば追加しない）
+                                  if (prev.some((r) => r.id === newRoute.id)) return prev;
+                                  return [newRoute, ...prev];
+                                });
+                                console.log("[inflow-save] optimistic update added", newRoute.id);
+                              } else if (method === "PUT" && editingInflow) {
+                                setInflowRoutes((prev) =>
+                                  prev.map((r) =>
+                                    r.id === editingInflow.id
+                                      ? {
+                                          ...r,
+                                          name: inflowForm.name,
+                                          code: inflowForm.code,
+                                          url: inflowForm.url || null,
+                                          description: inflowForm.description || null,
+                                          group_id: inflowForm.group_id || null,
+                                        }
+                                      : r,
+                                  ),
+                                );
+                                console.log("[inflow-save] optimistic update edited", editingInflow.id);
+                              }
+                              // ========== サーバ側の正確値を再取得（click_count/follower_count等） ==========
+                              // 失敗しても楽観更新済みなので画面は反映されたまま
+                              try {
+                                await fetchInflowRoutes();
+                                await fetchInflowGroups();
+                              } catch (fetchErr) {
+                                console.error("[inflow-save] refetch after save failed", fetchErr);
+                              }
+                              // 少し表示してから閉じる
+                              setTimeout(() => {
+                                setShowInflowModal(false);
+                                setEditingInflow(null);
+                                setInflowForm({ name: "", code: "", url: "", description: "", group_id: "" });
+                                setInflowSaveMsg(null);
+                              }, 600);
                             } else {
-                              const data = await res.json().catch(() => ({}));
-                              alert(`流入経路の保存に失敗しました\n${data.error ?? `HTTP ${res.status}`}`);
+                              setInflowSaveMsg({
+                                ok: false,
+                                text: `保存失敗: ${data.error ?? `HTTP ${res.status}`}${data.detail ? " / " + data.detail : ""}`,
+                              });
                             }
                           } catch (e) {
-                            alert(`流入経路の保存に失敗しました\n${(e as Error).message}`);
+                            console.error("[inflow-save] network error", e);
+                            setInflowSaveMsg({
+                              ok: false,
+                              text: `通信エラー: ${(e as Error).message}`,
+                            });
+                          } finally {
+                            setInflowSaving(false);
                           }
                         }}
-                        disabled={!inflowForm.name.trim() || !inflowForm.code.trim()}
+                        disabled={inflowSaving || !inflowForm.name.trim() || !inflowForm.code.trim() || !project?.id}
                         className="px-5 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition"
                       >
-                        {editingInflow ? "更新" : "作成"}
+                        {inflowSaving ? "保存中..." : editingInflow ? "更新" : "作成"}
                       </button>
                     </div>
                   </div>
@@ -6075,6 +7664,11 @@ export default function LineDashboard() {
                   <div className="bg-white rounded-lg border border-gray-200 p-16 text-center text-gray-400">
                     <p className="text-lg mb-2">流入経路がありません</p>
                     <p className="text-sm">「新規経路」から作成してください</p>
+                    {project?.name && (
+                      <p className="text-[11px] mt-3 text-gray-300">
+                        現在の案件: <span className="font-medium text-gray-500">{project.name}</span>
+                      </p>
+                    )}
                   </div>
                 ) : (
                   <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
@@ -6439,6 +8033,57 @@ export default function LineDashboard() {
                     </table>
                   </div>
                 )}
+
+                {/* Lpro同期ログ */}
+                <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+                  <div className="px-5 py-3 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
+                    <h3 className="text-sm font-bold text-gray-700">Lpro 同期ログ</h3>
+                    <button
+                      onClick={async () => {
+                        try {
+                          const res = await fetch("/api/line/lpro-sync");
+                          if (res.ok) {
+                            const logs = await res.json();
+                            setSyncLogs(logs);
+                          }
+                        } catch { /* */ }
+                      }}
+                      className="text-xs text-blue-600 hover:text-blue-800"
+                    >
+                      更新
+                    </button>
+                  </div>
+                  {syncLogs.length === 0 ? (
+                    <div className="px-5 py-6 text-center text-gray-400 text-sm">同期ログがありません</div>
+                  ) : (
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="border-b border-gray-200 text-gray-500 text-left bg-gray-50/50">
+                          <th className="px-4 py-2 font-medium">日時</th>
+                          <th className="px-4 py-2 font-medium">件数</th>
+                          <th className="px-4 py-2 font-medium">更新</th>
+                          <th className="px-4 py-2 font-medium">新規</th>
+                          <th className="px-4 py-2 font-medium">スキップ</th>
+                          <th className="px-4 py-2 font-medium">エラー</th>
+                          <th className="px-4 py-2 font-medium hidden md:table-cell">所要時間</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {syncLogs.slice(0, 10).map((log) => (
+                          <tr key={log.id} className="border-b border-gray-100 last:border-b-0">
+                            <td className="px-4 py-2 text-gray-700">{new Date(log.synced_at).toLocaleString("ja-JP")}</td>
+                            <td className="px-4 py-2 text-gray-700">{log.total_rows}</td>
+                            <td className="px-4 py-2 text-blue-600">{log.updated_count}</td>
+                            <td className="px-4 py-2 text-green-600">{log.created_count}</td>
+                            <td className="px-4 py-2 text-gray-400">{log.skipped_count}</td>
+                            <td className="px-4 py-2 text-red-500">{log.error_count}</td>
+                            <td className="px-4 py-2 text-gray-400 hidden md:table-cell">{(log.duration_ms / 1000).toFixed(1)}s</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
               </div>
             </main>
           </>
@@ -6646,9 +8291,9 @@ export default function LineDashboard() {
                 </div>
               </div>
 
-              {/* カスタムフィールド値 */}
+              {/* 独自置き換え文字値 */}
               <div>
-                <h4 className="text-xs font-bold text-gray-600 mb-2">カスタムフィールド</h4>
+                <h4 className="text-xs font-bold text-gray-600 mb-2">独自置き換え文字</h4>
                 {friendCustomValues.length === 0 ? (
                   <div className="text-xs text-gray-400">値が登録されていません</div>
                 ) : (
@@ -6686,7 +8331,12 @@ export default function LineDashboard() {
                           <span className="text-gray-400">{fmtShort(m.sent_at)}</span>
                         </div>
                         <div className="text-gray-700 break-all line-clamp-2">
-                          {m.message_text || `[${m.message_type}]`}
+                          {m.message_type === "sticker" ? "[スタンプ]"
+                            : m.message_type === "image" ? "[画像]"
+                            : m.message_type === "video" ? "[動画]"
+                            : m.message_type === "audio" ? "[音声]"
+                            : m.message_type === "location" ? "[位置情報]"
+                            : m.message_text || `[${m.message_type}]`}
                         </div>
                       </div>
                     ))}
@@ -6764,6 +8414,117 @@ export default function LineDashboard() {
           </div>
         </div>
       )}
+
+      {/* SMS送信・チャージモーダル */}
+      {showSmsModal && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
+              <h3 className="font-bold text-gray-800">SMS送信</h3>
+              <button onClick={() => setShowSmsModal(false)} className="text-gray-400 hover:text-gray-600">{Icons.close}</button>
+            </div>
+            <div className="p-5 space-y-4">
+              {/* クレジット残高 */}
+              <div className="bg-orange-50 border border-orange-200 rounded-lg px-4 py-3 flex items-center justify-between">
+                <div>
+                  <span className="text-xs text-orange-600 font-medium">SMSクレジット残高</span>
+                  <div className="text-2xl font-bold text-orange-700">{smsBalance} <span className="text-sm font-normal">通</span></div>
+                  <span className="text-[10px] text-orange-500">1通 = 5.5円（70文字まで）</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <select value={smsChargeAmount} onChange={(e) => setSmsChargeAmount(Number(e.target.value))} className="border border-orange-300 rounded px-2 py-1 text-xs">
+                    <option value={100}>100通</option>
+                    <option value={500}>500通</option>
+                    <option value={1000}>1000通</option>
+                    <option value={5000}>5000通</option>
+                  </select>
+                  <button
+                    onClick={async () => {
+                      if (!project?.id) return;
+                      if (!confirm(`${smsChargeAmount}クレジットをチャージしますか？\n（${(smsChargeAmount * 5.5).toLocaleString()}円相当）`)) return;
+                      const res = await fetch("/api/line/sms", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ project_id: project.id, action: "charge", amount: smsChargeAmount }),
+                      });
+                      if (res.ok) {
+                        const data = await res.json();
+                        setSmsBalance(data.balance);
+                        alert("チャージ完了");
+                      }
+                    }}
+                    className="px-3 py-1.5 bg-orange-500 hover:bg-orange-600 text-white text-xs font-medium rounded-md transition"
+                  >
+                    チャージ
+                  </button>
+                </div>
+              </div>
+
+              {/* SMS送信フォーム */}
+              <div>
+                <label className="text-xs text-gray-500 block mb-1 font-medium">送信先電話番号 <span className="text-red-500">*</span></label>
+                <input
+                  type="tel"
+                  value={smsForm.phone_number}
+                  onChange={(e) => setSmsForm({ ...smsForm, phone_number: e.target.value })}
+                  placeholder="09012345678"
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-gray-500 block mb-1 font-medium">メッセージ（最大330文字）</label>
+                <textarea
+                  value={smsForm.message_text}
+                  onChange={(e) => setSmsForm({ ...smsForm, message_text: e.target.value.slice(0, 330) })}
+                  rows={4}
+                  maxLength={330}
+                  placeholder="SMSメッセージを入力..."
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm resize-none focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                />
+                <div className="flex justify-between text-[10px] text-gray-400 mt-1">
+                  <span>{smsForm.message_text.length}/330文字</span>
+                  <span>消費: {smsForm.message_text.length <= 70 ? 1 : 1 + Math.ceil((smsForm.message_text.length - 70) / 66)}通</span>
+                </div>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 px-5 py-4 border-t border-gray-200">
+              <button onClick={() => setShowSmsModal(false)} className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition">閉じる</button>
+              <button
+                onClick={async () => {
+                  if (!smsForm.phone_number.trim() || !smsForm.message_text.trim()) { alert("電話番号とメッセージを入力してください"); return; }
+                  if (!selectedAccount || !project?.id) return;
+                  const res = await fetch("/api/line/sms", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      project_id: project.id,
+                      account_id: selectedAccount.id,
+                      action: "send",
+                      phone_number: smsForm.phone_number.trim(),
+                      message_text: smsForm.message_text.trim(),
+                    }),
+                  });
+                  const data = await res.json();
+                  if (res.ok) {
+                    setSmsBalance(data.balance);
+                    setSmsForm({ phone_number: "", message_text: "" });
+                    alert(`SMS送信完了（${data.credits_used}通消費）`);
+                  } else {
+                    alert(data.error ?? "送信失敗");
+                  }
+                }}
+                disabled={smsBalance <= 0}
+                className="px-5 py-2 bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition"
+              >
+                送信
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 通知音用audio要素 */}
+      <audio ref={audioRef} src="/sounds/notification.wav" preload="auto" />
     </div>
   );
 }

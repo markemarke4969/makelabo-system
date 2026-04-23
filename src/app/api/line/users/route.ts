@@ -51,7 +51,8 @@ export async function GET() {
       created_at: u.created_at,
       name: (meta.name as string | null) ?? null,
       closer_name: (meta.closer_name as string | null) ?? null,
-      ipath_id: (meta.ipath_id as string | null) ?? null,
+      is_closer: !!(meta.is_closer),
+      is_admin: !!(meta.is_admin),
       owner_project_ids,
       viewer_project_ids,
     };
@@ -63,7 +64,7 @@ export async function GET() {
 // プロフィール/パスワード/案件紐付けを更新
 export async function PATCH(request: NextRequest) {
   const body = await request.json();
-  const { id, email, password, name, closer_name, ipath_id, owner_project_ids, viewer_project_ids } = body;
+  const { id, email, password, name, closer_name, is_closer, is_admin, owner_project_ids, viewer_project_ids } = body;
 
   if (!id) {
     return Response.json({ error: "id is required" }, { status: 400 });
@@ -83,8 +84,8 @@ export async function PATCH(request: NextRequest) {
   const updates: Record<string, unknown> = {};
   if (email !== undefined) updates.email = email;
   if (password) updates.password = password;
-  if (name !== undefined || closer_name !== undefined || ipath_id !== undefined) {
-    updates.user_metadata = { name, closer_name, ipath_id };
+  if (name !== undefined || closer_name !== undefined || is_closer !== undefined || is_admin !== undefined) {
+    updates.user_metadata = { name, closer_name, is_closer: !!is_closer, is_admin: !!is_admin };
   }
 
   if (Object.keys(updates).length > 0) {

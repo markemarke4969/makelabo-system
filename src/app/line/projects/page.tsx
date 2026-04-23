@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase-browser";
 
@@ -39,6 +39,7 @@ export default function LineProjects() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [userName, setUserName] = useState("");
+  const [projectUnread, setProjectUnread] = useState<Record<string, { unread_count: number; unread_users: number }>>({});
 
   // 案件管理モーダル
   const [showProjectModal, setShowProjectModal] = useState(false);
@@ -49,6 +50,23 @@ export default function LineProjects() {
 
   // 管理モード（編集/削除ボタンの表示）
   const [manageMode, setManageMode] = useState(false);
+
+  // スマホ用ハンバーガーメニュー
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  // メニュー外クリックで閉じる
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setMobileMenuOpen(false);
+      }
+    };
+    if (mobileMenuOpen) {
+      document.addEventListener("mousedown", handleClickOutside);
+      return () => document.removeEventListener("mousedown", handleClickOutside);
+    }
+  }, [mobileMenuOpen]);
 
   const fetchProjects = useCallback(async () => {
     try {
@@ -72,6 +90,18 @@ export default function LineProjects() {
       if (res.ok) {
         setProjects(await res.json());
       }
+
+      // 未読件数を取得
+      const meta = (user?.user_metadata ?? {}) as Record<string, unknown>;
+      const isCloser = !!(meta.is_closer) && !(meta.is_admin);
+      const unreadUrl = isCloser && user?.id
+        ? `/api/line/project-unread?closer_id=${user.id}`
+        : "/api/line/project-unread";
+      try {
+        const unreadRes = await fetch(unreadUrl);
+        if (unreadRes.ok) setProjectUnread(await unreadRes.json());
+      } catch { /* */ }
+
       setLoading(false);
     };
     init();
@@ -176,17 +206,19 @@ export default function LineProjects() {
 
   return (
     <div className="min-h-screen bg-[#1e2744]">
-      <header className="border-b border-white/10 px-6 py-4 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-[#06C755] flex items-center justify-center">
-            <svg className="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 24 24"><path d="M19.365 9.863c.349 0 .63.285.63.631 0 .345-.281.63-.63.63H17.61v1.125h1.755c.349 0 .63.283.63.63 0 .344-.281.629-.63.629h-2.386c-.345 0-.627-.285-.627-.629V8.108c0-.345.282-.63.63-.63h2.386c.346 0 .627.285.627.63 0 .349-.281.63-.63.63H17.61v1.125h1.755zm-3.855 3.016c0 .27-.174.51-.432.596-.064.021-.133.031-.199.031-.211 0-.391-.09-.51-.25l-2.443-3.317v2.94c0 .344-.279.629-.631.629-.346 0-.626-.285-.626-.629V8.108c0-.27.173-.51.43-.595.06-.023.136-.033.194-.033.195 0 .375.104.495.254l2.462 3.33V8.108c0-.345.282-.63.63-.63.345 0 .63.285.63.63v4.771zm-5.741 0c0 .344-.282.629-.631.629-.345 0-.627-.285-.627-.629V8.108c0-.345.282-.63.63-.63.346 0 .628.285.628.63v4.771zm-2.466.629H4.917c-.345 0-.63-.285-.63-.629V8.108c0-.345.285-.63.63-.63.348 0 .63.285.63.63v4.141h1.756c.348 0 .629.283.629.63 0 .344-.282.629-.629.629M24 10.314C24 4.943 18.615.572 12 .572S0 4.943 0 10.314c0 4.811 4.27 8.842 10.035 9.608.391.082.923.258 1.058.59.12.301.079.766.038 1.08l-.164 1.02c-.045.301-.24 1.186 1.049.645 1.291-.539 6.916-4.078 9.436-6.975C23.176 14.393 24 12.458 24 10.314" /></svg>
+      <header className="border-b border-white/10 px-4 sm:px-6 py-3 sm:py-4 flex items-center justify-between">
+        <div className="flex items-center gap-2 sm:gap-3">
+          <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-[#06C755] flex items-center justify-center flex-shrink-0">
+            <svg className="w-4 h-4 sm:w-5 sm:h-5 text-white" fill="currentColor" viewBox="0 0 24 24"><path d="M19.365 9.863c.349 0 .63.285.63.631 0 .345-.281.63-.63.63H17.61v1.125h1.755c.349 0 .63.283.63.63 0 .344-.281.629-.63.629h-2.386c-.345 0-.627-.285-.627-.629V8.108c0-.345.282-.63.63-.63h2.386c.346 0 .627.285.627.63 0 .349-.281.63-.63.63H17.61v1.125h1.755zm-3.855 3.016c0 .27-.174.51-.432.596-.064.021-.133.031-.199.031-.211 0-.391-.09-.51-.25l-2.443-3.317v2.94c0 .344-.279.629-.631.629-.346 0-.626-.285-.626-.629V8.108c0-.27.173-.51.43-.595.06-.023.136-.033.194-.033.195 0 .375.104.495.254l2.462 3.33V8.108c0-.345.282-.63.63-.63.345 0 .63.285.63.63v4.771zm-5.741 0c0 .344-.282.629-.631.629-.345 0-.627-.285-.627-.629V8.108c0-.345.282-.63.63-.63.346 0 .628.285.628.63v4.771zm-2.466.629H4.917c-.345 0-.63-.285-.63-.629V8.108c0-.345.285-.63.63-.63.348 0 .63.285.63.63v4.141h1.756c.348 0 .629.283.629.63 0 .344-.282.629-.629.629M24 10.314C24 4.943 18.615.572 12 .572S0 4.943 0 10.314c0 4.811 4.27 8.842 10.035 9.608.391.082.923.258 1.058.59.12.301.079.766.038 1.08l-.164 1.02c-.045.301-.24 1.186 1.049.645 1.291-.539 6.916-4.078 9.436-6.975C23.176 14.393 24 12.458 24 10.314" /></svg>
           </div>
           <div>
-            <h1 className="text-lg font-bold text-white">LINE ハーネス</h1>
-            <p className="text-xs text-white/40">案件を選択してください</p>
+            <h1 className="text-sm sm:text-lg font-bold text-white">LINE ハーネス</h1>
+            <p className="text-[10px] sm:text-xs text-white/40 hidden sm:block">案件を選択してください</p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+
+        {/* PC: 通常ボタン表示 */}
+        <div className="hidden md:flex items-center gap-2">
           <button
             onClick={openCreateProject}
             className="px-3 py-1.5 text-xs bg-[#06C755] hover:bg-[#05a648] text-white rounded-md transition font-medium"
@@ -217,54 +249,117 @@ export default function LineProjects() {
             ログアウト
           </button>
         </div>
+
+        {/* スマホ: ハンバーガーメニュー */}
+        <div className="md:hidden relative" ref={menuRef}>
+          <button
+            onClick={() => setMobileMenuOpen((v) => !v)}
+            className="w-9 h-9 flex items-center justify-center text-white/70 hover:text-white hover:bg-white/10 rounded-lg transition"
+            aria-label="メニュー"
+          >
+            {mobileMenuOpen ? (
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            ) : (
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+              </svg>
+            )}
+          </button>
+          {mobileMenuOpen && (
+            <div className="absolute right-0 top-full mt-2 w-52 bg-[#2a3558] border border-white/15 rounded-xl shadow-xl shadow-black/30 z-50 overflow-hidden">
+              <div className="px-4 py-2.5 border-b border-white/10">
+                <p className="text-xs text-white/50 truncate">{userName}</p>
+              </div>
+              <div className="py-1">
+                <button
+                  onClick={() => { openCreateProject(); setMobileMenuOpen(false); }}
+                  className="w-full text-left px-4 py-2.5 text-sm text-[#06C755] hover:bg-white/5 transition flex items-center gap-2"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
+                  新規案件
+                </button>
+                <button
+                  onClick={() => { setManageMode((m) => !m); setMobileMenuOpen(false); }}
+                  className="w-full text-left px-4 py-2.5 text-sm text-white/80 hover:bg-white/5 transition flex items-center gap-2"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                  {manageMode ? "管理モード終了" : "管理モード"}
+                </button>
+                <button
+                  onClick={() => { router.push("/line/users"); setMobileMenuOpen(false); }}
+                  className="w-full text-left px-4 py-2.5 text-sm text-white/80 hover:bg-white/5 transition flex items-center gap-2"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" /></svg>
+                  ユーザー管理
+                </button>
+              </div>
+              <div className="border-t border-white/10 py-1">
+                <button
+                  onClick={() => { handleLogout(); setMobileMenuOpen(false); }}
+                  className="w-full text-left px-4 py-2.5 text-sm text-white/50 hover:bg-white/5 transition flex items-center gap-2"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" /></svg>
+                  ログアウト
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
       </header>
 
-      <main className="max-w-4xl mx-auto px-6 py-10">
-        <h2 className="text-white text-lg font-bold mb-6">案件一覧</h2>
+      <main className="max-w-5xl mx-auto px-3 sm:px-6 py-6 sm:py-10">
+        <h2 className="text-white text-base sm:text-lg font-bold mb-4 sm:mb-6">案件一覧</h2>
 
         {projects.length === 0 ? (
-          <div className="bg-white/5 rounded-xl border border-white/10 p-12 text-center">
+          <div className="bg-white/5 rounded-xl border border-white/10 p-8 sm:p-12 text-center">
             <p className="text-white/50 text-sm mb-2">案件が登録されていません</p>
-            <p className="text-white/30 text-xs">右上の「+ 新規案件」から追加してください</p>
+            <p className="text-white/30 text-xs">「+ 新規案件」から追加してください</p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2 sm:gap-3 lg:gap-4">
             {projects.map((project, i) => (
               <div
                 key={project.id}
-                className="group relative bg-white/5 hover:bg-white/10 border border-white/10 hover:border-white/20 rounded-xl p-5 transition-all hover:shadow-lg hover:shadow-black/20 hover:-translate-y-0.5"
+                className="group relative bg-white/5 hover:bg-white/10 border border-white/10 hover:border-white/20 rounded-lg sm:rounded-xl p-3 sm:p-4 transition-all hover:shadow-lg hover:shadow-black/20 hover:-translate-y-0.5"
               >
                 <button
                   onClick={() => selectProject(project)}
                   className="text-left w-full"
                 >
-                  <div
-                    className="w-12 h-12 rounded-xl flex items-center justify-center mb-4 text-xl"
-                    style={{ backgroundColor: project.color || DEFAULT_COLORS[i % DEFAULT_COLORS.length] }}
-                  >
-                    <span className="text-white font-bold">
-                      {project.name.charAt(0)}
-                    </span>
+                  <div className="flex items-center gap-2 sm:gap-3">
+                    <div
+                      className="w-9 h-9 sm:w-10 sm:h-10 rounded-lg flex-shrink-0 flex items-center justify-center text-base sm:text-lg"
+                      style={{ backgroundColor: project.color || DEFAULT_COLORS[i % DEFAULT_COLORS.length] }}
+                    >
+                      <span className="text-white font-bold">
+                        {project.name.charAt(0)}
+                      </span>
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <h3 className="text-white font-bold text-xs sm:text-sm truncate group-hover:text-[#06C755] transition-colors">
+                        {project.name}
+                      </h3>
+                      {projectUnread[project.id] && projectUnread[project.id].unread_count > 0 && (
+                        <p className="text-[10px] sm:text-xs text-[#06C755] mt-0.5">
+                          新着: {projectUnread[project.id].unread_count}件（{projectUnread[project.id].unread_users}人）
+                        </p>
+                      )}
+                    </div>
                   </div>
-                  <h3 className="text-white font-bold text-base mb-1 group-hover:text-[#06C755] transition-colors">
-                    {project.name}
-                  </h3>
-                  {project.description && (
-                    <p className="text-white/40 text-xs leading-relaxed">{project.description}</p>
-                  )}
-                  <p className="text-white/20 text-[10px] mt-2">順序: {project.sort_order}</p>
                 </button>
                 {manageMode && (
-                  <div className="absolute top-3 right-3 flex gap-1 opacity-100">
+                  <div className="absolute top-1.5 right-1.5 sm:top-2 sm:right-2 flex gap-1">
                     <button
                       onClick={(e) => { e.stopPropagation(); openEditProject(project); }}
-                      className="px-2 py-1 text-[10px] bg-blue-500/80 hover:bg-blue-500 text-white rounded"
+                      className="px-1.5 py-0.5 sm:px-2 sm:py-1 text-[9px] sm:text-[10px] bg-blue-500/80 hover:bg-blue-500 text-white rounded"
                     >
                       編集
                     </button>
                     <button
                       onClick={(e) => { e.stopPropagation(); deleteProject(project); }}
-                      className="px-2 py-1 text-[10px] bg-red-500/80 hover:bg-red-500 text-white rounded"
+                      className="px-1.5 py-0.5 sm:px-2 sm:py-1 text-[9px] sm:text-[10px] bg-red-500/80 hover:bg-red-500 text-white rounded"
                     >
                       削除
                     </button>

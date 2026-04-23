@@ -16,7 +16,8 @@ interface ManagedUser {
   email: string | null;
   name: string | null;
   closer_name: string | null;
-  ipath_id: string | null;
+  is_closer: boolean;
+  is_admin: boolean;
   owner_project_ids: string[];
   viewer_project_ids: string[];
 }
@@ -26,7 +27,8 @@ interface UserForm {
   password: string;
   name: string;
   closer_name: string;
-  ipath_id: string;
+  is_closer: boolean;
+  is_admin: boolean;
   owner_project_ids: string[];
   viewer_project_ids: string[];
 }
@@ -36,7 +38,8 @@ const emptyUserForm: UserForm = {
   password: "",
   name: "",
   closer_name: "",
-  ipath_id: "",
+  is_closer: false,
+  is_admin: false,
   owner_project_ids: [],
   viewer_project_ids: [],
 };
@@ -86,7 +89,8 @@ export default function LineUsers() {
       password: "",
       name: u.name ?? "",
       closer_name: u.closer_name ?? "",
-      ipath_id: u.ipath_id ?? "",
+      is_closer: u.is_closer,
+      is_admin: u.is_admin,
       owner_project_ids: u.owner_project_ids,
       viewer_project_ids: u.viewer_project_ids,
     });
@@ -125,7 +129,8 @@ export default function LineUsers() {
             password: userForm.password.trim() || undefined,
             name: userForm.name.trim() || null,
             closer_name: userForm.closer_name.trim() || null,
-            ipath_id: userForm.ipath_id.trim() || null,
+            is_closer: userForm.is_closer,
+            is_admin: userForm.is_admin,
             owner_project_ids: userForm.owner_project_ids,
             viewer_project_ids: userForm.viewer_project_ids,
           }),
@@ -147,7 +152,8 @@ export default function LineUsers() {
             password: userForm.password.trim(),
             name: userForm.name.trim() || null,
             closer_name: userForm.closer_name.trim() || null,
-            ipath_id: userForm.ipath_id.trim() || null,
+            is_closer: userForm.is_closer,
+            is_admin: userForm.is_admin,
             owner_project_ids: userForm.owner_project_ids,
             viewer_project_ids: userForm.viewer_project_ids,
           }),
@@ -237,16 +243,6 @@ export default function LineUsers() {
                 />
               </div>
               <div>
-                <label className="text-[11px] text-white/60 block mb-1 font-medium">iPath ID</label>
-                <input
-                  type="text"
-                  value={userForm.ipath_id}
-                  onChange={(e) => setUserForm({ ...userForm, ipath_id: e.target.value })}
-                  placeholder="iPath IDを入力"
-                  className="w-full bg-white/10 border border-white/10 rounded-md px-3 py-2 text-sm text-white placeholder-white/30 focus:border-[#06C755] focus:outline-none"
-                />
-              </div>
-              <div>
                 <label className="text-[11px] text-white/60 block mb-1 font-medium">
                   メールアドレス <span className="text-red-400">*</span>
                 </label>
@@ -257,6 +253,28 @@ export default function LineUsers() {
                   placeholder="user@example.com"
                   className="w-full bg-white/10 border border-white/10 rounded-md px-3 py-2 text-sm text-white placeholder-white/30 focus:border-[#06C755] focus:outline-none"
                 />
+              </div>
+              <div className="md:col-span-2 flex items-center gap-6">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={userForm.is_closer}
+                    onChange={(e) => setUserForm({ ...userForm, is_closer: e.target.checked })}
+                    className="accent-[#06C755] w-4 h-4"
+                  />
+                  <span className="text-sm text-white/80">クローザー</span>
+                  <span className="text-[10px] text-white/40">（担当クローザー選択肢に表示）</span>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={userForm.is_admin}
+                    onChange={(e) => setUserForm({ ...userForm, is_admin: e.target.checked })}
+                    className="accent-[#06C755] w-4 h-4"
+                  />
+                  <span className="text-sm text-white/80">管理者</span>
+                  <span className="text-[10px] text-white/40">（全アカウント表示・設定変更可）</span>
+                </label>
               </div>
               <div className="md:col-span-2">
                 <label className="text-[11px] text-white/60 block mb-1 font-medium">
@@ -369,7 +387,7 @@ export default function LineUsers() {
                   <tr className="border-b border-white/10 text-white/40 text-left text-xs">
                     <th className="px-5 py-3 font-medium">名前</th>
                     <th className="px-5 py-3 font-medium">クローザー名</th>
-                    <th className="px-5 py-3 font-medium">iPath ID</th>
+                    <th className="px-5 py-3 font-medium">権限</th>
                     <th className="px-5 py-3 font-medium">メール</th>
                     <th className="px-5 py-3 font-medium">担当案件</th>
                     <th className="px-5 py-3 font-medium">閲覧可能</th>
@@ -381,7 +399,13 @@ export default function LineUsers() {
                     <tr key={u.id} className="border-b border-white/5 hover:bg-white/5 transition">
                       <td className="px-5 py-3 text-white">{u.name ?? "—"}</td>
                       <td className="px-5 py-3 text-white/70">{u.closer_name ?? "—"}</td>
-                      <td className="px-5 py-3 text-white/70 font-mono text-xs">{u.ipath_id ?? "—"}</td>
+                      <td className="px-5 py-3">
+                        <div className="flex flex-wrap gap-1">
+                          {u.is_admin && <span className="px-2 py-0.5 text-[10px] bg-purple-500/20 text-purple-300 rounded">管理者</span>}
+                          {u.is_closer && <span className="px-2 py-0.5 text-[10px] bg-orange-500/20 text-orange-300 rounded">クローザー</span>}
+                          {!u.is_admin && !u.is_closer && <span className="text-white/30 text-xs">—</span>}
+                        </div>
+                      </td>
                       <td className="px-5 py-3 text-white/70 text-xs">{u.email ?? "—"}</td>
                       <td className="px-5 py-3">
                         <div className="flex flex-wrap gap-1">

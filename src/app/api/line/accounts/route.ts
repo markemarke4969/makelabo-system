@@ -38,13 +38,37 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   const body = await request.json();
 
+  const groupName = typeof body.group_name === "string" ? body.group_name.trim() : "";
+  if (!groupName) {
+    return Response.json(
+      { error: "グループを選択してください（グループ未所属のアカウントは追加できません）" },
+      { status: 400 }
+    );
+  }
+
+  let groupQuery = supabase
+    .from("line_account_groups")
+    .select("group_name")
+    .eq("group_name", groupName);
+  if (body.project_id) groupQuery = groupQuery.eq("project_id", body.project_id);
+  const { data: groupRow, error: groupErr } = await groupQuery.maybeSingle();
+  if (groupErr) {
+    return Response.json({ error: groupErr.message }, { status: 500 });
+  }
+  if (!groupRow) {
+    return Response.json(
+      { error: `指定されたグループ「${groupName}」が存在しません` },
+      { status: 400 }
+    );
+  }
+
   const insertBody: Record<string, unknown> = {
     account_name: body.account_name || null,
     channel_id: body.channel_id,
     basic_id: body.basic_id || null,
     channel_secret: body.channel_secret,
     channel_access_token: body.channel_access_token,
-    group_name: body.group_name || null,
+    group_name: groupName,
     project_id: body.project_id || null,
     role: body.role || "main",
     greeting_message: body.greeting_message || null,
