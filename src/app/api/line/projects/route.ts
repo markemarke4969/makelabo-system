@@ -13,7 +13,7 @@ export async function GET() {
 
 export async function POST(request: NextRequest) {
   const body = await request.json();
-  const { name, description, color, sort_order, code } = body;
+  const { name, description, color, sort_order, code, ban_sync_enabled } = body;
 
   if (!name || !String(name).trim()) {
     return Response.json({ error: "name is required" }, { status: 400 });
@@ -28,12 +28,26 @@ export async function POST(request: NextRequest) {
   if (typeof code === "string" && code.trim()) {
     insertBody.code = code.trim();
   }
+  if (typeof ban_sync_enabled === "boolean") {
+    insertBody.ban_sync_enabled = ban_sync_enabled;
+  }
 
-  const { data, error } = await supabase
+  let { data, error } = await supabase
     .from("line_projects")
     .insert(insertBody)
     .select("*")
     .single();
+
+  // ban_sync_enabled カラム未作成環境への fallback
+  if (error && /ban_sync_enabled/.test(error.message)) {
+    const retry = { ...insertBody };
+    delete retry.ban_sync_enabled;
+    ({ data, error } = await supabase
+      .from("line_projects")
+      .insert(retry)
+      .select("*")
+      .single());
+  }
 
   if (error) {
     console.error("[projects POST] error:", error);
@@ -52,7 +66,7 @@ export async function POST(request: NextRequest) {
 
 export async function PUT(request: NextRequest) {
   const body = await request.json();
-  const { id, name, description, color, sort_order, code } = body;
+  const { id, name, description, color, sort_order, code, ban_sync_enabled } = body;
 
   if (!id) {
     return Response.json({ error: "id is required" }, { status: 400 });
@@ -67,6 +81,9 @@ export async function PUT(request: NextRequest) {
     const trimmed = typeof code === "string" ? code.trim() : "";
     updates.code = trimmed || null;
   }
+  if (typeof ban_sync_enabled === "boolean") {
+    updates.ban_sync_enabled = ban_sync_enabled;
+  }
 
   let { error } = await supabase.from("line_projects").update(updates).eq("id", id);
 
@@ -74,6 +91,13 @@ export async function PUT(request: NextRequest) {
   if (error && /updated_at/.test(error.message)) {
     const { updated_at: _omit, ...rest } = updates as Record<string, unknown>;
     void _omit;
+    ({ error } = await supabase.from("line_projects").update(rest).eq("id", id));
+  }
+
+  // ban_sync_enabled カラム未作成環境への fallback
+  if (error && /ban_sync_enabled/.test(error.message)) {
+    const { ban_sync_enabled: _omit2, ...rest } = updates as Record<string, unknown>;
+    void _omit2;
     ({ error } = await supabase.from("line_projects").update(rest).eq("id", id));
   }
 

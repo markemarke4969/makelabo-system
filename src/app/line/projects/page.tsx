@@ -11,6 +11,7 @@ interface Project {
   color: string;
   sort_order: number;
   code: string | null;
+  ban_sync_enabled?: boolean;
 }
 
 interface ProjectForm {
@@ -19,6 +20,7 @@ interface ProjectForm {
   color: string;
   sort_order: number;
   code: string;
+  ban_sync_enabled: boolean;
 }
 
 const DEFAULT_COLORS = [
@@ -32,6 +34,7 @@ const emptyProjectForm: ProjectForm = {
   color: "#06C755",
   sort_order: 0,
   code: "",
+  ban_sync_enabled: false,
 };
 
 export default function LineProjects() {
@@ -136,6 +139,7 @@ export default function LineProjects() {
       color: p.color,
       sort_order: p.sort_order,
       code: p.code ?? "",
+      ban_sync_enabled: !!p.ban_sync_enabled,
     });
     setProjectMsg(null);
     setShowProjectModal(true);
@@ -466,6 +470,24 @@ export default function LineProjects() {
                   className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
                 />
                 <p className="text-[10px] text-gray-400 mt-1">小さい順に並びます（例: 10, 20, 30...）</p>
+              </div>
+
+              <div className="border-t border-gray-200 pt-4">
+                <label className="flex items-start gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={projectForm.ban_sync_enabled}
+                    onChange={(e) => setProjectForm({ ...projectForm, ban_sync_enabled: e.target.checked })}
+                    className="mt-0.5 accent-blue-600"
+                  />
+                  <div className="flex-1">
+                    <div className="text-xs font-medium text-gray-700">BAN対策同期を有効にする</div>
+                    <p className="text-[11px] text-gray-500 leading-relaxed mt-1">
+                      有効にすると、メインアカウントの設定（ラベル・シナリオ等）が予備アカウントに6時間おきに自動同期されます。
+                      BAN対策として使用する案件でのみ有効にしてください。
+                    </p>
+                  </div>
+                </label>
               </div>
 
               {projectMsg && (

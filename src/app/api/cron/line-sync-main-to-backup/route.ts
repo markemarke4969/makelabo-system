@@ -20,6 +20,12 @@ export const maxDuration = 300;
 //
 // 二重起動防止: line_sync_history.status='running' が存在する場合は拒否。
 // 各案件を順次処理し、1 案件の失敗で全体を止めない。
+//
+// 同期対象フィルタ:
+//   line_projects.ban_sync_enabled = true の案件のみ。
+//   デフォルトは false なので、明示的にダッシュボードから
+//   「BAN対策同期を有効にする」をONにした案件だけが同期される。
+//   (無差別同期による他案件への波及を防ぐためのセーフティ)
 // ============================================================
 
 async function isAuthorized(request: NextRequest): Promise<boolean> {
@@ -90,13 +96,27 @@ export async function GET(request: NextRequest) {
   const lockId = (lockRow?.id as string) ?? null;
 
   try {
-    // 全プロジェクト
-    const { data: projects, error: projErr } = await supabase
-      .from("line_projects")
-      .select("id, name, code");
-    if (projErr) throw new Error(`projects fetch: ${projErr.message}`);
+    // ban_sync_enabled = true の案件のみ対象。
+    // カラム未作成環境への fallback 付き (段階的マイグレーション対応)。
+    let projects: Array<{ id: string; name: string; code: string | null }> = [];
+    {
+      const r = await supabase
+        .from("line_projects")
+        .select("id, name, code")
+        .eq("ban_sync_enabled", true);
+      if (r.error && /ban_sync_enabled/.test(r.error.message)) {
+        console.warn(
+          "[line-sync] ban_sync_enabled カラム未作成 → マイグレーション未適用。安全のため対象ゼロ件で終了します。",
+        );
+        projects = [];
+      } else if (r.error) {
+        throw new Error(`projects fetch: ${r.error.message}`);
+      } else {
+        projects = (r.data ?? []) as Array<{ id: string; name: string; code: string | null }>;
+      }
+    }
 
-    for (const proj of projects ?? []) {
+    for (const proj of projects) {
       try {
         // 各プロジェクトの main + standby を取得
         const { data: accs, error: accErr } = await supabase
