@@ -9227,7 +9227,12 @@ export default function LineDashboard() {
                 {accounts.length > 0 && (
                   <div className="bg-white rounded-lg border border-gray-200 overflow-hidden overflow-x-auto">
                     <div className="px-5 py-3 bg-gray-50 border-b border-gray-200">
-                      <h3 className="text-sm font-bold text-gray-700">登録済みアカウント</h3>
+                      <h3 className="text-sm font-bold text-gray-700">
+                        登録済みアカウント
+                        <span className="ml-2 text-xs font-normal text-gray-500">
+                          （{selectedAccount?.group_name ? `${selectedAccount.group_name}グループのみ` : "全グループ"}）
+                        </span>
+                      </h3>
                     </div>
                     <table className="w-full text-sm">
                       <thead>
@@ -9242,7 +9247,9 @@ export default function LineDashboard() {
                         </tr>
                       </thead>
                       <tbody>
-                        {accounts.map((acc) => (
+                        {accounts
+                          .filter((acc) => !selectedAccount?.group_name || (acc.group_name ?? null) === selectedAccount.group_name)
+                          .map((acc) => (
                           <tr key={acc.id} className="border-b border-gray-100 hover:bg-gray-50 transition">
                             <td className="px-5 py-3">
                               <div className="flex items-center gap-2">
