@@ -2511,6 +2511,7 @@ export default function LineDashboard() {
     onCancel: () => void,
     onSave: () => void,
     titleLabel: string,
+    kind: "step" | "schedule",
   ) => {
     const msgTabs: { key: BroadcastMsgType; label: string }[] = [
       { key: "text", label: "テキスト" },
@@ -3459,7 +3460,10 @@ export default function LineDashboard() {
             送信のタイミング <span className="text-[10px] text-red-500 bg-red-50 px-1 rounded">必須</span>
           </h3>
           <div className="space-y-2">
-            <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+            <label
+              className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer"
+              title={kind === "step" ? "友達登録した瞬間に送信されます" : undefined}
+            >
               <input
                 type="radio"
                 name={`${titleLabel}-timing`}
@@ -3467,7 +3471,7 @@ export default function LineDashboard() {
                 onChange={() => setForm({ ...form, timingMode: "immediate" })}
                 className="accent-blue-600"
               />
-              今すぐ
+              {kind === "step" ? "シナリオ登録直後" : "今すぐ"}
             </label>
             <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
               <input
@@ -5627,6 +5631,7 @@ export default function LineDashboard() {
                       if (ok) { setShowStepCreator(false); setStepCreatorForm(emptyBroadcast); setEditingSequenceId(null); }
                     },
                     editingSequenceId ? "ステップ配信編集" : "新規ステップ配信作成",
+                    "step",
                   )}
                 </div>
               )}
@@ -5696,7 +5701,7 @@ export default function LineDashboard() {
                               }}
                               className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:border-blue-400 focus:outline-none"
                             >
-                              <option value="immediate">今すぐ</option>
+                              <option value="immediate">シナリオ登録直後</option>
                               <option value="absolute">N日後の指定時刻</option>
                               <option value="relative">N日N時間N分後</option>
                             </select>
@@ -5889,6 +5894,7 @@ export default function LineDashboard() {
                       if (ok) { setShowScheduleCreator(false); setScheduleCreatorForm(emptyBroadcast); }
                     },
                     "新規予約配信作成",
+                    "schedule",
                   )}
                 </div>
               )}
@@ -6037,6 +6043,7 @@ export default function LineDashboard() {
                       if (ok) { setShowScheduleCreator(false); setScheduleCreatorForm(emptyBroadcast); }
                     },
                     "送信済み配信の内容",
+                    "schedule",
                   )}
                 </div>
               )}
