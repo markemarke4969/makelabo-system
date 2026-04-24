@@ -56,7 +56,8 @@ interface LineAccount {
   is_active: boolean;
   group_name?: string | null;
   project_id?: string | null;
-  role?: "main" | "standby" | "banned" | null;
+  role?: "main" | "distribute" | "standby" | "banned" | null;
+  order_index?: number | null;
   greeting_message?: string | null;
   newsletter_from_email?: string | null;
   newsletter_from_name?: string | null;
@@ -729,7 +730,8 @@ export default function LineDashboard() {
     channel_access_token: "",
     group_name: "",
     project_id: "",
-    role: "main" as "main" | "standby",
+    role: "main" as "main" | "distribute" | "standby",
+    order_index: 0,
     greeting_message: DEFAULT_GREETING_MESSAGE,
     newsletter_from_email: "",
     newsletter_from_name: "",
@@ -1248,7 +1250,7 @@ export default function LineDashboard() {
   // クローザーの場合はcloser_visibleなグループのみ表示
   const isCloserUser = currentUser?.is_closer && !currentUser?.is_admin;
   const sortedGroupedAccounts = accounts
-    .filter((acc) => !acc.role || acc.role === "main" || acc.role === "banned")
+    .filter((acc) => !acc.role || acc.role === "main" || acc.role === "distribute" || acc.role === "banned")
     .filter((acc) => {
       if (!isCloserUser) return true;
       const group = acc.group_name || "未分類";
@@ -1719,7 +1721,7 @@ export default function LineDashboard() {
   };
 
   const resetForm = () => {
-    setForm({ account_name: "", channel_id: "", basic_id: "", channel_secret: "", channel_access_token: "", group_name: "", project_id: "", role: "main", greeting_message: DEFAULT_GREETING_MESSAGE, newsletter_from_email: "", newsletter_from_name: "" });
+    setForm({ account_name: "", channel_id: "", basic_id: "", channel_secret: "", channel_access_token: "", group_name: "", project_id: "", role: "main", order_index: 0, greeting_message: DEFAULT_GREETING_MESSAGE, newsletter_from_email: "", newsletter_from_name: "" });
     setEditingId(null);
     setSaveMsg(null);
   };
@@ -1733,7 +1735,8 @@ export default function LineDashboard() {
       channel_access_token: acc.channel_access_token ?? "",
       group_name: acc.group_name ?? "",
       project_id: acc.project_id ?? "",
-      role: acc.role === "standby" ? "standby" : "main",
+      role: acc.role === "standby" ? "standby" : acc.role === "distribute" ? "distribute" : "main",
+      order_index: acc.order_index ?? 0,
       greeting_message: acc.greeting_message && acc.greeting_message.trim() !== "" ? acc.greeting_message : DEFAULT_GREETING_MESSAGE,
       newsletter_from_email: acc.newsletter_from_email ?? "",
       newsletter_from_name: acc.newsletter_from_name ?? "",
@@ -1744,7 +1747,15 @@ export default function LineDashboard() {
   };
 
   // ワンクリックで役割切替（本番↔サブ）
+  // 分散本番 (distribute) は複雑なので、このトグルでは触らない。
+  // 編集フォームから明示的に選択する運用に統一。
   const toggleAccountRole = async (acc: LineAccount) => {
+    if (acc.role === "distribute") {
+      alert(
+        "このアカウントは分散本番 (distribute) です。\n役割を変更したい場合は、編集フォームから選択してください。",
+      );
+      return;
+    }
     const newRole: "main" | "standby" = acc.role === "main" ? "standby" : "main";
     const res = await fetch("/api/line/accounts", {
       method: "PUT",
@@ -9179,8 +9190,8 @@ export default function LineDashboard() {
                     </div>
                     <div className="md:col-span-2">
                       <label className="text-xs text-gray-500 block mb-1 font-medium">役割</label>
-                      <div className="flex gap-2">
-                        <label className={`flex-1 flex items-center gap-2 px-4 py-2.5 rounded-lg border-2 cursor-pointer transition ${
+                      <div className="grid grid-cols-3 gap-2">
+                        <label className={`flex items-center gap-2 px-3 py-2.5 rounded-lg border-2 cursor-pointer transition ${
                           form.role === "main" ? "border-green-500 bg-green-50" : "border-gray-200 bg-white hover:bg-gray-50"
                         }`}>
                           <input
@@ -9192,10 +9203,25 @@ export default function LineDashboard() {
                           />
                           <div>
                             <div className="text-sm font-bold text-gray-800">本番</div>
-                            <div className="text-[10px] text-gray-500">通常運用で使う</div>
+                            <div className="text-[10px] text-gray-500 leading-tight">通常運用/マスター</div>
                           </div>
                         </label>
-                        <label className={`flex-1 flex items-center gap-2 px-4 py-2.5 rounded-lg border-2 cursor-pointer transition ${
+                        <label className={`flex items-center gap-2 px-3 py-2.5 rounded-lg border-2 cursor-pointer transition ${
+                          form.role === "distribute" ? "border-purple-500 bg-purple-50" : "border-gray-200 bg-white hover:bg-gray-50"
+                        }`}>
+                          <input
+                            type="radio"
+                            name="account-role"
+                            checked={form.role === "distribute"}
+                            onChange={() => setForm({ ...form, role: "distribute" })}
+                            className="accent-purple-600"
+                          />
+                          <div>
+                            <div className="text-sm font-bold text-gray-800">分散本番</div>
+                            <div className="text-[10px] text-gray-500 leading-tight">main と同じ設定が自動同期</div>
+                          </div>
+                        </label>
+                        <label className={`flex items-center gap-2 px-3 py-2.5 rounded-lg border-2 cursor-pointer transition ${
                           form.role === "standby" ? "border-blue-500 bg-blue-50" : "border-gray-200 bg-white hover:bg-gray-50"
                         }`}>
                           <input
@@ -9206,26 +9232,44 @@ export default function LineDashboard() {
                             className="accent-blue-600"
                           />
                           <div>
-                            <div className="text-sm font-bold text-gray-800">サブ（待機）</div>
-                            <div className="text-[10px] text-gray-500">BAN時に自動昇格</div>
+                            <div className="text-sm font-bold text-gray-800">予備</div>
+                            <div className="text-[10px] text-gray-500 leading-tight">BAN時に自動昇格</div>
                           </div>
                         </label>
                       </div>
                       <p className="text-[10px] text-gray-400 mt-1">本番がBAN検知されるとサブが自動で本番に昇格します</p>
-                      {editingId && form.role === "standby" && (() => {
+                      {editingId && (form.role === "standby" || form.role === "distribute") && (() => {
                         const mainInSame = accounts.find(
                           (a) => a.project_id === (form.project_id || null) && a.role === "main" && a.is_active,
                         );
                         const mainName = mainInSame?.account_name ?? "（未設定）";
+                        const label = form.role === "distribute" ? "分散本番" : "予備";
                         return (
                           <div className="mt-2 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
                             <p className="text-[11px] text-amber-800 leading-relaxed">
-                              ⚠ この予備アカウントは、メインアカウント（<span className="font-bold">{mainName}</span>）から6時間おきに自動同期されます。
+                              ⚠ この{label}アカウントは、メインアカウント（<span className="font-bold">{mainName}</span>）から6時間おきに自動同期されます。
                               ここで編集した内容は、次回の同期で上書きされる可能性があります。
                             </p>
                           </div>
                         );
                       })()}
+                      {form.role === "distribute" && (
+                        <div className="mt-2">
+                          <label className="text-xs text-gray-500 block mb-1 font-medium">
+                            分散順序 (order_index)
+                          </label>
+                          <input
+                            type="number"
+                            min={1}
+                            value={form.order_index}
+                            onChange={(e) => setForm({ ...form, order_index: Number(e.target.value) || 0 })}
+                            className="w-24 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:border-purple-400 focus:outline-none focus:ring-1 focus:ring-purple-400"
+                          />
+                          <p className="text-[10px] text-gray-400 mt-1">
+                            分散登録時の表示順。マスター (main) は 1、分散本番は 2, 3, 4, 5... で指定してください。
+                          </p>
+                        </div>
+                      )}
                     </div>
                     <div className="md:col-span-2">
                       <label className="text-xs text-gray-500 block mb-1 font-medium">
@@ -9339,15 +9383,18 @@ export default function LineDashboard() {
                                 className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold transition hover:opacity-80 ${
                                   acc.role === "main"
                                     ? "bg-green-100 text-green-700 border border-green-300"
-                                    : acc.role === "standby"
-                                      ? "bg-blue-100 text-blue-700 border border-blue-300"
-                                      : acc.role === "banned"
-                                        ? "bg-red-100 text-red-700 border border-red-300"
-                                        : "bg-gray-100 text-gray-500 border border-gray-200"
+                                    : acc.role === "distribute"
+                                      ? "bg-purple-100 text-purple-700 border border-purple-300"
+                                      : acc.role === "standby"
+                                        ? "bg-blue-100 text-blue-700 border border-blue-300"
+                                        : acc.role === "banned"
+                                          ? "bg-red-100 text-red-700 border border-red-300"
+                                          : "bg-gray-100 text-gray-500 border border-gray-200"
                                 }`}
-                                title="クリックで本番⇔サブ切替"
+                                title={acc.role === "distribute" ? "分散本番は編集フォームから変更" : "クリックで本番⇔サブ切替"}
                               >
                                 {acc.role === "main" && "● 本番"}
+                                {acc.role === "distribute" && `◎ 分散${acc.order_index ? acc.order_index : ""}`}
                                 {acc.role === "standby" && "◌ サブ"}
                                 {acc.role === "banned" && "✕ BAN"}
                                 {!acc.role && "未設定"}

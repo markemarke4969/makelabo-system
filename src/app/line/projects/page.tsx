@@ -12,6 +12,9 @@ interface Project {
   sort_order: number;
   code: string | null;
   ban_sync_enabled?: boolean;
+  distribute_enabled?: boolean;
+  distribute_count?: number;
+  reserve_count?: number;
 }
 
 interface ProjectForm {
@@ -21,6 +24,16 @@ interface ProjectForm {
   sort_order: number;
   code: string;
   ban_sync_enabled: boolean;
+  distribute_enabled: boolean;
+  distribute_count: number;
+  reserve_count: number;
+}
+
+interface ProjectAccountSummary {
+  main: number;
+  distribute: number;
+  standby: number;
+  other: number;
 }
 
 const DEFAULT_COLORS = [
@@ -35,6 +48,9 @@ const emptyProjectForm: ProjectForm = {
   sort_order: 0,
   code: "",
   ban_sync_enabled: false,
+  distribute_enabled: false,
+  distribute_count: 1,
+  reserve_count: 0,
 };
 
 export default function LineProjects() {
@@ -53,6 +69,9 @@ export default function LineProjects() {
 
   // 管理モード（編集/削除ボタンの表示）
   const [manageMode, setManageMode] = useState(false);
+
+  // 編集中の案件のアカウント集計
+  const [accountSummary, setAccountSummary] = useState<ProjectAccountSummary | null>(null);
 
   // スマホ用ハンバーガーメニュー
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -131,7 +150,7 @@ export default function LineProjects() {
     setShowProjectModal(true);
   };
 
-  const openEditProject = (p: Project) => {
+  const openEditProject = async (p: Project) => {
     setEditingProjectId(p.id);
     setProjectForm({
       name: p.name,
@@ -140,9 +159,28 @@ export default function LineProjects() {
       sort_order: p.sort_order,
       code: p.code ?? "",
       ban_sync_enabled: !!p.ban_sync_enabled,
+      distribute_enabled: !!p.distribute_enabled,
+      distribute_count: p.distribute_count ?? 1,
+      reserve_count: p.reserve_count ?? 0,
     });
     setProjectMsg(null);
+    setAccountSummary(null);
     setShowProjectModal(true);
+    // 登録済みアカウント数を集計
+    try {
+      const res = await fetch(`/api/line/accounts?project_id=${encodeURIComponent(p.id)}`);
+      if (res.ok) {
+        const rows = (await res.json()) as Array<{ role?: string | null }>;
+        const summary: ProjectAccountSummary = { main: 0, distribute: 0, standby: 0, other: 0 };
+        for (const r of rows) {
+          if (r.role === "main") summary.main++;
+          else if (r.role === "distribute") summary.distribute++;
+          else if (r.role === "standby") summary.standby++;
+          else summary.other++;
+        }
+        setAccountSummary(summary);
+      }
+    } catch { /* noop */ }
   };
 
   const saveProject = async () => {
@@ -488,6 +526,70 @@ export default function LineProjects() {
                     </p>
                   </div>
                 </label>
+              </div>
+
+              <div className="border-t border-gray-200 pt-4">
+                <label className="flex items-start gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={projectForm.distribute_enabled}
+                    onChange={(e) => setProjectForm({ ...projectForm, distribute_enabled: e.target.checked })}
+                    className="mt-0.5 accent-purple-600"
+                  />
+                  <div className="flex-1">
+                    <div className="text-xs font-medium text-gray-700">分散登録を有効にする</div>
+                    <p className="text-[11px] text-gray-500 leading-relaxed mt-1">
+                      有効にすると、新規ユーザーは指定した本数のアカウントすべてに順次友達追加する必要があります。
+                      CVRが下がる可能性があるため、実装前にテストを推奨します。
+                    </p>
+                  </div>
+                </label>
+                {projectForm.distribute_enabled && (
+                  <div className="mt-3 ml-6 bg-purple-50 border border-purple-200 rounded-md p-3 space-y-3">
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-[10px] text-gray-500 block mb-1 font-medium">分散本数(main + distribute)</label>
+                        <select
+                          value={projectForm.distribute_count}
+                          onChange={(e) => setProjectForm({ ...projectForm, distribute_count: Number(e.target.value) })}
+                          className="w-full border border-gray-200 rounded px-2 py-1 text-xs bg-white"
+                        >
+                          {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => (
+                            <option key={n} value={n}>{n} 本</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-[10px] text-gray-500 block mb-1 font-medium">予備本数(standby)</label>
+                        <select
+                          value={projectForm.reserve_count}
+                          onChange={(e) => setProjectForm({ ...projectForm, reserve_count: Number(e.target.value) })}
+                          className="w-full border border-gray-200 rounded px-2 py-1 text-xs bg-white"
+                        >
+                          {[0, 1, 2, 3, 4, 5].map((n) => (
+                            <option key={n} value={n}>{n} 本</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                    <p className="text-[10px] text-gray-600">
+                      合計必要アカウント数: <span className="font-bold">{projectForm.distribute_count + projectForm.reserve_count} 本</span>
+                    </p>
+                    {accountSummary && (
+                      <div className="text-[10px] text-gray-600 bg-white rounded px-2 py-1.5 border border-purple-100">
+                        <div className="font-medium text-gray-700 mb-0.5">現在の登録済みアカウント:</div>
+                        <div>
+                          本番(main): <span className="font-mono">{accountSummary.main}</span> /
+                          分散(distribute): <span className="font-mono">{accountSummary.distribute}</span> /
+                          予備(standby): <span className="font-mono">{accountSummary.standby}</span>
+                          {accountSummary.other > 0 && (
+                            <> / その他: <span className="font-mono">{accountSummary.other}</span></>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
 
               {projectMsg && (

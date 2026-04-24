@@ -4,10 +4,11 @@ import { supabase } from "@/lib/supabase";
 export async function GET(request: NextRequest) {
   const projectId = request.nextUrl.searchParams.get("project_id");
 
-  const buildQuery = (opts: { greeting: boolean; newsletter: boolean }) => {
+  const buildQuery = (opts: { greeting: boolean; newsletter: boolean; orderIndex: boolean }) => {
     const base = "id, channel_id, account_name, basic_id, is_active, group_name, project_id, role";
     const cols = [
       base,
+      opts.orderIndex ? "order_index" : null,
       opts.greeting ? "greeting_message" : null,
       opts.newsletter ? "newsletter_from_email, newsletter_from_name" : null,
     ]
@@ -18,14 +19,21 @@ export async function GET(request: NextRequest) {
     return q;
   };
 
-  let { data, error } = await buildQuery({ greeting: true, newsletter: true });
+  let { data, error } = await buildQuery({ greeting: true, newsletter: true, orderIndex: true });
+  // order_index カラム未作成への fallback (分散登録マイグレーション未適用環境)
+  if (error && /order_index/.test(error.message)) {
+    ({ data, error } = await buildQuery({ greeting: true, newsletter: true, orderIndex: false }));
+  }
   // newsletter_from_* カラム未作成への fallback
   if (error && /newsletter_from_/.test(error.message)) {
-    ({ data, error } = await buildQuery({ greeting: true, newsletter: false }));
+    ({ data, error } = await buildQuery({ greeting: true, newsletter: false, orderIndex: true }));
+    if (error && /order_index/.test(error.message)) {
+      ({ data, error } = await buildQuery({ greeting: true, newsletter: false, orderIndex: false }));
+    }
   }
   // greeting_message カラム未作成への fallback
   if (error && /greeting_message/.test(error.message)) {
-    ({ data, error } = await buildQuery({ greeting: false, newsletter: false }));
+    ({ data, error } = await buildQuery({ greeting: false, newsletter: false, orderIndex: false }));
   }
 
   if (error) {
@@ -75,12 +83,22 @@ export async function POST(request: NextRequest) {
     newsletter_from_email: body.newsletter_from_email || null,
     newsletter_from_name: body.newsletter_from_name || null,
   };
+  if (typeof body.order_index === "number" && Number.isFinite(body.order_index)) {
+    insertBody.order_index = body.order_index;
+  }
 
   let { data, error } = await supabase
     .from("line_accounts")
     .insert(insertBody)
     .select("id")
     .single();
+
+  // order_index カラム未作成への fallback
+  if (error && /order_index/.test(error.message)) {
+    const { order_index: _o, ...rest } = insertBody as Record<string, unknown>;
+    void _o;
+    ({ data, error } = await supabase.from("line_accounts").insert(rest).select("id").single());
+  }
 
   // newsletter_from_* カラム未作成への fallback
   if (error && /newsletter_from_/.test(error.message)) {
@@ -95,7 +113,8 @@ export async function POST(request: NextRequest) {
     return Response.json({ error: error.message }, { status: 500 });
   }
 
-  // role=standby の場合は line_account_pool にも登録（BAN切替の切替先候補として使える状態にする）
+  // role=standby の場合のみ line_account_pool にも登録（BAN切替の切替先候補として使える状態にする）
+  // 'distribute' は分散本番なので pool (切替先候補) には含めない。
   if (data?.id && insertBody.role === "standby" && insertBody.project_id) {
     const { error: poolErr } = await supabase
       .from("line_account_pool")
@@ -131,6 +150,9 @@ export async function PUT(request: NextRequest) {
   if (body.project_id !== undefined) updates.project_id = body.project_id || null;
   if (body.is_active !== undefined) updates.is_active = body.is_active;
   if (body.role !== undefined) updates.role = body.role || null;
+  if (body.order_index !== undefined && Number.isFinite(Number(body.order_index))) {
+    updates.order_index = Number(body.order_index);
+  }
   if (body.greeting_message !== undefined) updates.greeting_message = body.greeting_message || null;
   if (body.newsletter_from_email !== undefined) updates.newsletter_from_email = body.newsletter_from_email || null;
   if (body.newsletter_from_name !== undefined) updates.newsletter_from_name = body.newsletter_from_name || null;
@@ -139,6 +161,13 @@ export async function PUT(request: NextRequest) {
     .from("line_accounts")
     .update(updates)
     .eq("id", body.id);
+
+  // order_index カラム未作成時の fallback
+  if (error && /order_index/.test(error.message)) {
+    const { order_index: _o, ...rest } = updates as Record<string, unknown>;
+    void _o;
+    ({ error } = await supabase.from("line_accounts").update(rest).eq("id", body.id));
+  }
 
   // newsletter_from_* カラム未作成時の fallback
   if (error && /newsletter_from_/.test(error.message)) {

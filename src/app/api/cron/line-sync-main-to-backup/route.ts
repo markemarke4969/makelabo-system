@@ -127,36 +127,41 @@ export async function GET(request: NextRequest) {
 
         const rows = (accs ?? []) as AccountRow[];
         const main = rows.find((a) => a.role === "main" && a.is_active) ?? null;
-        const standbys = rows.filter((a) => a.role === "standby");
+        // 分散本番 (distribute) と予備 (standby) の両方を同期対象にする。
+        // main はマスター、distribute はその複製本番、standby はBAN切替候補で、
+        // いずれもマスターと同じ設定状態を保つ必要がある。
+        const targets = rows.filter(
+          (a) => a.role === "distribute" || a.role === "standby",
+        );
 
         if (!main) {
           errors.push(`project ${proj.name}: アクティブなメインなし`);
           continue;
         }
-        if (standbys.length === 0) {
-          continue; // 予備なしは正常系
+        if (targets.length === 0) {
+          continue; // 分散本番も予備もなければ同期するものがない
         }
 
-        for (const sb of standbys) {
+        for (const tg of targets) {
           try {
-            const res = await syncOneStandby(supabase, main, sb);
+            const res = await syncOneStandby(supabase, main, tg);
             results.push(res);
             await supabase.from("line_sync_history").insert({
               project_id: proj.id,
               source_account_id: main.id,
-              target_account_id: sb.id,
+              target_account_id: tg.id,
               synced_items: res.items,
               status: res.overall,
               started_at: startedAt,
               completed_at: new Date().toISOString(),
             });
           } catch (e) {
-            const msg = `project=${proj.name} standby=${sb.account_name ?? sb.id}: ${(e as Error).message}`;
+            const msg = `project=${proj.name} target=${tg.account_name ?? tg.id}(${tg.role}): ${(e as Error).message}`;
             errors.push(msg);
             await supabase.from("line_sync_history").insert({
               project_id: proj.id,
               source_account_id: main.id,
-              target_account_id: sb.id,
+              target_account_id: tg.id,
               synced_items: null,
               status: "failed",
               error_message: (e as Error).message,

@@ -13,7 +13,11 @@ export async function GET() {
 
 export async function POST(request: NextRequest) {
   const body = await request.json();
-  const { name, description, color, sort_order, code, ban_sync_enabled } = body;
+  const {
+    name, description, color, sort_order, code,
+    ban_sync_enabled,
+    distribute_enabled, distribute_count, reserve_count,
+  } = body;
 
   if (!name || !String(name).trim()) {
     return Response.json({ error: "name is required" }, { status: 400 });
@@ -31,6 +35,15 @@ export async function POST(request: NextRequest) {
   if (typeof ban_sync_enabled === "boolean") {
     insertBody.ban_sync_enabled = ban_sync_enabled;
   }
+  if (typeof distribute_enabled === "boolean") {
+    insertBody.distribute_enabled = distribute_enabled;
+  }
+  if (Number.isFinite(Number(distribute_count))) {
+    insertBody.distribute_count = Number(distribute_count);
+  }
+  if (Number.isFinite(Number(reserve_count))) {
+    insertBody.reserve_count = Number(reserve_count);
+  }
 
   let { data, error } = await supabase
     .from("line_projects")
@@ -38,10 +51,26 @@ export async function POST(request: NextRequest) {
     .select("*")
     .single();
 
+  // distribute_* カラム未作成環境への fallback
+  if (error && /distribute_enabled|distribute_count|reserve_count/.test(error.message)) {
+    const retry = { ...insertBody };
+    delete retry.distribute_enabled;
+    delete retry.distribute_count;
+    delete retry.reserve_count;
+    ({ data, error } = await supabase
+      .from("line_projects")
+      .insert(retry)
+      .select("*")
+      .single());
+  }
+
   // ban_sync_enabled カラム未作成環境への fallback
   if (error && /ban_sync_enabled/.test(error.message)) {
     const retry = { ...insertBody };
     delete retry.ban_sync_enabled;
+    delete retry.distribute_enabled;
+    delete retry.distribute_count;
+    delete retry.reserve_count;
     ({ data, error } = await supabase
       .from("line_projects")
       .insert(retry)
@@ -66,7 +95,11 @@ export async function POST(request: NextRequest) {
 
 export async function PUT(request: NextRequest) {
   const body = await request.json();
-  const { id, name, description, color, sort_order, code, ban_sync_enabled } = body;
+  const {
+    id, name, description, color, sort_order, code,
+    ban_sync_enabled,
+    distribute_enabled, distribute_count, reserve_count,
+  } = body;
 
   if (!id) {
     return Response.json({ error: "id is required" }, { status: 400 });
@@ -84,6 +117,15 @@ export async function PUT(request: NextRequest) {
   if (typeof ban_sync_enabled === "boolean") {
     updates.ban_sync_enabled = ban_sync_enabled;
   }
+  if (typeof distribute_enabled === "boolean") {
+    updates.distribute_enabled = distribute_enabled;
+  }
+  if (distribute_count !== undefined && Number.isFinite(Number(distribute_count))) {
+    updates.distribute_count = Number(distribute_count);
+  }
+  if (reserve_count !== undefined && Number.isFinite(Number(reserve_count))) {
+    updates.reserve_count = Number(reserve_count);
+  }
 
   let { error } = await supabase.from("line_projects").update(updates).eq("id", id);
 
@@ -94,11 +136,23 @@ export async function PUT(request: NextRequest) {
     ({ error } = await supabase.from("line_projects").update(rest).eq("id", id));
   }
 
+  // distribute_* カラム未作成環境への fallback
+  if (error && /distribute_enabled|distribute_count|reserve_count/.test(error.message)) {
+    const retry = { ...updates };
+    delete retry.distribute_enabled;
+    delete retry.distribute_count;
+    delete retry.reserve_count;
+    ({ error } = await supabase.from("line_projects").update(retry).eq("id", id));
+  }
+
   // ban_sync_enabled カラム未作成環境への fallback
   if (error && /ban_sync_enabled/.test(error.message)) {
-    const { ban_sync_enabled: _omit2, ...rest } = updates as Record<string, unknown>;
-    void _omit2;
-    ({ error } = await supabase.from("line_projects").update(rest).eq("id", id));
+    const retry = { ...updates };
+    delete retry.ban_sync_enabled;
+    delete retry.distribute_enabled;
+    delete retry.distribute_count;
+    delete retry.reserve_count;
+    ({ error } = await supabase.from("line_projects").update(retry).eq("id", id));
   }
 
   if (error) {

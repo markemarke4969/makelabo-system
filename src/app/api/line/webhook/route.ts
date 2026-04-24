@@ -10,6 +10,7 @@ interface LineAccountRow {
   channel_access_token: string | null;
   greeting_message: string | null;
   project_id: string | null;
+  role: string | null;
 }
 
 interface LineEvent {
@@ -70,11 +71,11 @@ export async function POST(request: NextRequest) {
     // greeting_message カラム未作成環境への fallback
     const res = await supabase
       .from("line_accounts")
-      .select("id, channel_id, channel_secret, channel_access_token, greeting_message, project_id");
+      .select("id, channel_id, channel_secret, channel_access_token, greeting_message, project_id, role");
     if (res.error && /greeting_message/.test(res.error.message)) {
       const fb = await supabase
         .from("line_accounts")
-        .select("id, channel_id, channel_secret, channel_access_token, project_id");
+        .select("id, channel_id, channel_secret, channel_access_token, project_id, role");
       if (fb.error) {
         console.error("[LINE Webhook] accounts fetch error:", fb.error.message);
         return Response.json({ error: "DB error" }, { status: 500 });
@@ -350,7 +351,32 @@ async function handleFollow(event: LineEvent, account: LineAccountRow) {
       `[LINE Webhook] 復元対象のため挨拶送信スキップ: user=${userId} prior=${restoredFrom.account_id}`,
     );
   }
-  if (!restoredFrom && account.greeting_message && account.channel_access_token && event.replyToken) {
+
+  // 分散案件 (distribute_enabled=true) では、マスター (role='main') 以外の
+  // アカウントへの follow では挨拶メッセージを送信しない。
+  // ・5本連続で挨拶が送られる UX 崩れを回避
+  // ・マスターだけが「代表」として挨拶する設計
+  let skipGreetingForDistribute = false;
+  if (account.project_id && account.role && account.role !== "main") {
+    try {
+      const { data: projRow } = await supabase
+        .from("line_projects")
+        .select("distribute_enabled")
+        .eq("id", account.project_id)
+        .maybeSingle();
+      if (projRow && (projRow as { distribute_enabled?: boolean | null }).distribute_enabled === true) {
+        skipGreetingForDistribute = true;
+        console.log(
+          `[LINE Webhook] 分散案件のためマスター以外は挨拶スキップ: account=${account.id} role=${account.role}`,
+        );
+      }
+    } catch (e) {
+      // distribute_enabled カラム未作成 / その他エラーは無視 (従来挙動フォールバック)
+      console.warn("[LINE Webhook] distribute_enabled check failed:", (e as Error).message);
+    }
+  }
+
+  if (!restoredFrom && !skipGreetingForDistribute && account.greeting_message && account.channel_access_token && event.replyToken) {
     const text = account.greeting_message.replace(
       /\{display_name\}/g,
       profile?.displayName ?? "ゲスト",
