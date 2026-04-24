@@ -9071,6 +9071,7 @@ export default function LineDashboard() {
                             try {
                               const res = await fetch("/api/cron/line-sync-main-to-backup", {
                                 method: "POST",
+                                credentials: "include",
                               });
                               const data = await res.json();
                               if (res.ok && data.ok) {

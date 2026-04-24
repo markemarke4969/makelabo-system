@@ -1,5 +1,6 @@
 import { NextRequest } from "next/server";
 import { supabase } from "@/lib/supabase";
+import { createClient as createServerSupabase } from "@/lib/supabase-server";
 import { syncOneStandby, type AccountRow, type SyncAccountResult } from "@/lib/account-sync";
 import { notifyChatwork } from "@/lib/chatwork";
 
@@ -8,24 +9,50 @@ export const maxDuration = 300;
 // ============================================================
 // メイン → 予備 自動同期 cron
 // ============================================================
-// 6時間ごとに cron-job.org 等から叩かれる。
+// 6時間ごとに cron-job.org 等から叩かれる。加えてダッシュボードの
+// 「今すぐ同期」ボタンからログイン済み管理者も実行できる。
 //
-// 認証: Authorization: Bearer $CRON_SECRET もしくは ?secret=$CRON_SECRET
+// 認可パス (いずれか満たせば通過):
+//   A. Authorization: Bearer $CRON_SECRET  (cron用)
+//   B. ?secret=$CRON_SECRET                (cron用)
+//   C. Supabase セッション cookie + user_metadata.is_admin === true
+//   D. CRON_SECRET が未設定 = 開発環境扱いで全許可
+//
 // 二重起動防止: line_sync_history.status='running' が存在する場合は拒否。
 // 各案件を順次処理し、1 案件の失敗で全体を止めない。
 // ============================================================
 
-function isAuthorized(request: NextRequest): boolean {
+async function isAuthorized(request: NextRequest): Promise<boolean> {
   const secret = process.env.CRON_SECRET;
-  if (!secret) return true;
-  const auth = request.headers.get("authorization") ?? "";
-  if (auth === `Bearer ${secret}`) return true;
-  const query = request.nextUrl.searchParams.get("secret");
-  return query === secret;
+
+  // A/B: CRON_SECRET 認証
+  if (secret) {
+    const auth = request.headers.get("authorization") ?? "";
+    if (auth === `Bearer ${secret}`) return true;
+    const query = request.nextUrl.searchParams.get("secret");
+    if (query === secret) return true;
+  } else {
+    // D: 開発環境等で未設定なら通す
+    return true;
+  }
+
+  // C: ログイン済み管理者
+  try {
+    const server = await createServerSupabase();
+    const { data: { user } } = await server.auth.getUser();
+    if (user) {
+      const meta = (user.user_metadata ?? {}) as Record<string, unknown>;
+      if (meta.is_admin === true) return true;
+    }
+  } catch {
+    // Cookie 取得失敗・セッションなし等はそのまま拒否
+  }
+
+  return false;
 }
 
 export async function GET(request: NextRequest) {
-  if (!isAuthorized(request)) {
+  if (!(await isAuthorized(request))) {
     return Response.json({ error: "unauthorized" }, { status: 401 });
   }
 
