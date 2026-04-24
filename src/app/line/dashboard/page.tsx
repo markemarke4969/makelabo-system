@@ -4297,16 +4297,25 @@ export default function LineDashboard() {
                           type="text"
                           value={newGroupName}
                           onChange={(e) => setNewGroupName(e.target.value)}
-                          onKeyDown={(e) => {
+                          onKeyDown={async (e) => {
                             if (e.key === "Enter" && !e.nativeEvent.isComposing && newGroupName.trim()) {
-                              // 空のグループを作成（groupedAccountsに表示されるようaccountsには影響しないが、名前だけ予約）
-                              // 既存グループ名と重複チェック
-                              if (Object.keys(groupedAccounts).includes(newGroupName.trim())) {
+                              const name = newGroupName.trim();
+                              if (Object.keys(groupedAccounts).includes(name)) {
                                 alert("同じ名前のグループが既にあります");
                                 return;
                               }
-                              // ダミーとしてgroupedAccountsに空配列を入れるためstateに保持
-                              setAccounts((prev) => [...prev, { id: `group-placeholder-${Date.now()}`, channel_id: "", account_name: null, basic_id: null, is_active: false, group_name: newGroupName.trim() } as LineAccount]);
+                              if (!project?.id) { alert("案件が選択されていません"); return; }
+                              const res = await fetch("/api/line/account-groups", {
+                                method: "PUT",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({ project_id: project.id, group_name: name, closer_visible: false }),
+                              });
+                              if (!res.ok) {
+                                const d = await res.json().catch(() => ({}));
+                                alert(`グループの作成に失敗: ${d.error ?? res.status}`);
+                                return;
+                              }
+                              setAccounts((prev) => [...prev, { id: `group-placeholder-${Date.now()}`, channel_id: "", account_name: null, basic_id: null, is_active: false, group_name: name } as LineAccount]);
                               setNewGroupName("");
                             }
                           }}
@@ -4314,13 +4323,25 @@ export default function LineDashboard() {
                           className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
                         />
                         <button
-                          onClick={() => {
-                            if (!newGroupName.trim()) return;
-                            if (Object.keys(groupedAccounts).includes(newGroupName.trim())) {
+                          onClick={async () => {
+                            const name = newGroupName.trim();
+                            if (!name) return;
+                            if (Object.keys(groupedAccounts).includes(name)) {
                               alert("同じ名前のグループが既にあります");
                               return;
                             }
-                            setAccounts((prev) => [...prev, { id: `group-placeholder-${Date.now()}`, channel_id: "", account_name: null, basic_id: null, is_active: false, group_name: newGroupName.trim() } as LineAccount]);
+                            if (!project?.id) { alert("案件が選択されていません"); return; }
+                            const res = await fetch("/api/line/account-groups", {
+                              method: "PUT",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({ project_id: project.id, group_name: name, closer_visible: false }),
+                            });
+                            if (!res.ok) {
+                              const d = await res.json().catch(() => ({}));
+                              alert(`グループの作成に失敗: ${d.error ?? res.status}`);
+                              return;
+                            }
+                            setAccounts((prev) => [...prev, { id: `group-placeholder-${Date.now()}`, channel_id: "", account_name: null, basic_id: null, is_active: false, group_name: name } as LineAccount]);
                             setNewGroupName("");
                           }}
                           disabled={!newGroupName.trim()}
