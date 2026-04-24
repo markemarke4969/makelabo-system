@@ -9055,6 +9055,65 @@ export default function LineDashboard() {
             </header>
             <main className="flex-1 overflow-y-auto p-4 md:p-6">
               <div className="max-w-4xl space-y-6">
+                {/* BAN対策: LIFF中継URL表示 */}
+                {project?.code && process.env.NEXT_PUBLIC_LIFF_ID && (() => {
+                  const liffUrl = `https://liff.line.me/${process.env.NEXT_PUBLIC_LIFF_ID}?project=${project.code}`;
+                  return (
+                    <div className="bg-gradient-to-r from-green-50 to-blue-50 rounded-lg border border-green-200 p-4 md:p-6">
+                      <div className="flex items-start justify-between gap-3 mb-2">
+                        <h3 className="text-sm font-bold text-gray-800 flex items-center gap-2">
+                          <span className="inline-block w-2 h-2 rounded-full bg-green-500" />
+                          BAN対策: LIFF中継URL
+                        </h3>
+                        <button
+                          onClick={async () => {
+                            if (!confirm("メイン → 予備 の同期を今すぐ実行しますか？")) return;
+                            try {
+                              const res = await fetch("/api/cron/line-sync-main-to-backup", {
+                                method: "POST",
+                              });
+                              const data = await res.json();
+                              if (res.ok && data.ok) {
+                                alert(
+                                  `同期完了\n対象: ${data.total}件\n成功: ${data.success} / 一部スキップ: ${data.partial} / 失敗: ${data.failed}`,
+                                );
+                              } else if (res.status === 409) {
+                                alert(data.error ?? "他の同期が実行中です");
+                              } else {
+                                alert(`同期失敗: ${data.error ?? res.status}`);
+                              }
+                            } catch (e) {
+                              alert(`同期リクエストに失敗: ${(e as Error).message}`);
+                            }
+                          }}
+                          className="flex-shrink-0 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded transition"
+                        >
+                          今すぐ同期
+                        </button>
+                      </div>
+                      <p className="text-[11px] text-gray-600 mb-3">
+                        このURLを全配信メッセージに埋め込むことで、BAN時に自動で新アカウントへ誘導されます。
+                      </p>
+                      <div className="flex items-center gap-2 bg-white rounded-md border border-gray-200 px-3 py-2">
+                        <code className="flex-1 text-xs font-mono text-gray-700 truncate">{liffUrl}</code>
+                        <button
+                          onClick={async () => {
+                            try {
+                              await navigator.clipboard.writeText(liffUrl);
+                              alert("コピーしました");
+                            } catch {
+                              alert("コピーに失敗しました");
+                            }
+                          }}
+                          className="flex-shrink-0 px-3 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-medium rounded transition"
+                        >
+                          コピー
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })()}
+
                 {/* 登録フォーム */}
                 <div className="bg-white rounded-lg border border-gray-200 p-4 md:p-6">
                   <h3 className="text-sm font-bold text-gray-800 mb-4">
@@ -9152,6 +9211,20 @@ export default function LineDashboard() {
                         </label>
                       </div>
                       <p className="text-[10px] text-gray-400 mt-1">本番がBAN検知されるとサブが自動で本番に昇格します</p>
+                      {editingId && form.role === "standby" && (() => {
+                        const mainInSame = accounts.find(
+                          (a) => a.project_id === (form.project_id || null) && a.role === "main" && a.is_active,
+                        );
+                        const mainName = mainInSame?.account_name ?? "（未設定）";
+                        return (
+                          <div className="mt-2 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
+                            <p className="text-[11px] text-amber-800 leading-relaxed">
+                              ⚠ この予備アカウントは、メインアカウント（<span className="font-bold">{mainName}</span>）から6時間おきに自動同期されます。
+                              ここで編集した内容は、次回の同期で上書きされる可能性があります。
+                            </p>
+                          </div>
+                        );
+                      })()}
                     </div>
                     <div className="md:col-span-2">
                       <label className="text-xs text-gray-500 block mb-1 font-medium">

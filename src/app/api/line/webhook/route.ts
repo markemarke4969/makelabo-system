@@ -166,10 +166,53 @@ async function handleFollow(event: LineEvent, account: LineAccountRow) {
     : null;
   console.log("[LINE Webhook] follow profile:", profile);
 
+  // BAN対策: 同一 project_id 内の他アカウントに同 userId の follower 行が
+  // 既に存在するかを探す。見つかったら「復元対象」として、挨拶メッセージを
+  // スキップし、restored_from_* を記録する。
+  let restoredFrom: { account_id: string; follower_id: string } | null = null;
+  if (account.project_id) {
+    try {
+      // 同一案件のアカウントID一覧
+      const { data: siblingAccs } = await supabase
+        .from("line_accounts")
+        .select("id")
+        .eq("project_id", account.project_id);
+      const siblingIds = (siblingAccs ?? [])
+        .map((a) => a.id as string)
+        .filter((id) => id !== account.id);
+
+      if (siblingIds.length > 0) {
+        const { data: priorFollowers } = await supabase
+          .from("line_followers")
+          .select("id, line_account_id, followed_at")
+          .eq("line_user_id", userId)
+          .in("line_account_id", siblingIds)
+          .order("followed_at", { ascending: false })
+          .limit(1);
+        if (priorFollowers && priorFollowers.length > 0) {
+          const prior = priorFollowers[0] as {
+            id: string;
+            line_account_id: string;
+            followed_at: string;
+          };
+          restoredFrom = {
+            account_id: prior.line_account_id,
+            follower_id: prior.id,
+          };
+          console.log(
+            `[LINE Webhook] 復元対象検出: user=${userId} prior_account=${prior.line_account_id} prior_follower=${prior.id}`,
+          );
+        }
+      }
+    } catch (e) {
+      console.error("[LINE Webhook] 復元判定失敗:", e);
+    }
+  }
+
   // upsert（再フォロー対応）
   // upsert + select の同時実行は maybeSingle で null が返る既知の挙動があるため、
   // upsert と select を分離する
-  const upsertBase = {
+  const upsertBase: Record<string, unknown> = {
     line_account_id: account.id,
     line_user_id: userId,
     display_name: profile?.displayName ?? null,
@@ -179,11 +222,29 @@ async function handleFollow(event: LineEvent, account: LineAccountRow) {
     unfollowed_at: null,
     updated_at: new Date().toISOString(),
   };
+  if (restoredFrom) {
+    upsertBase.restored_from_account_id = restoredFrom.account_id;
+    upsertBase.restored_from_follower_id = restoredFrom.follower_id;
+    upsertBase.restored_at = new Date().toISOString();
+  }
 
-  // ステップ1: upsert のみ実行
-  const upsertRes = await supabase
+  // ステップ1: upsert のみ実行 (restored_* カラム未作成環境への fallback 付き)
+  let upsertRes = await supabase
     .from("line_followers")
     .upsert(upsertBase, { onConflict: "line_account_id,line_user_id" });
+  if (
+    upsertRes.error &&
+    /restored_from_account_id|restored_from_follower_id|restored_at/.test(upsertRes.error.message)
+  ) {
+    console.warn("[LINE Webhook] restored_* カラム未作成 → migration 推奨。復元記録なしで再試行");
+    const fallback = { ...upsertBase };
+    delete fallback.restored_from_account_id;
+    delete fallback.restored_from_follower_id;
+    delete fallback.restored_at;
+    upsertRes = await supabase
+      .from("line_followers")
+      .upsert(fallback, { onConflict: "line_account_id,line_user_id" });
+  }
   if (upsertRes.error) {
     console.error("[LINE Webhook] follower upsert失敗:", upsertRes.error.message);
   }
@@ -283,7 +344,13 @@ async function handleFollow(event: LineEvent, account: LineAccountRow) {
   }
 
   // カスタム挨拶メッセージを送信（設定されていれば）
-  if (account.greeting_message && account.channel_access_token && event.replyToken) {
+  // BAN対策: 復元対象 (restoredFrom != null) の場合は挨拶送信しない
+  if (restoredFrom) {
+    console.log(
+      `[LINE Webhook] 復元対象のため挨拶送信スキップ: user=${userId} prior=${restoredFrom.account_id}`,
+    );
+  }
+  if (!restoredFrom && account.greeting_message && account.channel_access_token && event.replyToken) {
     const text = account.greeting_message.replace(
       /\{display_name\}/g,
       profile?.displayName ?? "ゲスト",
