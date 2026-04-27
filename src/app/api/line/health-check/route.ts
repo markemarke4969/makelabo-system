@@ -73,9 +73,19 @@ export async function GET(request: NextRequest) {
       // BAN検知 → 自動切り替え実行
       const origin = request.nextUrl.origin;
       try {
+        // 段階3 B2 対応: ban-switch に認可チェックが入ったため、
+        // CRON_SECRET を Authorization ヘッダで転送する。
+        // 未設定環境(開発)では ban-switch 側の D ルート(全許可)で通る。
+        const switchHeaders: Record<string, string> = {
+          "Content-Type": "application/json",
+        };
+        const cronSecret = process.env.CRON_SECRET;
+        if (cronSecret) {
+          switchHeaders.Authorization = `Bearer ${cronSecret}`;
+        }
         const switchRes = await fetch(`${origin}/api/line/ban-switch`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: switchHeaders,
           body: JSON.stringify({
             account_id: acc.id,
             project_id: acc.project_id,

@@ -1,5 +1,49 @@
 import { NextRequest } from "next/server";
 import { supabase } from "@/lib/supabase";
+import { createClient as createServerSupabase } from "@/lib/supabase-server";
+
+// ============================================================
+// 認可チェック（ハイブリッド・パターンZ）
+// ============================================================
+// 段階3 B2 対応: ban-switch は破壊的操作のため、以下のいずれかを満たす場合のみ許可。
+//   A. Authorization: Bearer $CRON_SECRET     (内部 cron / health-check 用)
+//   B. ?secret=$CRON_SECRET                    (内部 cron 用)
+//   C. Supabase セッション cookie + user_metadata.is_admin === true (管理画面 UI 用)
+//   D. CRON_SECRET 未設定 = 開発環境扱いで全許可
+//
+// 既存呼出元との対応:
+//   - /api/line/health-check → A (Bearer ヘッダ転送)
+//   - /line/pool UI (admin) → C (cookie + is_admin)
+//
+// 参考実装: /api/cron/line-sync-main-to-backup の isAuthorized()
+async function isAuthorized(request: NextRequest): Promise<boolean> {
+  const secret = process.env.CRON_SECRET;
+
+  // A/B: CRON_SECRET 認証
+  if (secret) {
+    const auth = request.headers.get("authorization") ?? "";
+    if (auth === `Bearer ${secret}`) return true;
+    const query = request.nextUrl.searchParams.get("secret");
+    if (query === secret) return true;
+  } else {
+    // D: 開発環境等で未設定なら通す
+    return true;
+  }
+
+  // C: ログイン済み管理者
+  try {
+    const server = await createServerSupabase();
+    const { data: { user } } = await server.auth.getUser();
+    if (user) {
+      const meta = (user.user_metadata ?? {}) as Record<string, unknown>;
+      if (meta.is_admin === true) return true;
+    }
+  } catch {
+    // Cookie 取得失敗・セッションなし等はそのまま拒否
+  }
+
+  return false;
+}
 
 // ============================================================
 // 通知ヘルパー（Chatwork [toall]）
@@ -40,6 +84,10 @@ async function sendNotifications(message: string) {
 // BAN切り替えメインロジック
 // ============================================================
 export async function POST(request: NextRequest) {
+  if (!(await isAuthorized(request))) {
+    return Response.json({ error: "unauthorized" }, { status: 401 });
+  }
+
   const body = await request.json();
   const { account_id, project_id, reason } = body;
 
@@ -175,6 +223,10 @@ export async function POST(request: NextRequest) {
 // プール状態取得（GET）
 // ============================================================
 export async function GET(request: NextRequest) {
+  if (!(await isAuthorized(request))) {
+    return Response.json({ error: "unauthorized" }, { status: 401 });
+  }
+
   const projectId = request.nextUrl.searchParams.get("project_id");
 
   // メインアカウント
