@@ -44,6 +44,19 @@ interface PoolData {
   remaining_standby: number;
 }
 
+// 段階3 B4 対応: 手動BAN切替プルダウンの誤選択防止用ラベル生成
+// 形式: アカウント名 (@basic_id) [本番|稼働中]
+function buildBanTargetLabel(
+  name: string | null | undefined,
+  basicId: string | null | undefined,
+  status: "本番" | "稼働中",
+  fallback: string,
+): string {
+  const safeName = name ?? fallback;
+  const safeBasic = basicId ? `@${basicId.replace(/^@/, "")}` : "@未設定";
+  return `${safeName} (${safeBasic}) [${status}]`;
+}
+
 export default function LinePool() {
   const router = useRouter();
   const [data, setData] = useState<PoolData | null>(null);
@@ -140,7 +153,9 @@ export default function LinePool() {
   // 手動BAN切り替え
   const executeBanSwitch = async () => {
     if (!banTarget || !project) return;
-    if (!confirm(`本当に「${banTarget}」をBAN扱いにして切り替えますか？`)) return;
+    // 段階3 B4 対応: UUID ではなく可読 label を表示して誤選択を防ぐ
+    const targetLabel = banTargets.find((t) => t.id === banTarget)?.label ?? banTarget;
+    if (!confirm(`本当に「${targetLabel}」をBAN扱いにして切り替えますか？`)) return;
     setBanSwitching(true);
     setBanResult(null);
     try {
@@ -176,9 +191,21 @@ export default function LinePool() {
   const remaining = data?.remaining_standby ?? 0;
 
   // BANできるアカウント（main or active）
+  // 段階3 B4 対応: アカウント名 + Basic ID + 状態 を併記して誤選択を防ぐ
   const banTargets = [
-    ...(data?.main_accounts ?? []).map((a) => ({ id: a.id, name: a.account_name ?? a.channel_id })),
-    ...activePool.map((p) => ({ id: p.account_id, name: p.line_accounts?.account_name ?? p.account_id.slice(0, 8) })),
+    ...(data?.main_accounts ?? []).map((a) => ({
+      id: a.id,
+      label: buildBanTargetLabel(a.account_name, a.basic_id, "本番", a.channel_id),
+    })),
+    ...activePool.map((p) => ({
+      id: p.account_id,
+      label: buildBanTargetLabel(
+        p.line_accounts?.account_name,
+        p.line_accounts?.basic_id,
+        "稼働中",
+        p.account_id.slice(0, 8),
+      ),
+    })),
   ];
 
   if (!project) return null;
@@ -411,11 +438,11 @@ export default function LinePool() {
                   <select
                     value={banTarget}
                     onChange={(e) => setBanTarget(e.target.value)}
-                    className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:border-orange-400 focus:outline-none focus:ring-1 focus:ring-orange-400 min-w-[200px]"
+                    className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:border-orange-400 focus:outline-none focus:ring-1 focus:ring-orange-400 min-w-[280px]"
                   >
                     <option value="">選択してください</option>
                     {banTargets.map((t) => (
-                      <option key={t.id} value={t.id}>{t.name}</option>
+                      <option key={t.id} value={t.id}>{t.label}</option>
                     ))}
                   </select>
                 </div>
