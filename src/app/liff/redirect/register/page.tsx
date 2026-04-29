@@ -81,11 +81,31 @@ function RegisterInner() {
       }
       const groupName = getQueryFromSearch(window.location.search, "group");
 
+      // 案B 実装(2026-04-30):案件単位で LIFF ID を切り替える
+      // /api/liff/config?project=<code> で LIFF ID を取得し、liff.init に渡す
+      let liffId: string | null = null;
+      try {
+        const r = await fetch(`/api/liff/config?project=${encodeURIComponent(code)}`);
+        const data = (await r.json()) as { liffId?: string | null; error?: string };
+        liffId = data.liffId ?? null;
+      } catch (e) {
+        if (cancelled) return;
+        setStatus("error");
+        setErrorMsg(`LIFF 設定取得失敗: ${(e as Error).message}`);
+        return;
+      }
+      // フォールバック:DB 未設定なら env を使う(getLiffIdForProject も同じ fallback を持つので二重保険)
+      if (!liffId) liffId = process.env.NEXT_PUBLIC_LIFF_ID ?? null;
+      if (!liffId) {
+        if (cancelled) return;
+        setStatus("error");
+        setErrorMsg(`LIFF ID が見つかりません(project=${code})`);
+        return;
+      }
+
       // LIFF init
       let uid = "";
       try {
-        const liffId = process.env.NEXT_PUBLIC_LIFF_ID;
-        if (!liffId) throw new Error("LIFF ID が設定されていません");
         const liff = (await import("@line/liff")).default;
         await liff.init({ liffId });
         if (!liff.isLoggedIn()) {

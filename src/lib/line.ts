@@ -7,6 +7,45 @@ import {
   type BranchCondition,
   type BranchEvalContext,
 } from "./line-replacer";
+import { supabaseAdmin } from "./supabase";
+
+/**
+ * 案件コードから LIFF ID を取得する(案B 実装、2026-04-30)。
+ * line_projects.liff_id を SELECT し、未設定 / 案件未発見の場合は
+ * 環境変数 NEXT_PUBLIC_LIFF_ID を fallback として返す。env も無ければ null。
+ *
+ * - クロスプロバイダー LIFF 問題回避のため、案件単位で LIFF ID を切り替える設計
+ * - 既存 MARI 用 LIFF を壊さないよう env fallback を保険として残す
+ *
+ * 詳細:設計書07 §6 の見直し / 2026-04-28 段階3残務整理.md
+ */
+export async function getLiffIdForProject(projectCode: string): Promise<string | null> {
+  const trimmed = projectCode?.trim();
+  const fallback = process.env.NEXT_PUBLIC_LIFF_ID ?? null;
+  if (!trimmed) return fallback;
+
+  try {
+    const r = await supabaseAdmin
+      .from("line_projects")
+      .select("liff_id")
+      .eq("code", trimmed)
+      .maybeSingle();
+    if (r.error) {
+      // liff_id カラム未作成環境への fallback(段階的マイグレーション対応)
+      if (/liff_id/.test(r.error.message)) {
+        return fallback;
+      }
+      console.warn("[getLiffIdForProject] DB error:", r.error.message);
+      return fallback;
+    }
+    const dbLiffId = (r.data as { liff_id?: string | null } | null)?.liff_id ?? null;
+    if (dbLiffId && dbLiffId.trim()) return dbLiffId.trim();
+    return fallback;
+  } catch (e) {
+    console.warn("[getLiffIdForProject] unexpected error:", (e as Error).message);
+    return fallback;
+  }
+}
 
 /** LINE署名検証 */
 export function verifySignature(body: string, signature: string, channelSecret: string): boolean {

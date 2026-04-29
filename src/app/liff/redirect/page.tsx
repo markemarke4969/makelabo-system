@@ -63,9 +63,22 @@ function RedirectInner() {
       }
       setProject(code);
 
+      // 案B 実装(2026-04-30):案件単位で LIFF ID を切り替える
+      // /api/liff/config?project=<code> で LIFF ID を取得し、liff.init に渡す
+      // DB 未設定 / API 失敗時は env(NEXT_PUBLIC_LIFF_ID)に fallback して MARI 既存動作を維持
+      let liffId: string | null = null;
+      try {
+        const r = await fetch(`/api/liff/config?project=${encodeURIComponent(code)}`);
+        const data = (await r.json()) as { liffId?: string | null; error?: string };
+        liffId = data.liffId ?? null;
+      } catch {
+        // API 失敗時は env fallback で続行(MARI 既存動作の保険)
+        liffId = null;
+      }
+      if (!liffId) liffId = process.env.NEXT_PUBLIC_LIFF_ID ?? null;
+
       // LIFF 初期化
       try {
-        const liffId = process.env.NEXT_PUBLIC_LIFF_ID;
         if (!liffId) {
           throw new Error("LIFF ID が設定されていません");
         }
