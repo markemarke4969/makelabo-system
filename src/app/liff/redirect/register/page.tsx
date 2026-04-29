@@ -31,12 +31,26 @@ function getQueryFromSearch(search: string, key: string): string | null {
   const params = new URLSearchParams(search);
   const direct = params.get(key)?.trim();
   if (direct) return direct;
-  const liffState = params.get("liff.state");
-  if (liffState) {
-    const stateStr = liffState.startsWith("?") ? liffState.slice(1) : liffState;
-    const stateParams = new URLSearchParams(stateStr);
-    const fromState = stateParams.get(key)?.trim();
-    if (fromState) return fromState;
+
+  // LIFF プラットフォーム経由のクエリは liff.state に詰め替えられる仕様。
+  // B1 バグ修正(2026-04-30):LIFF から渡される liff.state が二重エンコード
+  // されているケースに備えて、decodeURIComponent を最大1回追加適用して再パースを試みる。
+  const liffStateRaw = params.get("liff.state");
+  if (!liffStateRaw) return null;
+
+  const candidates: string[] = [liffStateRaw];
+  try {
+    const decoded = decodeURIComponent(liffStateRaw);
+    if (decoded !== liffStateRaw) candidates.push(decoded);
+  } catch { /* ignore decode failure */ }
+
+  for (const cand of candidates) {
+    const stateStr = cand.startsWith("?") ? cand.slice(1) : cand;
+    try {
+      const stateParams = new URLSearchParams(stateStr);
+      const fromState = stateParams.get(key)?.trim();
+      if (fromState) return fromState;
+    } catch { /* ignore parse failure, try next candidate */ }
   }
   return null;
 }
@@ -48,14 +62,21 @@ function RegisterInner() {
   useEffect(() => {
     let cancelled = false;
     async function run() {
+      // B1 バグ修正(2026-04-30):LIFF 経由時の query 取得失敗の原因特定用にログを強化
       try {
+        const rawSearch = window.location.search;
+        const liffStateValue = new URLSearchParams(rawSearch).get("liff.state");
         console.log("[LIFF register] href =", window.location.href);
+        console.log("[LIFF register] search =", rawSearch);
+        console.log("[LIFF register] liff.state =", liffStateValue);
       } catch { /* noop */ }
 
       const code = getQueryFromSearch(window.location.search, "project");
       if (!code) {
         setStatus("error");
-        setErrorMsg("案件指定がありません(project クエリ未指定)");
+        // 画面でも実 URL 構造が見えるようにエラーメッセージにデバッグ情報を埋める
+        const searchSnippet = (window.location.search || "(空)").slice(0, 200);
+        setErrorMsg(`案件指定がありません(project クエリ未指定)\nsearch=${searchSnippet}`);
         return;
       }
       const groupName = getQueryFromSearch(window.location.search, "group");
@@ -131,7 +152,7 @@ function RegisterInner() {
       <FullScreen>
         <div className="text-red-600 text-2xl mb-3">!</div>
         <h1 className="text-base font-bold text-gray-800 mb-2">エラー</h1>
-        <p className="text-sm text-gray-600">{errorMsg}</p>
+        <p className="text-sm text-gray-600 whitespace-pre-wrap break-all">{errorMsg}</p>
         <p className="text-xs text-gray-400 mt-4">
           お手数ですがしばらく経ってから再度お試しください。
         </p>
