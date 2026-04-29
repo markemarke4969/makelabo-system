@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { supabase } from "@/lib/supabase";
+import { supabase, supabaseAdmin } from "@/lib/supabase";
 
 export const dynamic = "force-dynamic";
 
@@ -40,7 +40,7 @@ export async function GET(request: NextRequest) {
   sinceDate.setUTCDate(sinceDate.getUTCDate() - (days - 1));
   const sinceIso = sinceDate.toISOString();
 
-  const { data: clicks, error: clicksErr } = await supabase
+  const { data: clicks, error: clicksErr } = await supabaseAdmin
     .from("line_inflow_clicks")
     .select("inflow_route_id, clicked_at")
     .in("inflow_route_id", routeIds)
