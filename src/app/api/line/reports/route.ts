@@ -214,32 +214,5 @@ export async function POST(request: NextRequest) {
     { onConflict: "project_id,report_month" },
   );
 
-  // Chatwork送信（CHATWORK_TOKEN と CHATWORK_ROOM_ID が設定されていれば）
-  const chatworkToken = process.env.CHATWORK_TOKEN;
-  const chatworkRoomId = process.env.CHATWORK_ROOM_ID;
-  if (chatworkToken && chatworkRoomId) {
-    const message = `[info][title]月次レポート ${targetMonth}[/title]` +
-      `配信数: ${reportData.delivery.total}件\n` +
-      `友達追加: ${reportData.new_followers.total}人\n` +
-      `流入経路TOP3: ${inflowRanking.slice(0, 3).map((r) => `${r.name}(${r.count})`).join(", ")}\n` +
-      `ラベルTOP5: ${labelStats.slice(0, 5).map((l) => `${l.name}(${l.count})`).join(", ")}[/info]`;
-
-    try {
-      await fetch(`https://api.chatwork.com/v2/rooms/${chatworkRoomId}/messages`, {
-        method: "POST",
-        headers: {
-          "X-ChatWorkToken": chatworkToken,
-          "Content-Type": "application/x-www-form-urlencoded",
-        },
-        body: `body=${encodeURIComponent(message)}`,
-      });
-
-      await supabase.from("line_monthly_reports").update({
-        status: "sent",
-        sent_at: new Date().toISOString(),
-      }).eq("project_id", project_id).eq("report_month", targetMonth);
-    } catch { /* Chatwork送信失敗は無視 */ }
-  }
-
   return Response.json({ ok: true, report: reportData });
 }

@@ -8,15 +8,6 @@ import {
   type BranchEvalContext,
 } from "./line-replacer";
 
-export function getLineConfig() {
-  const channelSecret = process.env.LINE_CHANNEL_SECRET;
-  const channelAccessToken = process.env.LINE_CHANNEL_ACCESS_TOKEN;
-  if (!channelSecret || !channelAccessToken) {
-    throw new Error("LINE環境変数が未設定です (LINE_CHANNEL_SECRET / LINE_CHANNEL_ACCESS_TOKEN)");
-  }
-  return { channelSecret, channelAccessToken };
-}
-
 /** LINE署名検証 */
 export function verifySignature(body: string, signature: string, channelSecret: string): boolean {
   const hash = crypto
