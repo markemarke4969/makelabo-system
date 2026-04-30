@@ -54,8 +54,9 @@ interface LineAccount {
   account_name: string | null;
   basic_id: string | null;
   is_active: boolean;
-  group_name?: string | null;
+  group_name?: string | null; // 段階5(案B)Step 12 で廃止予定、Step 12 適用後は API GET で undefined となる
   project_id?: string | null;
+  scenario_id?: string | null; // 段階5(案B)で追加。Step 02〜04 適用後に値が入る
   role?: "main" | "distribute" | "standby" | "banned" | null;
   order_index?: number | null;
   greeting_message?: string | null;
