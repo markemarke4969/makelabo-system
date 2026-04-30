@@ -17,6 +17,8 @@ export interface BroadcastSequenceRow {
   name: string;
   scheduled_at: string | null;
   target_condition: DeliveryCondition | null;
+  // 段階5 案B:scenario_id がセットされていれば scenario 経由で main を解決
+  scenario_id?: string | null;
 }
 
 interface StepMessageRow {
@@ -50,17 +52,47 @@ export async function markBroadcastSent(sequenceId: string) {
  * 1件の予約配信シーケンスを配信。
  * - 対象フォロワー抽出 → 並列 push → line_messages / line_broadcast_logs に記録 → sent_at を更新
  * 既に sent_at が埋まっている場合でも再送はしない想定なので、呼び出し側で未送信チェックをする。
+ *
+ * 段階5 案B:
+ *   - seq.scenario_id があれば、その scenario の main(role='main' AND is_active=true)から配信
+ *   - scenario 経由で main が取れなければ、従来通り seq.account_id 経由のアカウントから配信(後方互換)
  */
 export async function processBroadcastSequence(seq: BroadcastSequenceRow): Promise<{
   sent: number;
   failed: number;
   skipped_reason?: string;
 }> {
-  const { data: account } = await supabase
-    .from("line_accounts")
-    .select("id, channel_access_token")
-    .eq("id", seq.account_id)
-    .maybeSingle<AccountRow>();
+  let account: AccountRow | null = null;
+
+  // 1) 段階5 案B:scenario_id があれば scenario 配下の main を優先
+  if (seq.scenario_id) {
+    const r = await supabase
+      .from("line_accounts")
+      .select("id, channel_access_token")
+      .eq("scenario_id", seq.scenario_id)
+      .eq("role", "main")
+      .eq("is_active", true)
+      .limit(1)
+      .maybeSingle<AccountRow>();
+    if (r.error) {
+      // scenario_id 列が無い(Step 02 未適用)など → 後方互換 fallback
+      if (!/scenario_id/i.test(r.error.message)) {
+        // scenario 経由のアクセスエラーは握りつぶし、account_id fallback へ
+      }
+    } else if (r.data) {
+      account = r.data;
+    }
+  }
+
+  // 2) 後方互換 fallback:scenario 経由で取れなければ seq.account_id で従来取得
+  if (!account) {
+    const { data: fb } = await supabase
+      .from("line_accounts")
+      .select("id, channel_access_token")
+      .eq("id", seq.account_id)
+      .maybeSingle<AccountRow>();
+    account = fb ?? null;
+  }
 
   if (!account || !account.channel_access_token) {
     await markBroadcastSent(seq.id);
@@ -246,22 +278,46 @@ export async function runScheduledBroadcasts(): Promise<{
 }> {
   const nowIso = new Date().toISOString();
 
-  const { data: seqs, error: seqErr } = await supabase
-    .from("line_step_sequences")
-    .select("id, account_id, name, scheduled_at, target_condition")
-    .eq("kind", "schedule")
-    .eq("status", "active")
-    .is("sent_at", null)
-    .not("scheduled_at", "is", null)
-    .lte("scheduled_at", nowIso)
-    .order("scheduled_at", { ascending: true })
-    .limit(20);
+  // 段階5 案B:scenario_id 列も取得(列不在環境では fallback)
+  let sequences: BroadcastSequenceRow[] = [];
+  {
+    const r = await supabase
+      .from("line_step_sequences")
+      .select("id, account_id, name, scheduled_at, target_condition, scenario_id")
+      .eq("kind", "schedule")
+      .eq("status", "active")
+      .is("sent_at", null)
+      .not("scheduled_at", "is", null)
+      .lte("scheduled_at", nowIso)
+      .order("scheduled_at", { ascending: true })
+      .limit(20);
 
-  if (seqErr) {
-    throw new Error(`sequences fetch failed: ${seqErr.message}`);
+    if (r.error && /scenario_id/i.test(r.error.message)) {
+      // scenario_id 列が無い(Step 02 未適用)→ 従来 select で再取得
+      const fb = await supabase
+        .from("line_step_sequences")
+        .select("id, account_id, name, scheduled_at, target_condition")
+        .eq("kind", "schedule")
+        .eq("status", "active")
+        .is("sent_at", null)
+        .not("scheduled_at", "is", null)
+        .lte("scheduled_at", nowIso)
+        .order("scheduled_at", { ascending: true })
+        .limit(20);
+      if (fb.error) {
+        throw new Error(`sequences fetch failed: ${fb.error.message}`);
+      }
+      sequences = (fb.data ?? []).map((s) => ({
+        ...(s as Omit<BroadcastSequenceRow, "scenario_id">),
+        scenario_id: null,
+      })) as BroadcastSequenceRow[];
+    } else if (r.error) {
+      throw new Error(`sequences fetch failed: ${r.error.message}`);
+    } else {
+      sequences = (r.data ?? []) as BroadcastSequenceRow[];
+    }
   }
 
-  const sequences = (seqs ?? []) as BroadcastSequenceRow[];
   const summary = {
     processed: sequences.length,
     total_sent: 0,

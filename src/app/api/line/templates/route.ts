@@ -35,15 +35,29 @@ export async function POST(request: NextRequest) {
     return Response.json({ error: "account_id and name are required" }, { status: 400 });
   }
 
-  const { data, error } = await supabase
+  // 段階5(案B):line_accounts.group_name 廃止に伴い、line_templates 側の group_name 参照も削除
+  // line_templates.group_name 列自体は別タスクで判断(列が残っていても害はない)
+  const tplInsert: Record<string, unknown> = {
+    account_id: body.account_id,
+    name: body.name,
+  };
+
+  let { data, error } = await supabase
     .from("line_templates")
-    .insert({
-      account_id: body.account_id,
-      name: body.name,
-      group_name: body.group_name || null,
-    })
+    .insert(tplInsert)
     .select("id")
     .single();
+
+  // group_name NOT NULL 制約環境(旧スキーマ)への fallback:
+  // 旧 group_name 列が NOT NULL の場合、明示的に null を渡しても insert エラーになる可能性がある
+  // その場合は body.group_name または空文字を fallback で渡す
+  if (error && /group_name/i.test(error.message)) {
+    ({ data, error } = await supabase
+      .from("line_templates")
+      .insert({ ...tplInsert, group_name: body.group_name ?? "" })
+      .select("id")
+      .single());
+  }
 
   if (error) {
     return Response.json({ error: error.message }, { status: 500 });
@@ -75,8 +89,9 @@ export async function PUT(request: NextRequest) {
 
   const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
   if (body.name !== undefined) updates.name = body.name;
-  if (body.group_name !== undefined) updates.group_name = body.group_name;
   if (body.sort_order !== undefined) updates.sort_order = body.sort_order;
+  // 段階5(案B):group_name 参照は削除(line_accounts.group_name 廃止と整合)
+  // 旧クライアントが body.group_name を送っても無視する後方互換動作
 
   const { error } = await supabase
     .from("line_templates")

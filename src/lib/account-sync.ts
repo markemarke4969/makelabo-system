@@ -258,6 +258,28 @@ async function syncStepSequences(
 ): Promise<SyncItemResult> {
   const result = emptyResult("step_sequences");
 
+  // ============================================================
+  // 段階5 案B: account_id 列が存在しない(Step 11 適用後)場合は同期不要
+  // ============================================================
+  // 設計上の根拠(草案 §11 高優先度 5-5):
+  //   段階5 で line_step_sequences は account_id → scenario_id に置換され、
+  //   scenario 配下のアカウントは sequences を共有する形になる。
+  //   したがって「main → standby/distribute へ sequences をコピー」する
+  //   従来の同期ロジックは不要(=思想5「同期がほぼ不要になる」の実現)。
+  //   account_id 列が無い環境では早期 return で安全にスキップする。
+  // ============================================================
+  {
+    const probe = await db
+      .from("line_step_sequences")
+      .select("id")
+      .eq("account_id", mainId)
+      .limit(1);
+    if (probe.error && /account_id/i.test(probe.error.message)) {
+      pushNote(result.notes!, "段階5(scenario 共有モード)のため同期不要");
+      return result;
+    }
+  }
+
   // kind カラム有無のハンドリング: エラーなら kind なし扱い
   let mainSeqs: SeqRow[] = [];
   {

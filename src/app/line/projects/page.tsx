@@ -4,6 +4,29 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase-browser";
 
+interface Scenario {
+  id: string;
+  project_id: string;
+  code: string | null;
+  name: string;
+  distribute_enabled: boolean | null;
+  distribute_count: number | null;
+  reserve_count: number | null;
+  ban_sync_enabled: boolean | null;
+  sort_order: number | null;
+}
+
+interface ScenarioForm {
+  id: string;
+  code: string;
+  name: string;
+  distribute_enabled: boolean;
+  distribute_count: number;
+  reserve_count: number;
+  ban_sync_enabled: boolean;
+  sort_order: number;
+}
+
 interface Project {
   id: string;
   name: string;
@@ -15,6 +38,7 @@ interface Project {
   distribute_enabled?: boolean;
   distribute_count?: number;
   reserve_count?: number;
+  scenarios?: Scenario[]; // 段階5 案B:line_scenarios 利用可能時のみ含まれる
 }
 
 interface ProjectForm {
@@ -72,6 +96,9 @@ export default function LineProjects() {
 
   // 編集中の案件のアカウント集計
   const [accountSummary, setAccountSummary] = useState<ProjectAccountSummary | null>(null);
+
+  // 段階5 案B:編集中の案件に紐付く scenarios のフォーム値(scenarios が無い環境では空配列)
+  const [scenariosForm, setScenariosForm] = useState<ScenarioForm[]>([]);
 
   // スマホ用ハンバーガーメニュー
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -147,6 +174,7 @@ export default function LineProjects() {
       sort_order: projects.length > 0 ? Math.max(...projects.map((p) => p.sort_order)) + 10 : 10,
     });
     setProjectMsg(null);
+    setScenariosForm([]); // 新規 project は scenarios 無しで開始
     setShowProjectModal(true);
   };
 
@@ -163,6 +191,19 @@ export default function LineProjects() {
       distribute_count: p.distribute_count ?? 1,
       reserve_count: p.reserve_count ?? 0,
     });
+    // 段階5 案B:scenarios が API から返ってくれば編集フォームに展開、なければ空配列
+    setScenariosForm(
+      (p.scenarios ?? []).map((s) => ({
+        id: s.id,
+        code: s.code ?? "",
+        name: s.name,
+        distribute_enabled: !!s.distribute_enabled,
+        distribute_count: s.distribute_count ?? 1,
+        reserve_count: s.reserve_count ?? 0,
+        ban_sync_enabled: !!s.ban_sync_enabled,
+        sort_order: s.sort_order ?? 0,
+      })),
+    );
     setProjectMsg(null);
     setAccountSummary(null);
     setShowProjectModal(true);
@@ -192,10 +233,24 @@ export default function LineProjects() {
     setProjectMsg(null);
     try {
       if (editingProjectId) {
+        // 段階5 案B:scenariosForm が空でなければ scenarios 配列も送信
+        const putBody: Record<string, unknown> = { id: editingProjectId, ...projectForm };
+        if (scenariosForm.length > 0) {
+          putBody.scenarios = scenariosForm.map((s) => ({
+            id: s.id,
+            code: s.code,
+            name: s.name,
+            distribute_enabled: s.distribute_enabled,
+            distribute_count: s.distribute_count,
+            reserve_count: s.reserve_count,
+            ban_sync_enabled: s.ban_sync_enabled,
+            sort_order: s.sort_order,
+          }));
+        }
         const res = await fetch("/api/line/projects", {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ id: editingProjectId, ...projectForm }),
+          body: JSON.stringify(putBody),
         });
         if (!res.ok) {
           const data = await res.json().catch(() => ({}));
@@ -510,6 +565,11 @@ export default function LineProjects() {
                 <p className="text-[10px] text-gray-400 mt-1">小さい順に並びます（例: 10, 20, 30...）</p>
               </div>
 
+              {/* ============================================================ */}
+              {/* 段階5(案B)Step 13 対応:project レベルの設定欄は scenarios が空の時のみ表示 */}
+              {/* scenarios 配列が存在する場合(line_scenarios 適用後)は下方の「シナリオ設定」セクションで編集 */}
+              {/* ============================================================ */}
+              {scenariosForm.length === 0 && (
               <div className="border-t border-gray-200 pt-4">
                 <label className="flex items-start gap-2 cursor-pointer">
                   <input
@@ -527,7 +587,9 @@ export default function LineProjects() {
                   </div>
                 </label>
               </div>
+              )}
 
+              {scenariosForm.length === 0 && (
               <div className="border-t border-gray-200 pt-4">
                 <label className="flex items-start gap-2 cursor-pointer">
                   <input
@@ -591,6 +653,119 @@ export default function LineProjects() {
                   </div>
                 )}
               </div>
+              )}
+
+              {/* ============================================================ */}
+              {/* 段階5 案B:シナリオ設定セクション(scenarios が存在する場合のみ表示) */}
+              {/* ============================================================ */}
+              {scenariosForm.length > 0 && (
+                <div className="pt-3 border-t border-gray-200">
+                  <div className="text-xs font-medium text-gray-700 mb-2">
+                    シナリオ設定(段階5 案B)
+                  </div>
+                  <p className="text-[10px] text-gray-500 mb-3">
+                    案件に紐付くシナリオごとに分散/同期設定を編集できます。<br />
+                    sort_order=0 は LIFF URL の主シナリオ用に予約されています。
+                  </p>
+                  <div className="space-y-3">
+                    {scenariosForm.map((sc, idx) => (
+                      <div key={sc.id} className="bg-gray-50 border border-gray-200 rounded-md p-3 space-y-2">
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] text-gray-500 font-medium">
+                            #{sc.sort_order}
+                          </span>
+                          <input
+                            type="text"
+                            value={sc.name}
+                            onChange={(e) => {
+                              const next = [...scenariosForm];
+                              next[idx] = { ...next[idx], name: e.target.value };
+                              setScenariosForm(next);
+                            }}
+                            className="flex-1 border border-gray-200 rounded px-2 py-1 text-xs bg-white"
+                            placeholder="シナリオ名"
+                          />
+                          <input
+                            type="text"
+                            value={sc.code}
+                            onChange={(e) => {
+                              const next = [...scenariosForm];
+                              next[idx] = { ...next[idx], code: e.target.value };
+                              setScenariosForm(next);
+                            }}
+                            className="w-32 border border-gray-200 rounded px-2 py-1 text-xs bg-white font-mono"
+                            placeholder="code"
+                          />
+                        </div>
+                        <div className="flex items-center gap-3 text-[11px]">
+                          <label className="flex items-center gap-1 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={sc.ban_sync_enabled}
+                              onChange={(e) => {
+                                const next = [...scenariosForm];
+                                next[idx] = { ...next[idx], ban_sync_enabled: e.target.checked };
+                                setScenariosForm(next);
+                              }}
+                              className="w-3 h-3"
+                            />
+                            <span className="text-gray-700">BAN対策同期</span>
+                          </label>
+                          <label className="flex items-center gap-1 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={sc.distribute_enabled}
+                              onChange={(e) => {
+                                const next = [...scenariosForm];
+                                next[idx] = { ...next[idx], distribute_enabled: e.target.checked };
+                                setScenariosForm(next);
+                              }}
+                              className="w-3 h-3"
+                            />
+                            <span className="text-gray-700">分散登録</span>
+                          </label>
+                        </div>
+                        {sc.distribute_enabled && (
+                          <div className="grid grid-cols-2 gap-2 ml-4">
+                            <div>
+                              <label className="text-[10px] text-gray-500 block mb-0.5">分散本数</label>
+                              <select
+                                value={sc.distribute_count}
+                                onChange={(e) => {
+                                  const next = [...scenariosForm];
+                                  next[idx] = { ...next[idx], distribute_count: Number(e.target.value) };
+                                  setScenariosForm(next);
+                                }}
+                                className="w-full border border-gray-200 rounded px-2 py-1 text-xs bg-white"
+                              >
+                                {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => (
+                                  <option key={n} value={n}>{n} 本</option>
+                                ))}
+                              </select>
+                            </div>
+                            <div>
+                              <label className="text-[10px] text-gray-500 block mb-0.5">予備本数</label>
+                              <select
+                                value={sc.reserve_count}
+                                onChange={(e) => {
+                                  const next = [...scenariosForm];
+                                  next[idx] = { ...next[idx], reserve_count: Number(e.target.value) };
+                                  setScenariosForm(next);
+                                }}
+                                className="w-full border border-gray-200 rounded px-2 py-1 text-xs bg-white"
+                              >
+                                {[0, 1, 2, 3, 4, 5].map((n) => (
+                                  <option key={n} value={n}>{n} 本</option>
+                                ))}
+                              </select>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {projectMsg && (
                 <div className={`px-3 py-2 rounded-md text-xs ${
