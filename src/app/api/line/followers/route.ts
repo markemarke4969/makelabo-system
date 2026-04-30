@@ -1,6 +1,19 @@
 import { NextRequest } from "next/server";
 import { supabase } from "@/lib/supabase";
 
+// ============================================================
+// LINE フォロワー API(段階5 案B 対応・後方互換維持)
+// ============================================================
+// closer_visible_only クエリ:
+//   - 段階5 以前:line_account_groups.closer_visible で絞り込み
+//   - Step 12 適用後:line_account_groups テーブル削除済 → 絞り込み無効化(全表示)
+//
+// クローザー権限制御を将来も維持したい場合、line_scenarios に closer_visible 列を追加して
+// 同等のロジックを再実装する想定(本タスクスコープ外、別タスクで対応)。
+//
+// 草案出典: C:\Users\lmsml\.claude\plans\07-calm-pudding.md §11(低優先度・followers)
+// ============================================================
+
 export async function GET(request: NextRequest) {
   const testOnly = request.nextUrl.searchParams.get("test_only") === "1";
   const accountId = request.nextUrl.searchParams.get("account_id");
@@ -8,8 +21,9 @@ export async function GET(request: NextRequest) {
   // クローザーログイン時: closer_visible=true のグループのアカウントのみに限定
   const closerVisibleOnly = request.nextUrl.searchParams.get("closer_visible_only") === "1";
 
-  // クローザー絞り込み: 表示可能なグループ名リストを取得
+  // クローザー絞り込み: 表示可能なグループ名リストを取得(line_account_groups 不在なら絞り込み無効化)
   let allowedGroupNames: string[] | null = null;
+  let closerFilterDisabled = false; // line_account_groups テーブル不在時に true(全表示にフォールバック)
   if (closerVisibleOnly && projectId) {
     const { data: visGroups, error: visErr } = await supabase
       .from("line_account_groups")
@@ -17,41 +31,77 @@ export async function GET(request: NextRequest) {
       .eq("project_id", projectId)
       .eq("closer_visible", true);
     if (visErr) {
-      return Response.json({ error: visErr.message }, { status: 500 });
-    }
-    allowedGroupNames = (visGroups ?? []).map((g) => g.group_name);
-    // クローザー可視のグループが無い場合は空配列
-    if (allowedGroupNames.length === 0) {
-      return Response.json([]);
+      // テーブル不在(Step 12 適用後)→ 絞り込み無効化、全表示にフォールバック
+      if (/line_account_groups/i.test(visErr.message) || visErr.code === "PGRST205") {
+        console.warn(
+          "[followers GET] line_account_groups テーブル未作成 → closer_visible_only フィルタを無効化",
+        );
+        closerFilterDisabled = true;
+      } else {
+        return Response.json({ error: visErr.message }, { status: 500 });
+      }
+    } else {
+      allowedGroupNames = (visGroups ?? []).map((g) => g.group_name);
+      // クローザー可視のグループが無い場合は空配列(closer_visible=true 行が無い)
+      if (allowedGroupNames.length === 0) {
+        return Response.json([]);
+      }
     }
   }
 
   // project_id 指定時: line_accounts からその project に属する account_id を全取得し .in() で絞る
   let accountIdsFromProject: string[] | null = null;
   if (projectId && !accountId) {
-    let accQuery = supabase
-      .from("line_accounts")
-      .select("id, group_name")
-      .eq("project_id", projectId);
-    if (allowedGroupNames) accQuery = accQuery.in("group_name", allowedGroupNames);
-    const { data: accs, error: accErr } = await accQuery;
+    // group_name フィルタは line_account_groups が利用可能 + closer 絞り込み有効時のみ
+    const useGroupFilter = !!allowedGroupNames && !closerFilterDisabled;
+
+    // 列存在 fallback 付きで account 取得
+    const accSelectWithGroup = "id, group_name";
+    const accSelectNoGroup = "id";
+
+    const tryFetch = async (withGroupCol: boolean) => {
+      let q = supabase
+        .from("line_accounts")
+        .select(withGroupCol ? accSelectWithGroup : accSelectNoGroup)
+        .eq("project_id", projectId);
+      if (withGroupCol && useGroupFilter && allowedGroupNames) {
+        q = q.in("group_name", allowedGroupNames);
+      }
+      return await q;
+    };
+
+    let { data: accs, error: accErr } = await tryFetch(true);
+    if (accErr && /group_name/i.test(accErr.message)) {
+      // group_name 列削除後(Step 12 適用後)→ group_name フィルタを完全無効化して再取得
+      ({ data: accs, error: accErr } = await tryFetch(false));
+    }
     if (accErr) {
       return Response.json({ error: accErr.message }, { status: 500 });
     }
-    accountIdsFromProject = (accs ?? []).map((a) => a.id);
+    accountIdsFromProject = ((accs ?? []) as unknown as Array<{ id: string }>).map((a) => a.id);
     // その案件にアカウントが0件なら即空配列を返す
     if (accountIdsFromProject.length === 0) {
       return Response.json([]);
     }
-  } else if (accountId && allowedGroupNames) {
+  } else if (accountId && allowedGroupNames && !closerFilterDisabled) {
     // 単一アカウント指定でクローザー絞り込み時、そのアカウントが可視グループ内か確認
-    const { data: acc } = await supabase
+    // group_name 列削除後(Step 12 適用後)はチェックをスキップして許可(全表示)
+    const r = await supabase
       .from("line_accounts")
       .select("group_name")
       .eq("id", accountId)
       .maybeSingle();
-    if (!acc || !acc.group_name || !allowedGroupNames.includes(acc.group_name)) {
-      return Response.json([]);
+    if (r.error) {
+      if (/group_name/i.test(r.error.message)) {
+        // 列削除後 → クローザー絞り込みを無効化(全表示にフォールバック)
+      } else {
+        return Response.json({ error: r.error.message }, { status: 500 });
+      }
+    } else {
+      const acc = r.data as { group_name?: string | null } | null;
+      if (!acc || !acc.group_name || !allowedGroupNames.includes(acc.group_name)) {
+        return Response.json([]);
+      }
     }
   }
 
