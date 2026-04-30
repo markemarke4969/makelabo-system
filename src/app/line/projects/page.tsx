@@ -565,6 +565,11 @@ export default function LineProjects() {
                 <p className="text-[10px] text-gray-400 mt-1">小さい順に並びます（例: 10, 20, 30...）</p>
               </div>
 
+              {/* ============================================================ */}
+              {/* 段階5(案B)Step 13 対応:project レベルの設定欄は scenarios が空の時のみ表示 */}
+              {/* scenarios 配列が存在する場合(line_scenarios 適用後)は下方の「シナリオ設定」セクションで編集 */}
+              {/* ============================================================ */}
+              {scenariosForm.length === 0 && (
               <div className="border-t border-gray-200 pt-4">
                 <label className="flex items-start gap-2 cursor-pointer">
                   <input
@@ -582,7 +587,9 @@ export default function LineProjects() {
                   </div>
                 </label>
               </div>
+              )}
 
+              {scenariosForm.length === 0 && (
               <div className="border-t border-gray-200 pt-4">
                 <label className="flex items-start gap-2 cursor-pointer">
                   <input
@@ -646,6 +653,7 @@ export default function LineProjects() {
                   </div>
                 )}
               </div>
+              )}
 
               {/* ============================================================ */}
               {/* 段階5 案B:シナリオ設定セクション(scenarios が存在する場合のみ表示) */}
