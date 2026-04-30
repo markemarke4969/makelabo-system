@@ -1,13 +1,42 @@
 import { NextRequest } from "next/server";
 import { supabase } from "@/lib/supabase";
 
+// ============================================================
+// LINE アカウント管理 API(段階5 案B 対応・後方互換維持)
+// ============================================================
+// 段階5 で line_accounts.group_name 列は廃止予定(Step 12)、
+// 代わりに line_accounts.scenario_id 列でアカウントの所属シナリオを管理する。
+//
+// 本ファイルは以下の状態すべてに対応:
+//   - 状態1(Step 02 未適用):scenario_id 列無し、group_name 列あり → 従来動作
+//   - 状態2(Step 02〜04 適用 + Step 12 未適用):両方の列が共存 → 両方扱う
+//   - 状態3(Step 12 適用後):scenario_id 列のみ、group_name 列削除済 → scenario_id のみ
+//
+// POST 時のバリデーション:
+//   - scenario_id 指定 → line_scenarios で存在確認(テーブル不在ならスキップ)
+//   - group_name 指定 → line_account_groups で存在確認(テーブル不在ならスキップ)
+//   - 両方未指定 → 400(従来通り「グループ未所属のアカウントは追加不可」)
+//
+// 草案出典: C:\Users\lmsml\.claude\plans\07-calm-pudding.md §11(低優先度・accounts)
+// ============================================================
+
+interface ColumnAvailability {
+  groupName: boolean;
+  scenarioId: boolean;
+  greeting: boolean;
+  newsletter: boolean;
+  orderIndex: boolean;
+}
+
 export async function GET(request: NextRequest) {
   const projectId = request.nextUrl.searchParams.get("project_id");
 
-  const buildQuery = (opts: { greeting: boolean; newsletter: boolean; orderIndex: boolean }) => {
-    const base = "id, channel_id, account_name, basic_id, is_active, group_name, project_id, role";
+  const buildQuery = (opts: ColumnAvailability) => {
+    const base = "id, channel_id, account_name, basic_id, is_active, project_id, role";
     const cols = [
       base,
+      opts.groupName ? "group_name" : null,
+      opts.scenarioId ? "scenario_id" : null,
       opts.orderIndex ? "order_index" : null,
       opts.greeting ? "greeting_message" : null,
       opts.newsletter ? "newsletter_from_email, newsletter_from_name" : null,
@@ -19,21 +48,45 @@ export async function GET(request: NextRequest) {
     return q;
   };
 
-  let { data, error } = await buildQuery({ greeting: true, newsletter: true, orderIndex: true });
-  // order_index カラム未作成への fallback (分散登録マイグレーション未適用環境)
+  // 全カラム取得を試行、足りない列があれば段階的に削っていく
+  const tryQuery = async (cols: ColumnAvailability) => {
+    const { data, error } = await buildQuery(cols);
+    return { data, error };
+  };
+
+  let cols: ColumnAvailability = {
+    groupName: true,
+    scenarioId: true,
+    greeting: true,
+    newsletter: true,
+    orderIndex: true,
+  };
+  let { data, error } = await tryQuery(cols);
+
+  // scenario_id 列未作成への fallback(Step 02 未適用)
+  if (error && /scenario_id/i.test(error.message)) {
+    cols = { ...cols, scenarioId: false };
+    ({ data, error } = await tryQuery(cols));
+  }
+  // group_name 列削除後への fallback(Step 12 適用後)
+  if (error && /group_name/i.test(error.message)) {
+    cols = { ...cols, groupName: false };
+    ({ data, error } = await tryQuery(cols));
+  }
+  // order_index 列未作成への fallback
   if (error && /order_index/.test(error.message)) {
-    ({ data, error } = await buildQuery({ greeting: true, newsletter: true, orderIndex: false }));
+    cols = { ...cols, orderIndex: false };
+    ({ data, error } = await tryQuery(cols));
   }
-  // newsletter_from_* カラム未作成への fallback
+  // newsletter_from_* 列未作成への fallback
   if (error && /newsletter_from_/.test(error.message)) {
-    ({ data, error } = await buildQuery({ greeting: true, newsletter: false, orderIndex: true }));
-    if (error && /order_index/.test(error.message)) {
-      ({ data, error } = await buildQuery({ greeting: true, newsletter: false, orderIndex: false }));
-    }
+    cols = { ...cols, newsletter: false };
+    ({ data, error } = await tryQuery(cols));
   }
-  // greeting_message カラム未作成への fallback
+  // greeting_message 列未作成への fallback
   if (error && /greeting_message/.test(error.message)) {
-    ({ data, error } = await buildQuery({ greeting: false, newsletter: false, orderIndex: false }));
+    cols = { ...cols, greeting: false };
+    ({ data, error } = await tryQuery(cols));
   }
 
   if (error) {
@@ -43,31 +96,88 @@ export async function GET(request: NextRequest) {
   return Response.json(data);
 }
 
+/**
+ * scenario_id 指定時、line_scenarios で存在確認。テーブル不在(Step 01 未適用)ならスキップ。
+ */
+async function validateScenarioId(scenarioId: string, projectId: string | null): Promise<{
+  ok: boolean;
+  reason?: string;
+  legacyFallback: boolean;
+}> {
+  let q = supabase.from("line_scenarios").select("id").eq("id", scenarioId);
+  if (projectId) q = q.eq("project_id", projectId);
+  const r = await q.maybeSingle();
+  if (r.error) {
+    if (/line_scenarios/i.test(r.error.message) || r.error.code === "PGRST205") {
+      return { ok: false, legacyFallback: true };
+    }
+    return { ok: false, legacyFallback: false, reason: r.error.message };
+  }
+  if (!r.data) {
+    return { ok: false, legacyFallback: false, reason: `scenario not found: ${scenarioId}` };
+  }
+  return { ok: true, legacyFallback: false };
+}
+
+/**
+ * group_name 指定時、line_account_groups で存在確認。テーブル不在(Step 12 適用後)ならスキップ。
+ */
+async function validateGroupName(groupName: string, projectId: string | null): Promise<{
+  ok: boolean;
+  reason?: string;
+  legacyFallback: boolean;
+}> {
+  let q = supabase.from("line_account_groups").select("group_name").eq("group_name", groupName);
+  if (projectId) q = q.eq("project_id", projectId);
+  const r = await q.maybeSingle();
+  if (r.error) {
+    if (/line_account_groups/i.test(r.error.message) || r.error.code === "PGRST205") {
+      return { ok: false, legacyFallback: true };
+    }
+    return { ok: false, legacyFallback: false, reason: r.error.message };
+  }
+  if (!r.data) {
+    return {
+      ok: false,
+      legacyFallback: false,
+      reason: `指定されたグループ「${groupName}」が存在しません`,
+    };
+  }
+  return { ok: true, legacyFallback: false };
+}
+
 export async function POST(request: NextRequest) {
   const body = await request.json();
 
   const groupName = typeof body.group_name === "string" ? body.group_name.trim() : "";
-  if (!groupName) {
+  const scenarioId = typeof body.scenario_id === "string" ? body.scenario_id.trim() : "";
+
+  if (!groupName && !scenarioId) {
     return Response.json(
-      { error: "グループを選択してください（グループ未所属のアカウントは追加できません）" },
-      { status: 400 }
+      {
+        error:
+          "シナリオまたはグループを選択してください(段階5 では scenario_id 推奨)",
+      },
+      { status: 400 },
     );
   }
 
-  let groupQuery = supabase
-    .from("line_account_groups")
-    .select("group_name")
-    .eq("group_name", groupName);
-  if (body.project_id) groupQuery = groupQuery.eq("project_id", body.project_id);
-  const { data: groupRow, error: groupErr } = await groupQuery.maybeSingle();
-  if (groupErr) {
-    return Response.json({ error: groupErr.message }, { status: 500 });
+  // scenario_id が指定されていれば優先で検証
+  if (scenarioId) {
+    const v = await validateScenarioId(scenarioId, body.project_id ?? null);
+    if (!v.ok && !v.legacyFallback) {
+      return Response.json({ error: v.reason ?? "scenario validation failed" }, { status: 400 });
+    }
+    // legacyFallback の場合は line_scenarios 不在 → group_name バリデーションに移る
   }
-  if (!groupRow) {
-    return Response.json(
-      { error: `指定されたグループ「${groupName}」が存在しません` },
-      { status: 400 }
-    );
+
+  // scenario_id が指定されていない、または line_scenarios 不在の場合は group_name 検証
+  if (groupName && !scenarioId) {
+    const v = await validateGroupName(groupName, body.project_id ?? null);
+    if (!v.ok && !v.legacyFallback) {
+      return Response.json({ error: v.reason ?? "group validation failed" }, { status: 400 });
+    }
+    // legacyFallback の場合(line_account_groups 不在 = Step 12 適用後)はスキップして続行
   }
 
   const insertBody: Record<string, unknown> = {
@@ -76,28 +186,42 @@ export async function POST(request: NextRequest) {
     basic_id: body.basic_id || null,
     channel_secret: body.channel_secret,
     channel_access_token: body.channel_access_token,
-    group_name: groupName,
     project_id: body.project_id || null,
     role: body.role || "main",
     greeting_message: body.greeting_message || null,
     newsletter_from_email: body.newsletter_from_email || null,
     newsletter_from_name: body.newsletter_from_name || null,
   };
+  if (groupName) insertBody.group_name = groupName;
+  if (scenarioId) insertBody.scenario_id = scenarioId;
   if (typeof body.order_index === "number" && Number.isFinite(body.order_index)) {
     insertBody.order_index = body.order_index;
   }
 
-  let { data, error } = await supabase
-    .from("line_accounts")
-    .insert(insertBody)
-    .select("id")
-    .single();
+  const tryInsert = async (b: Record<string, unknown>) =>
+    supabase.from("line_accounts").insert(b).select("id").single();
+
+  let { data, error } = await tryInsert(insertBody);
+
+  // scenario_id 列未作成への fallback(Step 02 未適用)
+  if (error && /scenario_id/i.test(error.message)) {
+    const { scenario_id: _s, ...rest } = insertBody as Record<string, unknown>;
+    void _s;
+    ({ data, error } = await tryInsert(rest));
+  }
+
+  // group_name 列削除後への fallback(Step 12 適用後)
+  if (error && /group_name/i.test(error.message)) {
+    const { group_name: _g, ...rest } = insertBody as Record<string, unknown>;
+    void _g;
+    ({ data, error } = await tryInsert(rest));
+  }
 
   // order_index カラム未作成への fallback
   if (error && /order_index/.test(error.message)) {
     const { order_index: _o, ...rest } = insertBody as Record<string, unknown>;
     void _o;
-    ({ data, error } = await supabase.from("line_accounts").insert(rest).select("id").single());
+    ({ data, error } = await tryInsert(rest));
   }
 
   // newsletter_from_* カラム未作成への fallback
@@ -106,15 +230,14 @@ export async function POST(request: NextRequest) {
       insertBody as Record<string, unknown>;
     void _a;
     void _b;
-    ({ data, error } = await supabase.from("line_accounts").insert(rest).select("id").single());
+    ({ data, error } = await tryInsert(rest));
   }
 
   if (error) {
     return Response.json({ error: error.message }, { status: 500 });
   }
 
-  // role=standby の場合のみ line_account_pool にも登録（BAN切替の切替先候補として使える状態にする）
-  // 'distribute' は分散本番なので pool (切替先候補) には含めない。
+  // role=standby の場合のみ line_account_pool にも登録
   if (data?.id && insertBody.role === "standby" && insertBody.project_id) {
     const { error: poolErr } = await supabase
       .from("line_account_pool")
@@ -147,6 +270,7 @@ export async function PUT(request: NextRequest) {
   if (body.channel_secret !== undefined && body.channel_secret !== "") updates.channel_secret = body.channel_secret;
   if (body.channel_access_token !== undefined && body.channel_access_token !== "") updates.channel_access_token = body.channel_access_token;
   if (body.group_name !== undefined) updates.group_name = body.group_name || null;
+  if (body.scenario_id !== undefined) updates.scenario_id = body.scenario_id || null;
   if (body.project_id !== undefined) updates.project_id = body.project_id || null;
   if (body.is_active !== undefined) updates.is_active = body.is_active;
   if (body.role !== undefined) updates.role = body.role || null;
@@ -157,16 +281,30 @@ export async function PUT(request: NextRequest) {
   if (body.newsletter_from_email !== undefined) updates.newsletter_from_email = body.newsletter_from_email || null;
   if (body.newsletter_from_name !== undefined) updates.newsletter_from_name = body.newsletter_from_name || null;
 
-  let { error } = await supabase
-    .from("line_accounts")
-    .update(updates)
-    .eq("id", body.id);
+  const tryUpdate = async (u: Record<string, unknown>) =>
+    supabase.from("line_accounts").update(u).eq("id", body.id);
+
+  let { error } = await tryUpdate(updates);
+
+  // scenario_id 列未作成への fallback(Step 02 未適用)
+  if (error && /scenario_id/i.test(error.message)) {
+    const { scenario_id: _s, ...rest } = updates as Record<string, unknown>;
+    void _s;
+    ({ error } = await tryUpdate(rest));
+  }
+
+  // group_name 列削除後への fallback(Step 12 適用後)
+  if (error && /group_name/i.test(error.message)) {
+    const { group_name: _g, ...rest } = updates as Record<string, unknown>;
+    void _g;
+    ({ error } = await tryUpdate(rest));
+  }
 
   // order_index カラム未作成時の fallback
   if (error && /order_index/.test(error.message)) {
     const { order_index: _o, ...rest } = updates as Record<string, unknown>;
     void _o;
-    ({ error } = await supabase.from("line_accounts").update(rest).eq("id", body.id));
+    ({ error } = await tryUpdate(rest));
   }
 
   // newsletter_from_* カラム未作成時の fallback
@@ -175,14 +313,14 @@ export async function PUT(request: NextRequest) {
       updates as Record<string, unknown>;
     void _a;
     void _b;
-    ({ error } = await supabase.from("line_accounts").update(rest).eq("id", body.id));
+    ({ error } = await tryUpdate(rest));
   }
 
   // greeting_message カラム未作成時の fallback
   if (error && /greeting_message/.test(error.message)) {
     const { greeting_message: _omit, ...rest } = updates as Record<string, unknown>;
     void _omit;
-    ({ error } = await supabase.from("line_accounts").update(rest).eq("id", body.id));
+    ({ error } = await tryUpdate(rest));
   }
 
   if (error) {
