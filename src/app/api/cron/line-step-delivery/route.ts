@@ -23,6 +23,8 @@ interface EnrollmentRow {
   line_user_id: string;
   enrolled_at: string;
   last_sent_step: number;
+  // 段階5 案B:line_step_enrollments に scenario_id 列があればそれを優先(列不在なら null)
+  scenario_id?: string | null;
 }
 
 interface StepMsgRow {
@@ -61,18 +63,56 @@ async function runStepDelivery(): Promise<{
   completed: number;
 }> {
   // 1. active なエンロールメントを取得（最大200件）
-  const { data: enrollments, error } = await supabase
-    .from("line_step_enrollments")
-    .select("id, sequence_id, follower_id, account_id, line_user_id, enrolled_at, last_sent_step")
-    .eq("status", "active")
-    .order("enrolled_at", { ascending: true })
-    .limit(200);
+  // 9 項目判断 1:本番 DB に line_step_enrollments テーブル不在のため、PGRST205 エラー時は早期 return
+  // 段階5 案B:scenario_id 列があれば取得、無ければ列不在 fallback
+  let rows: EnrollmentRow[] = [];
+  {
+    const r = await supabase
+      .from("line_step_enrollments")
+      .select("id, sequence_id, follower_id, account_id, line_user_id, enrolled_at, last_sent_step, scenario_id")
+      .eq("status", "active")
+      .order("enrolled_at", { ascending: true })
+      .limit(200);
 
-  if (error) {
-    throw new Error(`enrollments fetch failed: ${error.message}`);
+    // テーブル不在(本番 DB:9 項目判断 1)→ 処理スキップで早期 return
+    if (
+      r.error &&
+      (/line_step_enrollments/i.test(r.error.message) || r.error.code === "PGRST205")
+    ) {
+      console.warn(
+        "[cron/line-step-delivery] line_step_enrollments テーブル未作成 → 段階5 案B 9項目判断 1 (Skip) により処理スキップ",
+      );
+      return { processed: 0, sent: 0, failed: 0, completed: 0 };
+    }
+
+    // scenario_id 列が無い(Step 02 未適用)→ 従来 select で再取得
+    if (r.error && /scenario_id/i.test(r.error.message)) {
+      const fb = await supabase
+        .from("line_step_enrollments")
+        .select("id, sequence_id, follower_id, account_id, line_user_id, enrolled_at, last_sent_step")
+        .eq("status", "active")
+        .order("enrolled_at", { ascending: true })
+        .limit(200);
+      if (fb.error) {
+        if (/line_step_enrollments/i.test(fb.error.message) || fb.error.code === "PGRST205") {
+          console.warn(
+            "[cron/line-step-delivery] line_step_enrollments テーブル未作成 → 処理スキップ",
+          );
+          return { processed: 0, sent: 0, failed: 0, completed: 0 };
+        }
+        throw new Error(`enrollments fetch failed: ${fb.error.message}`);
+      }
+      rows = (fb.data ?? []).map((e) => ({
+        ...(e as Omit<EnrollmentRow, "scenario_id">),
+        scenario_id: null,
+      })) as EnrollmentRow[];
+    } else if (r.error) {
+      throw new Error(`enrollments fetch failed: ${r.error.message}`);
+    } else {
+      rows = (r.data ?? []) as EnrollmentRow[];
+    }
   }
 
-  const rows = (enrollments ?? []) as EnrollmentRow[];
   let sent = 0;
   let failed = 0;
   let completed = 0;
@@ -130,15 +170,40 @@ async function runStepDelivery(): Promise<{
     if (dueMessages.length === 0) continue;
 
     // 5. アクセストークン取得
-    if (!tokenCache.has(enr.account_id)) {
-      const { data: acc } = await supabase
-        .from("line_accounts")
-        .select("channel_access_token")
-        .eq("id", enr.account_id)
-        .maybeSingle();
-      tokenCache.set(enr.account_id, (acc?.channel_access_token as string) ?? null);
+    // 段階5 案B:enr.scenario_id があれば scenario 配下の main(role='main' AND is_active=true)から取得
+    //          取れなければ enr.account_id 経由の従来取得に fallback(後方互換)
+    // キャッシュキーは「scenario_id があればそれ、なければ account_id」で区別
+    const cacheKey = enr.scenario_id ? `scn:${enr.scenario_id}` : `acc:${enr.account_id}`;
+    if (!tokenCache.has(cacheKey)) {
+      let resolvedToken: string | null = null;
+
+      if (enr.scenario_id) {
+        const r = await supabase
+          .from("line_accounts")
+          .select("channel_access_token")
+          .eq("scenario_id", enr.scenario_id)
+          .eq("role", "main")
+          .eq("is_active", true)
+          .limit(1)
+          .maybeSingle();
+        if (!r.error && r.data) {
+          resolvedToken = (r.data.channel_access_token as string) ?? null;
+        }
+        // scenario 経由でアクセスエラー(列不在等)の場合は account_id fallback へ
+      }
+
+      if (!resolvedToken) {
+        const { data: acc } = await supabase
+          .from("line_accounts")
+          .select("channel_access_token")
+          .eq("id", enr.account_id)
+          .maybeSingle();
+        resolvedToken = (acc?.channel_access_token as string) ?? null;
+      }
+
+      tokenCache.set(cacheKey, resolvedToken);
     }
-    const token = tokenCache.get(enr.account_id);
+    const token = tokenCache.get(cacheKey);
     if (!token) {
       failed += dueMessages.length;
       continue;
