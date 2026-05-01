@@ -411,7 +411,6 @@ export default function LineDashboard() {
   // 現在のユーザー情報
   const [currentUser, setCurrentUser] = useState<{ id: string; is_closer: boolean; is_admin: boolean; closer_name: string | null } | null>(null);
   // グループのクローザー表示設定
-  const [groupSettings, setGroupSettings] = useState<Record<string, boolean>>({});
   // クローザー一覧（担当クローザー選択用）
   const [closerUsers, setCloserUsers] = useState<Array<{ id: string; name: string | null; closer_name: string | null }>>([]);
 
@@ -531,9 +530,6 @@ export default function LineDashboard() {
   const [labelUserSearch, setLabelUserSearch] = useState("");
   const LABEL_USERS_PER_PAGE = 30;
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [showGroupManager, setShowGroupManager] = useState(false);
-  const [editingGroupName, setEditingGroupName] = useState<{ old: string; new: string } | null>(null);
-  const [newGroupName, setNewGroupName] = useState("");
 
   // Feature 1: Name editing
   const [editingName, setEditingName] = useState(false);
@@ -963,19 +959,6 @@ export default function LineDashboard() {
     } catch { /* */ }
   }, [project?.id]);
 
-  const fetchGroupSettings = useCallback(async () => {
-    if (!project?.id) return;
-    try {
-      const res = await fetch(`/api/line/account-groups?project_id=${project.id}`);
-      if (res.ok) {
-        const groups = await res.json();
-        const map: Record<string, boolean> = {};
-        for (const g of groups) map[g.group_name] = !!g.closer_visible;
-        setGroupSettings(map);
-      }
-    } catch { /* */ }
-  }, [project?.id]);
-
   const fetchCloserUsers = useCallback(async () => {
     try {
       const res = await fetch("/api/line/users");
@@ -1213,45 +1196,12 @@ export default function LineDashboard() {
     });
   };
 
-  // グループ名編集
-  const renameGroup = (oldName: string, newName: string) => {
-    if (!newName.trim() || newName === oldName) {
-      setEditingGroupName(null);
-      return;
-    }
-    // 全アカウントのgroup_nameを更新（ローカル）
-    setAccounts((prev) =>
-      prev.map((acc) =>
-        (acc.group_name || "未分類") === oldName
-          ? { ...acc, group_name: newName.trim() }
-          : acc
-      )
-    );
-    setEditingGroupName(null);
-  };
-
-  const deleteGroup = (groupName: string) => {
-    if (!confirm(`グループ「${groupName}」を削除しますか？\nアカウントは「未分類」に移動します。`)) return;
-    setAccounts((prev) =>
-      prev.map((acc) =>
-        (acc.group_name || "未分類") === groupName
-          ? { ...acc, group_name: null }
-          : acc
-      )
-    );
-  };
-
   // 通常表示用のグループ（本番 + BAN済み。サブ（standby）は別管理）
   // BAN済みアカウントは過去の友だち・チャット履歴閲覧のため表示を残す
-  // クローザーの場合はcloser_visibleなグループのみ表示
-  const isCloserUser = currentUser?.is_closer && !currentUser?.is_admin;
+  // 段階5(案B)PR-4:グループ管理 UI 廃止に伴い closer_visible フィルタを削除
+  // (closer 用の可視制御は将来 scenario 単位で再実装する想定)
   const sortedGroupedAccounts = accounts
     .filter((acc) => !acc.role || acc.role === "main" || acc.role === "distribute" || acc.role === "banned")
-    .filter((acc) => {
-      if (!isCloserUser) return true;
-      const group = acc.group_name || "未分類";
-      return !!groupSettings[group];
-    })
     // main を先、banned を後に並べる
     .sort((a, b) => {
       const rank = (r?: string | null) => (r === "banned" ? 1 : 0);
@@ -1854,11 +1804,10 @@ export default function LineDashboard() {
     fetchAccounts();
     fetchUnreadCounts();
     fetchAllProjects();
-    fetchGroupSettings();
     fetchCloserUsers();
     fetchSmsBalance();
     fetchReports();
-  }, [fetchFollowers, fetchAccounts, fetchUnreadCounts, fetchAllProjects, fetchGroupSettings, fetchCloserUsers, fetchSmsBalance, fetchReports]);
+  }, [fetchFollowers, fetchAccounts, fetchUnreadCounts, fetchAllProjects, fetchCloserUsers, fetchSmsBalance, fetchReports]);
 
   // 段階5(案B)PR-1:scenarios を独立 fetch で取得(既存 fetchAllProjects に手を入れない方針)
   // /api/line/projects は各 project に scenarios 配列を埋め込んで返す(段階5 hotfix 9ea0e4e で対応済)。
@@ -4345,172 +4294,12 @@ export default function LineDashboard() {
                 );
               })()}
 
-              {/* グループ管理モーダル */}
-              {showGroupManager && (
-                <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-                  <div className="bg-white rounded-xl shadow-xl w-full max-w-md mx-4">
-                    <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
-                      <h3 className="font-bold text-gray-800">グループ管理</h3>
-                      <button onClick={() => { setShowGroupManager(false); setEditingGroupName(null); }} className="text-gray-400 hover:text-gray-600">{Icons.close}</button>
-                    </div>
-                    <div className="p-5">
-                      {/* 新規グループ作成 */}
-                      <div className="flex items-center gap-2 mb-4">
-                        <input
-                          type="text"
-                          value={newGroupName}
-                          onChange={(e) => setNewGroupName(e.target.value)}
-                          onKeyDown={async (e) => {
-                            if (e.key === "Enter" && !e.nativeEvent.isComposing && newGroupName.trim()) {
-                              const name = newGroupName.trim();
-                              if (Object.keys(groupedAccounts).includes(name)) {
-                                alert("同じ名前のグループが既にあります");
-                                return;
-                              }
-                              if (!project?.id) { alert("案件が選択されていません"); return; }
-                              const res = await fetch("/api/line/account-groups", {
-                                method: "PUT",
-                                headers: { "Content-Type": "application/json" },
-                                body: JSON.stringify({ project_id: project.id, group_name: name, closer_visible: false }),
-                              });
-                              if (!res.ok) {
-                                const d = await res.json().catch(() => ({}));
-                                alert(`グループの作成に失敗: ${d.error ?? res.status}`);
-                                return;
-                              }
-                              setAccounts((prev) => [...prev, { id: `group-placeholder-${Date.now()}`, channel_id: "", account_name: null, basic_id: null, is_active: false, group_name: name } as LineAccount]);
-                              setNewGroupName("");
-                            }
-                          }}
-                          placeholder="新しいグループ名を入力"
-                          className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
-                        />
-                        <button
-                          onClick={async () => {
-                            const name = newGroupName.trim();
-                            if (!name) return;
-                            if (Object.keys(groupedAccounts).includes(name)) {
-                              alert("同じ名前のグループが既にあります");
-                              return;
-                            }
-                            if (!project?.id) { alert("案件が選択されていません"); return; }
-                            const res = await fetch("/api/line/account-groups", {
-                              method: "PUT",
-                              headers: { "Content-Type": "application/json" },
-                              body: JSON.stringify({ project_id: project.id, group_name: name, closer_visible: false }),
-                            });
-                            if (!res.ok) {
-                              const d = await res.json().catch(() => ({}));
-                              alert(`グループの作成に失敗: ${d.error ?? res.status}`);
-                              return;
-                            }
-                            setAccounts((prev) => [...prev, { id: `group-placeholder-${Date.now()}`, channel_id: "", account_name: null, basic_id: null, is_active: false, group_name: name } as LineAccount]);
-                            setNewGroupName("");
-                          }}
-                          disabled={!newGroupName.trim()}
-                          className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs font-medium rounded-lg transition"
-                        >
-                          作成
-                        </button>
-                      </div>
-
-                      {Object.keys(groupedAccounts).length === 0 ? (
-                        <p className="text-sm text-gray-400 text-center py-4">グループがありません</p>
-                      ) : (
-                        <div className="space-y-2">
-                          {Object.entries(groupedAccounts).map(([groupName, groupAccs]) => (
-                            <div key={groupName} className="flex items-center justify-between bg-gray-50 rounded-lg px-4 py-3">
-                              {editingGroupName?.old === groupName ? (
-                                <div className="flex items-center gap-2 flex-1">
-                                  <input
-                                    type="text"
-                                    value={editingGroupName.new}
-                                    onChange={(e) => setEditingGroupName({ ...editingGroupName, new: e.target.value })}
-                                    onKeyDown={(e) => { if (e.key === "Enter" && !e.nativeEvent.isComposing) renameGroup(editingGroupName.old, editingGroupName.new); }}
-                                    autoFocus
-                                    className="flex-1 border border-blue-400 rounded-md px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400"
-                                  />
-                                  <button
-                                    onClick={() => renameGroup(editingGroupName.old, editingGroupName.new)}
-                                    className="px-2.5 py-1 bg-blue-600 text-white text-xs rounded-md hover:bg-blue-700 transition"
-                                  >
-                                    保存
-                                  </button>
-                                  <button
-                                    onClick={() => setEditingGroupName(null)}
-                                    className="px-2.5 py-1 text-gray-500 text-xs hover:bg-gray-200 rounded-md transition"
-                                  >
-                                    取消
-                                  </button>
-                                </div>
-                              ) : (
-                                <>
-                                  <div>
-                                    <span className="text-sm font-medium text-gray-800">{groupName}</span>
-                                    <span className="text-xs text-gray-400 ml-2">({groupAccs.length} アカウント)</span>
-                                  </div>
-                                  <div className="flex items-center gap-1.5">
-                                    <label className="flex items-center gap-1 cursor-pointer" title="クローザーに表示">
-                                      <input
-                                        type="checkbox"
-                                        checked={!!groupSettings[groupName]}
-                                        onChange={async (e) => {
-                                          const val = e.target.checked;
-                                          setGroupSettings((prev) => ({ ...prev, [groupName]: val }));
-                                          await fetch("/api/line/account-groups", {
-                                            method: "PUT",
-                                            headers: { "Content-Type": "application/json" },
-                                            body: JSON.stringify({ project_id: project?.id, group_name: groupName, closer_visible: val }),
-                                          });
-                                        }}
-                                        className="accent-orange-500 w-3.5 h-3.5"
-                                      />
-                                      <span className="text-[10px] text-orange-600">CL表示</span>
-                                    </label>
-                                    <button
-                                      onClick={() => setEditingGroupName({ old: groupName, new: groupName })}
-                                      className="px-2.5 py-1 text-xs text-blue-600 hover:bg-blue-50 rounded-md transition"
-                                    >
-                                      編集
-                                    </button>
-                                    {groupName !== "未分類" && (
-                                      <button
-                                        onClick={() => deleteGroup(groupName)}
-                                        className="px-2.5 py-1 text-xs text-red-500 hover:bg-red-50 rounded-md transition"
-                                      >
-                                        削除
-                                      </button>
-                                    )}
-                                  </div>
-                                </>
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                    <div className="flex justify-end px-5 py-4 border-t border-gray-200">
-                      <button onClick={() => { setShowGroupManager(false); setEditingGroupName(null); }} className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm rounded-lg transition">閉じる</button>
-                    </div>
-                  </div>
-                </div>
-              )}
-
               {loading ? (
                 <div className="text-center text-gray-400 py-20">読み込み中...</div>
               ) : accounts.length === 0 ? (
                 <div className="bg-white rounded-lg border border-gray-200 p-16 text-center text-gray-400">
                   <p className="text-lg mb-2">LINEアカウントが登録されていません</p>
-                  <p className="text-sm mb-4">まずグループを作成してください。アカウントはグループ内の「+追加」ボタンから登録します。</p>
-                  <div className="flex justify-center gap-2">
-                    <button
-                      onClick={() => setShowGroupManager(true)}
-                      className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white text-xs font-medium rounded-md transition"
-                    >
-                      {Icons.folder}
-                      グループ管理
-                    </button>
-                  </div>
+                  <p className="text-sm">「LINEアカウント登録」からアカウントを登録してください。</p>
                 </div>
               ) : (
                 <div className="space-y-5 max-w-5xl">
@@ -4564,17 +4353,6 @@ export default function LineDashboard() {
                       })}
                     </div>
                   ))}
-
-                  {/* アクションボタン（アカウント一覧の下・未分類の上） */}
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <button
-                      onClick={() => setShowGroupManager(true)}
-                      className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white text-xs font-medium rounded-md transition"
-                    >
-                      {Icons.folder}
-                      グループ管理
-                    </button>
-                  </div>
 
                   {/* 未分類グループ（既存データのみ表示、新規追加は不可） */}
                   <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
