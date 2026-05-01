@@ -466,6 +466,8 @@ export default function LineDashboard() {
   const [showAddAccount, setShowAddAccount] = useState(false);
 
   // アカウント一括登録（スプレッドシート形式）
+  // 段階5(案B)PR-5:scenario_id を追加(段階5 移行期は group_name と二重持ち、PR-6 で group_name 撤去予定)
+  // 値の意味:"" = プレースホルダー(未選択)、"__null__" = シナリオ未設定(送信時 null)、それ以外 = scenario.id
   interface BulkRow {
     account_name: string;
     channel_id: string;
@@ -474,6 +476,7 @@ export default function LineDashboard() {
     basic_id: string;
     group_name: string;
     group_is_new: boolean;
+    scenario_id: string;
     role: "main" | "standby";
     testing: boolean;
     testResult: { ok: boolean; text: string } | null;
@@ -488,6 +491,7 @@ export default function LineDashboard() {
     basic_id: "",
     group_name: "",
     group_is_new: false,
+    scenario_id: "",
     role: "main",
     testing: false,
     testResult: null,
@@ -498,26 +502,6 @@ export default function LineDashboard() {
   const [bulkProjectId, setBulkProjectId] = useState<string>("");
   const [bulkRows, setBulkRows] = useState<BulkRow[]>([]);
   const [bulkRunning, setBulkRunning] = useState(false);
-  const [bulkGroups, setBulkGroups] = useState<string[]>([]);
-
-  // ウィザードが開いていて案件が選ばれているときはグループ一覧を取得
-  useEffect(() => {
-    if (!showWizard || !bulkProjectId) { setBulkGroups([]); return; }
-    (async () => {
-      try {
-        const res = await fetch(`/api/line/account-groups?project_id=${bulkProjectId}`);
-        if (res.ok) {
-          const data: Array<{ group_name: string }> = await res.json();
-          setBulkGroups(Array.from(new Set(data.map((d) => d.group_name))).sort());
-        } else {
-          setBulkGroups([]);
-        }
-      } catch {
-        setBulkGroups([]);
-      }
-    })();
-  }, [showWizard, bulkProjectId]);
-
   const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>({});
   const [needsAction, setNeedsAction] = useState<Set<string>>(new Set());
   const [soundEnabled, setSoundEnabled] = useState(true);
@@ -3937,8 +3921,9 @@ export default function LineDashboard() {
                 const addRow = () => setBulkRows((prev) => [...prev, emptyBulkRow()]);
                 const removeRow = (i: number) => setBulkRows((prev) => prev.filter((_, j) => j !== i));
 
+                // 段階5(案B)PR-5:scenario_id を必須化("" = プレースホルダー、"__null__" = シナリオ未設定で OK)
                 const isRowFilled = (r: BulkRow) =>
-                  r.channel_id.trim() && r.channel_secret.trim() && r.channel_access_token.trim() && r.group_name.trim();
+                  r.channel_id.trim() && r.channel_secret.trim() && r.channel_access_token.trim() && r.scenario_id.trim();
 
                 const testRow = async (i: number) => {
                   const row = bulkRows[i];
@@ -3977,35 +3962,15 @@ export default function LineDashboard() {
                   if (!bulkProjectId) { alert("案件を選択してください"); return; }
                   const targets = bulkRows.map((r, i) => ({ row: r, index: i })).filter(({ row }) => isRowFilled(row));
                   if (targets.length === 0) {
-                    alert("入力された行がありません（チャネルID/シークレット/トークン/グループの全て入力が必要）");
+                    alert("入力された行がありません（チャネルID/シークレット/トークン/シナリオの全て入力が必要）");
                     return;
                   }
                   setBulkRunning(true);
                   // 全行の saveResult をクリア
                   setBulkRows((prev) => prev.map((r) => ({ ...r, saveResult: null, saving: false })));
 
-                  // 登録前に必要な新規グループを line_account_groups に作成（重複排除）
-                  const knownGroups = new Set(bulkGroups);
-                  const newGroupNames = new Set<string>();
-                  for (const { row } of targets) {
-                    const g = row.group_name.trim();
-                    if (g && !knownGroups.has(g)) newGroupNames.add(g);
-                  }
-                  for (const g of newGroupNames) {
-                    try {
-                      await fetch("/api/line/account-groups", {
-                        method: "PUT",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ project_id: bulkProjectId, group_name: g, closer_visible: false }),
-                      });
-                      knownGroups.add(g);
-                    } catch (e) {
-                      console.error("group upsert failed:", g, e);
-                    }
-                  }
-                  // ローカルのグループ一覧を最新化
-                  if (newGroupNames.size > 0) setBulkGroups(Array.from(knownGroups).sort());
-
+                  // 段階5(案B)PR-5:新規 scenario 作成は不可(scenarios の管理は projects/page.tsx に集約)。
+                  // 旧仕様で行っていた /api/line/account-groups PUT(新規グループ自動作成)は本 PR で削除済。
                   for (const { row, index } of targets) {
                     setBulkRows((prev) => {
                       const next = [...prev];
@@ -4013,12 +3978,15 @@ export default function LineDashboard() {
                       return next;
                     });
                     try {
+                      // 段階5(案B)PR-5:scenario_id を主軸に送信。"__null__" は明示的な「シナリオ未設定」として null に正規化。
+                      const scenarioIdForBody =
+                        row.scenario_id === "__null__" || !row.scenario_id ? null : row.scenario_id;
                       const res = await fetch("/api/line/accounts", {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({
                           project_id: bulkProjectId,
-                          group_name: row.group_name.trim(),
+                          scenario_id: scenarioIdForBody,
                           role: row.role,
                           account_name: row.account_name.trim() || null,
                           channel_id: row.channel_id.trim(),
@@ -4101,7 +4069,7 @@ export default function LineDashboard() {
                               <th className="px-2 py-2 font-medium border-r border-gray-300 min-w-[180px] text-left">チャネルシークレット <span className="text-red-500">*</span></th>
                               <th className="px-2 py-2 font-medium border-r border-gray-300 min-w-[220px] text-left">アクセストークン <span className="text-red-500">*</span></th>
                               <th className="px-2 py-2 font-medium border-r border-gray-300 min-w-[110px] text-left">Basic ID</th>
-                              <th className="px-2 py-2 font-medium border-r border-gray-300 min-w-[130px] text-left">グループ <span className="text-red-500">*</span></th>
+                              <th className="px-2 py-2 font-medium border-r border-gray-300 min-w-[130px] text-left">シナリオ <span className="text-red-500">*</span></th>
                               <th className="px-2 py-2 font-medium border-r border-gray-300 min-w-[90px] text-left">ロール</th>
                               <th className="px-2 py-2 font-medium border-r border-gray-300 min-w-[140px] text-left">テスト</th>
                               <th className="px-2 py-2 font-medium w-12 text-center">削除</th>
@@ -4164,45 +4132,37 @@ export default function LineDashboard() {
                                     />
                                   </td>
                                   <td className="px-1 py-1 border-r border-gray-200">
-                                    {bulkGroups.length === 0 ? (
-                                      <input
-                                        type="text"
-                                        value={row.group_name}
-                                        onChange={(e) => updateRow(i, { group_name: e.target.value, group_is_new: true })}
-                                        placeholder="新規グループ名"
-                                        className="w-full px-2 py-1 border border-gray-200 rounded text-xs focus:border-blue-400 focus:outline-none"
-                                      />
-                                    ) : (
-                                      <>
+                                    {/* 段階5(案B)PR-5:旧「グループ」自由入力/新規作成 UI を「シナリオ」プルダウンに置換。
+                                        scenarios は wizard ヘッダで選択された bulkProjectId に紐づくものに絞り込む。 */}
+                                    {(() => {
+                                      const visibleScenarios = bulkProjectId
+                                        ? scenarios.filter((s) => s.project_id === bulkProjectId)
+                                        : [];
+                                      const isLoading = scenarios.length === 0;
+                                      const isDisabled = isLoading || !bulkProjectId;
+                                      return (
                                         <select
-                                          value={row.group_is_new ? "__new__" : row.group_name}
-                                          onChange={(e) => {
-                                            if (e.target.value === "__new__") {
-                                              updateRow(i, { group_name: "", group_is_new: true });
-                                            } else {
-                                              updateRow(i, { group_name: e.target.value, group_is_new: false });
-                                            }
-                                          }}
-                                          className="w-full px-1 py-1 border border-gray-200 rounded text-xs bg-white focus:border-blue-400 focus:outline-none"
+                                          value={row.scenario_id}
+                                          disabled={isDisabled}
+                                          onChange={(e) => updateRow(i, { scenario_id: e.target.value })}
+                                          className="w-full px-1 py-1 border border-gray-200 rounded text-xs bg-white focus:border-blue-400 focus:outline-none disabled:bg-gray-100 disabled:cursor-not-allowed"
                                         >
-                                          <option value="">選択してください</option>
-                                          {bulkGroups.map((g) => (
-                                            <option key={g} value={g}>{g}</option>
-                                          ))}
-                                          <option value="__new__">＋ 新規グループを作成</option>
+                                          {isLoading ? (
+                                            <option value="">未取得中...</option>
+                                          ) : !bulkProjectId ? (
+                                            <option value="">案件未選択</option>
+                                          ) : (
+                                            <>
+                                              <option value="">-- シナリオを選択 --</option>
+                                              {visibleScenarios.map((s) => (
+                                                <option key={s.id} value={s.id}>{s.name}</option>
+                                              ))}
+                                              <option value="__null__">シナリオ未設定</option>
+                                            </>
+                                          )}
                                         </select>
-                                        {row.group_is_new && (
-                                          <input
-                                            type="text"
-                                            value={row.group_name}
-                                            onChange={(e) => updateRow(i, { group_name: e.target.value })}
-                                            placeholder="新規グループ名"
-                                            className="w-full px-2 py-1 mt-1 border border-blue-400 rounded text-xs focus:outline-none"
-                                            autoFocus
-                                          />
-                                        )}
-                                      </>
-                                    )}
+                                      );
+                                    })()}
                                   </td>
                                   <td className="px-1 py-1 border-r border-gray-200">
                                     <select
