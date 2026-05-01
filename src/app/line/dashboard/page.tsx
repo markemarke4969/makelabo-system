@@ -54,7 +54,6 @@ interface LineAccount {
   account_name: string | null;
   basic_id: string | null;
   is_active: boolean;
-  group_name?: string | null; // 段階5(案B)Step 12 で廃止予定、Step 12 適用後は API GET で undefined となる
   project_id?: string | null;
   scenario_id?: string | null; // 段階5(案B)で追加。Step 02〜04 適用後に値が入る
   role?: "main" | "distribute" | "standby" | "banned" | null;
@@ -64,8 +63,7 @@ interface LineAccount {
   newsletter_from_name?: string | null;
 }
 
-// 段階5(案B)PR-1:scenario 単位移行のための型(後続 PR で group_name 系を順次置換)
-// 構造は src/app/line/projects/page.tsx の Scenario 型と整合
+// 段階5(案B)PR-1:scenario 単位移行のための型(構造は src/app/line/projects/page.tsx の Scenario 型と整合)
 interface Scenario {
   id: string;
   project_id: string;
@@ -97,6 +95,9 @@ interface TemplateMessage {
 interface Template {
   id: string;
   name: string;
+  // 段階5(案B)PR-6:dashboard.tsx 内では参照ゼロ。
+  // 型を削除すると /api/line/templates レスポンスの DB 列(line_templates.group_name)との整合が崩れるため、
+  // 列の物理削除タスクが完了するまではコメント付きで残置する。
   group_name: string | null;
   messages: TemplateMessage[];
   created_at: string;
@@ -185,7 +186,7 @@ interface ActionRule {
   created_at: string;
 }
 
-// 段階5(案B)PR-1:アカウントの scenario_id から表示名を引くヘルパー(後続 PR で group_name 表示の置換に使用)
+// 段階5(案B):アカウントの scenario_id から表示名を引くヘルパー。
 // scenario_id が NULL/undefined、または scenarios 配列に該当 id が無い場合は "シナリオ未設定" を返す。
 function getScenarioNameForAccount(
   acc: { scenario_id?: string | null },
@@ -466,16 +467,13 @@ export default function LineDashboard() {
   const [showAddAccount, setShowAddAccount] = useState(false);
 
   // アカウント一括登録（スプレッドシート形式）
-  // 段階5(案B)PR-5:scenario_id を追加(段階5 移行期は group_name と二重持ち、PR-6 で group_name 撤去予定)
-  // 値の意味:"" = プレースホルダー(未選択)、"__null__" = シナリオ未設定(送信時 null)、それ以外 = scenario.id
+  // scenario_id の値:"" = プレースホルダー(未選択)、"__null__" = シナリオ未設定(送信時 null)、それ以外 = scenario.id
   interface BulkRow {
     account_name: string;
     channel_id: string;
     channel_secret: string;
     channel_access_token: string;
     basic_id: string;
-    group_name: string;
-    group_is_new: boolean;
     scenario_id: string;
     role: "main" | "standby";
     testing: boolean;
@@ -489,8 +487,6 @@ export default function LineDashboard() {
     channel_secret: "",
     channel_access_token: "",
     basic_id: "",
-    group_name: "",
-    group_is_new: false,
     scenario_id: "",
     role: "main",
     testing: false,
@@ -790,9 +786,9 @@ export default function LineDashboard() {
   // 全案件一覧（所属変更セレクト用）
   const [allProjects, setAllProjects] = useState<{ id: string; name: string; color: string }[]>([]);
 
-  // 段階5(案B)PR-1:全 project にぶら下がる scenarios を flat 化して保持
+  // 段階5(案B):全 project にぶら下がる scenarios を flat 化して保持
   // /api/line/projects の response に各 project.scenarios として埋め込まれている(段階5 hotfix 9ea0e4e で対応済)。
-  // 後続 PR(PR-2 以降)で group_name → scenario_id 表示置換に使用する。本 PR では setter を呼ぶだけで既存 UI は不変。
+  // アカウント編集フォーム / 一括登録 wizard / アカウント一覧テーブル / バケツ集約で参照する。
   const [scenarios, setScenarios] = useState<Scenario[]>([]);
 
   const [showStepCreator, setShowStepCreator] = useState(false);
@@ -819,10 +815,6 @@ export default function LineDashboard() {
     basic_id: "",
     channel_secret: "",
     channel_access_token: "",
-    // 段階5(案B)PR-2:group_name は他ブロック(グループ管理 UI / 旧ウィザード等)で
-    // 引き続き参照されるため state に残す。フォーム送信は scenario_id を主に使用。
-    // PR-4 以降で group_name 関連ブロックを削除した後、本フィールドも撤去する。
-    group_name: "",
     // 段階5(案B)PR-2:アカウント編集フォームのシナリオ選択用。
     // "" = 未選択(プレースホルダー、新規時は validation で弾く)
     // "__null__" = シナリオ未設定(送信時に null に変換)
@@ -1182,9 +1174,8 @@ export default function LineDashboard() {
 
   // 通常表示用のシナリオ別バケツ(本番 + BAN済み。サブ(standby)は別管理)
   // BAN済みアカウントは過去の友だち・チャット履歴閲覧のため表示を残す
-  // 段階5(案B)PR-4:group_name ベースから scenario_id ベースに置換。
   // - キー:getScenarioNameForAccount(acc, scenarios)(scenario_id NULL 時は「シナリオ未設定」)
-  // - closer_visible フィルタは廃止(closer 用の可視制御は将来 scenario 単位で再実装する想定)
+  // - closer 用の可視制御は将来 scenario 単位で再実装する想定(段階5 PR-4 で旧 closer_visible を撤去済)
   const sortedGroupedAccounts = accounts
     .filter((acc) => !acc.role || acc.role === "main" || acc.role === "distribute" || acc.role === "banned")
     // main を先、banned を後に並べる
@@ -1653,7 +1644,7 @@ export default function LineDashboard() {
 
   const resetForm = () => {
     // 段階5(案B)PR-2:scenario_id 初期値は ""(未選択プレースホルダー)
-    setForm({ account_name: "", channel_id: "", basic_id: "", channel_secret: "", channel_access_token: "", group_name: "", scenario_id: "", project_id: "", role: "main", order_index: 0, greeting_message: DEFAULT_GREETING_MESSAGE, newsletter_from_email: "", newsletter_from_name: "" });
+    setForm({ account_name: "", channel_id: "", basic_id: "", channel_secret: "", channel_access_token: "", scenario_id: "", project_id: "", role: "main", order_index: 0, greeting_message: DEFAULT_GREETING_MESSAGE, newsletter_from_email: "", newsletter_from_name: "" });
     setEditingId(null);
     setSaveMsg(null);
   };
@@ -1665,7 +1656,6 @@ export default function LineDashboard() {
       basic_id: acc.basic_id ?? "",
       channel_secret: acc.channel_secret ?? "",
       channel_access_token: acc.channel_access_token ?? "",
-      group_name: acc.group_name ?? "",
       // 段階5(案B)PR-2:既存値が null/undefined → "シナリオ未設定" 選択状態(__null__)で開始
       scenario_id: acc.scenario_id ?? "__null__",
       project_id: acc.project_id ?? "",
