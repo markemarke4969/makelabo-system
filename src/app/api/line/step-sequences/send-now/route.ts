@@ -18,9 +18,11 @@ export async function POST(request: NextRequest) {
     return Response.json({ error: "id is required" }, { status: 400 });
   }
 
+  // 段階5 Step 11:account_id 列削除耐性のため SELECT から除外、scenario_id を追加。
+  // primary path で動かないケース(scenario_id 列なし環境)は broadcast.ts 側の fallback で対応済。
   const { data: seq, error } = await supabase
     .from("line_step_sequences")
-    .select("id, account_id, name, scheduled_at, target_condition, kind, sent_at")
+    .select("id, name, scheduled_at, target_condition, kind, sent_at, scenario_id")
     .eq("id", id)
     .maybeSingle();
 
