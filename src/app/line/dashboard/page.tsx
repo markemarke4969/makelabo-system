@@ -534,12 +534,6 @@ export default function LineDashboard() {
   const [showGroupManager, setShowGroupManager] = useState(false);
   const [editingGroupName, setEditingGroupName] = useState<{ old: string; new: string } | null>(null);
   const [newGroupName, setNewGroupName] = useState("");
-  const [showSortMode, setShowSortMode] = useState(false);
-  const [sortGroups, setSortGroups] = useState<{ name: string; accountIds: string[] }[]>([]);
-  const [dragType, setDragType] = useState<"group" | "account" | null>(null);
-  const [dragId, setDragId] = useState<string | null>(null); // group name or account id
-  const [dragSourceGroup, setDragSourceGroup] = useState<string | null>(null);
-  const [dropTarget, setDropTarget] = useState<{ type: "group" | "account"; id: string } | null>(null);
 
   // Feature 1: Name editing
   const [editingName, setEditingName] = useState(false);
@@ -1245,129 +1239,6 @@ export default function LineDashboard() {
           : acc
       )
     );
-  };
-
-  // 表示順変更（ドラッグ＆ドロップ）
-  const enterSortMode = () => {
-    // 現在のグループ構造をsortGroupsに初期化
-    const groups: { name: string; accountIds: string[] }[] = [];
-    const seen = new Set<string>();
-    for (const acc of accounts) {
-      const gn = acc.group_name || "未分類";
-      if (!seen.has(gn)) {
-        seen.add(gn);
-        groups.push({ name: gn, accountIds: [] });
-      }
-    }
-    for (const acc of accounts) {
-      const gn = acc.group_name || "未分類";
-      const g = groups.find((g) => g.name === gn);
-      if (g) g.accountIds.push(acc.id);
-    }
-    setSortGroups(groups);
-    setShowSortMode(true);
-  };
-
-  const clearDrag = () => {
-    setDragType(null);
-    setDragId(null);
-    setDragSourceGroup(null);
-    setDropTarget(null);
-  };
-
-  // グループをドラッグ開始
-  const onGroupDragStart = (groupName: string) => {
-    setDragType("group");
-    setDragId(groupName);
-  };
-
-  // アカウントをドラッグ開始
-  const onAccountDragStart = (accId: string, fromGroup: string) => {
-    setDragType("account");
-    setDragId(accId);
-    setDragSourceGroup(fromGroup);
-  };
-
-  const onDragOverGroup = (e: React.DragEvent, groupName: string) => {
-    e.preventDefault();
-    setDropTarget({ type: "group", id: groupName });
-  };
-
-  const onDragOverAccount = (e: React.DragEvent, accId: string) => {
-    e.preventDefault();
-    setDropTarget({ type: "account", id: accId });
-  };
-
-  const onDropOnGroup = (targetGroupName: string) => {
-    if (!dragId) { clearDrag(); return; }
-
-    if (dragType === "group" && dragId !== targetGroupName) {
-      // グループ同士の並び替え
-      setSortGroups((prev) => {
-        const next = [...prev];
-        const fromIdx = next.findIndex((g) => g.name === dragId);
-        const toIdx = next.findIndex((g) => g.name === targetGroupName);
-        if (fromIdx === -1 || toIdx === -1) return prev;
-        const [moved] = next.splice(fromIdx, 1);
-        next.splice(toIdx, 0, moved);
-        return next;
-      });
-    } else if (dragType === "account") {
-      // アカウントを別グループに移動（グループヘッダーにドロップ → そのグループの末尾に追加）
-      setSortGroups((prev) => {
-        const next = prev.map((g) => ({ ...g, accountIds: [...g.accountIds] }));
-        // 元のグループから削除
-        for (const g of next) {
-          g.accountIds = g.accountIds.filter((id) => id !== dragId);
-        }
-        // ターゲットグループの末尾に追加
-        const targetG = next.find((g) => g.name === targetGroupName);
-        if (targetG && dragId) targetG.accountIds.push(dragId);
-        return next;
-      });
-    }
-    clearDrag();
-  };
-
-  const onDropOnAccount = (targetAccId: string) => {
-    if (!dragId || dragType !== "account" || dragId === targetAccId) { clearDrag(); return; }
-
-    setSortGroups((prev) => {
-      const next = prev.map((g) => ({ ...g, accountIds: [...g.accountIds] }));
-      // ターゲットがどのグループにいるか
-      const targetGroup = next.find((g) => g.accountIds.includes(targetAccId));
-      if (!targetGroup) return prev;
-
-      // 元のグループから削除
-      for (const g of next) {
-        g.accountIds = g.accountIds.filter((id) => id !== dragId);
-      }
-      // ターゲットの位置に挿入
-      const toIdx = targetGroup.accountIds.indexOf(targetAccId);
-      if (dragId) targetGroup.accountIds.splice(toIdx, 0, dragId);
-      return next;
-    });
-    clearDrag();
-  };
-
-  const saveSortOrder = () => {
-    // sortGroupsに基づいてaccountsを再構成
-    const accMap = new Map(accounts.map((a) => [a.id, a]));
-    const newAccounts: LineAccount[] = [];
-    for (const group of sortGroups) {
-      for (const accId of group.accountIds) {
-        const acc = accMap.get(accId);
-        if (acc) {
-          newAccounts.push({ ...acc, group_name: group.name === "未分類" ? null : group.name });
-        }
-      }
-    }
-    // 含まれなかったもの（万が一）
-    for (const acc of accounts) {
-      if (!newAccounts.find((a) => a.id === acc.id)) newAccounts.push(acc);
-    }
-    setAccounts(newAccounts);
-    setShowSortMode(false);
   };
 
   // 通常表示用のグループ（本番 + BAN済み。サブ（standby）は別管理）
@@ -4625,109 +4496,6 @@ export default function LineDashboard() {
                 </div>
               )}
 
-              {/* 表示順変更モード */}
-              {showSortMode && (
-                <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-                  <div className="bg-white rounded-xl shadow-xl w-full max-w-lg mx-4 max-h-[85vh] flex flex-col">
-                    <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
-                      <h3 className="font-bold text-gray-800">表示順変更</h3>
-                      <button onClick={() => { setShowSortMode(false); clearDrag(); }} className="text-gray-400 hover:text-gray-600">{Icons.close}</button>
-                    </div>
-                    <div className="px-5 pt-3 flex items-center gap-4 text-[11px] text-gray-500">
-                      <span className="flex items-center gap-1">
-                        <span className="w-2 h-2 rounded-full bg-orange-400" />
-                        グループをドラッグで並び替え
-                      </span>
-                      <span className="flex items-center gap-1">
-                        <span className="w-2 h-2 rounded-full bg-green-500" />
-                        アカウントをドラッグでグループ間移動
-                      </span>
-                    </div>
-                    <div className="flex-1 overflow-y-auto p-5 space-y-2">
-                      {sortGroups.map((group) => {
-                        const isGroupDragging = dragType === "group" && dragId === group.name;
-                        const isGroupDropTarget = dropTarget?.type === "group" && dropTarget.id === group.name;
-                        return (
-                          <div
-                            key={group.name}
-                            className={`rounded-lg border transition-all ${
-                              isGroupDragging ? "opacity-50" : ""
-                            } ${isGroupDropTarget && dragType === "account" ? "border-blue-500 ring-2 ring-blue-200" : isGroupDropTarget && dragType === "group" ? "border-orange-500 ring-2 ring-orange-200" : "border-gray-200"}`}
-                          >
-                            {/* グループヘッダー（ドラッグ可能） */}
-                            <div
-                              draggable
-                              onDragStart={() => onGroupDragStart(group.name)}
-                              onDragOver={(e) => onDragOverGroup(e, group.name)}
-                              onDrop={() => onDropOnGroup(group.name)}
-                              onDragEnd={clearDrag}
-                              className="flex items-center gap-2.5 px-4 py-2.5 bg-gray-50 rounded-t-lg cursor-grab active:cursor-grabbing border-b border-gray-200"
-                            >
-                              {/* ドラッグハンドル */}
-                              <svg className="w-3.5 h-3.5 text-orange-400 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24"><circle cx="9" cy="5" r="1.5" /><circle cx="15" cy="5" r="1.5" /><circle cx="9" cy="12" r="1.5" /><circle cx="15" cy="12" r="1.5" /><circle cx="9" cy="19" r="1.5" /><circle cx="15" cy="19" r="1.5" /></svg>
-                              <span className="text-sm font-bold text-gray-700">{group.name}</span>
-                              <span className="text-[11px] text-gray-400">({group.accountIds.length})</span>
-                            </div>
-
-                            {/* グループ内のアカウント */}
-                            <div className="py-1">
-                              {group.accountIds.length === 0 ? (
-                                <div
-                                  onDragOver={(e) => onDragOverGroup(e, group.name)}
-                                  onDrop={() => onDropOnGroup(group.name)}
-                                  className="px-4 py-3 text-xs text-gray-400 text-center"
-                                >
-                                  アカウントをここにドロップ
-                                </div>
-                              ) : (
-                                group.accountIds.map((accId) => {
-                                  const acc = accounts.find((a) => a.id === accId);
-                                  if (!acc) return null;
-                                  const isAccDragging = dragType === "account" && dragId === accId;
-                                  const isAccDropTarget = dropTarget?.type === "account" && dropTarget.id === accId;
-                                  return (
-                                    <div
-                                      key={accId}
-                                      draggable
-                                      onDragStart={() => onAccountDragStart(accId, group.name)}
-                                      onDragOver={(e) => onDragOverAccount(e, accId)}
-                                      onDrop={() => onDropOnAccount(accId)}
-                                      onDragEnd={clearDrag}
-                                      className={`flex items-center gap-3 mx-2 my-1 px-3 py-2.5 rounded-md transition-all cursor-grab active:cursor-grabbing ${
-                                        isAccDragging
-                                          ? "opacity-40 bg-green-50"
-                                          : isAccDropTarget
-                                            ? "bg-green-50 border border-green-400 shadow-sm"
-                                            : "hover:bg-gray-50"
-                                      }`}
-                                    >
-                                      <svg className="w-3.5 h-3.5 text-green-500 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24"><circle cx="9" cy="5" r="1.5" /><circle cx="15" cy="5" r="1.5" /><circle cx="9" cy="12" r="1.5" /><circle cx="15" cy="12" r="1.5" /><circle cx="9" cy="19" r="1.5" /><circle cx="15" cy="19" r="1.5" /></svg>
-                                      <div className="w-6 h-6 rounded-full bg-[#06C755] flex items-center justify-center flex-shrink-0">
-                                        <span className="text-white text-[9px] font-bold">L</span>
-                                      </div>
-                                      <span className="text-sm text-gray-800 truncate">{acc.account_name ?? "未設定"}</span>
-                                    </div>
-                                  );
-                                })
-                              )}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                    <div className="flex justify-end gap-2 px-5 py-4 border-t border-gray-200">
-                      <button onClick={() => { setShowSortMode(false); clearDrag(); }} className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition">キャンセル</button>
-                      <button
-                        onClick={saveSortOrder}
-                        className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition"
-                      >
-                        保存
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              )}
-
               {loading ? (
                 <div className="text-center text-gray-400 py-20">読み込み中...</div>
               ) : accounts.length === 0 ? (
@@ -4806,15 +4574,6 @@ export default function LineDashboard() {
                       {Icons.folder}
                       グループ管理
                     </button>
-                    {(!currentUser || currentUser.is_admin) && (
-                      <button
-                        onClick={enterSortMode}
-                        className="flex items-center gap-1.5 px-3 py-1.5 bg-orange-500 hover:bg-orange-600 text-white text-xs font-medium rounded-md transition"
-                      >
-                        {Icons.sort}
-                        表示順変更
-                      </button>
-                    )}
                   </div>
 
                   {/* 未分類グループ（既存データのみ表示、新規追加は不可） */}
