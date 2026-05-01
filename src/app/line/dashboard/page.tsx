@@ -845,7 +845,15 @@ export default function LineDashboard() {
     basic_id: "",
     channel_secret: "",
     channel_access_token: "",
+    // 段階5(案B)PR-2:group_name は他ブロック(グループ管理 UI / 旧ウィザード等)で
+    // 引き続き参照されるため state に残す。フォーム送信は scenario_id を主に使用。
+    // PR-4 以降で group_name 関連ブロックを削除した後、本フィールドも撤去する。
     group_name: "",
+    // 段階5(案B)PR-2:アカウント編集フォームのシナリオ選択用。
+    // "" = 未選択(プレースホルダー、新規時は validation で弾く)
+    // "__null__" = シナリオ未設定(送信時に null に変換)
+    // それ以外 = scenario.id(UUID)
+    scenario_id: "",
     project_id: "",
     role: "main" as "main" | "distribute" | "standby",
     order_index: 0,
@@ -1838,7 +1846,8 @@ export default function LineDashboard() {
   };
 
   const resetForm = () => {
-    setForm({ account_name: "", channel_id: "", basic_id: "", channel_secret: "", channel_access_token: "", group_name: "", project_id: "", role: "main", order_index: 0, greeting_message: DEFAULT_GREETING_MESSAGE, newsletter_from_email: "", newsletter_from_name: "" });
+    // 段階5(案B)PR-2:scenario_id 初期値は ""(未選択プレースホルダー)
+    setForm({ account_name: "", channel_id: "", basic_id: "", channel_secret: "", channel_access_token: "", group_name: "", scenario_id: "", project_id: "", role: "main", order_index: 0, greeting_message: DEFAULT_GREETING_MESSAGE, newsletter_from_email: "", newsletter_from_name: "" });
     setEditingId(null);
     setSaveMsg(null);
   };
@@ -1851,6 +1860,8 @@ export default function LineDashboard() {
       channel_secret: acc.channel_secret ?? "",
       channel_access_token: acc.channel_access_token ?? "",
       group_name: acc.group_name ?? "",
+      // 段階5(案B)PR-2:既存値が null/undefined → "シナリオ未設定" 選択状態(__null__)で開始
+      scenario_id: acc.scenario_id ?? "__null__",
       project_id: acc.project_id ?? "",
       role: acc.role === "standby" ? "standby" : acc.role === "distribute" ? "distribute" : "main",
       order_index: acc.order_index ?? 0,
@@ -1923,8 +1934,10 @@ export default function LineDashboard() {
   const saveAccount = async () => {
     // 新規登録時のみ secret/token を必須にする。編集時は空欄なら既存値を維持
     if (!editingId) {
-      if (!form.group_name || !form.group_name.trim()) {
-        setSaveMsg({ ok: false, text: "グループを選択してください（グループ未所属のアカウントは追加できません）" });
+      // 段階5(案B)PR-2:scenario_id 必須(空 = プレースホルダー未選択)
+      // "__null__"(シナリオ未設定)は明示選択なので許容
+      if (!form.scenario_id) {
+        setSaveMsg({ ok: false, text: "シナリオを選択してください" });
         return;
       }
       if (!form.channel_id || !form.channel_secret || !form.channel_access_token) {
@@ -1939,14 +1952,17 @@ export default function LineDashboard() {
     }
     setSaving(true);
     setSaveMsg(null);
+    // 段階5(案B)PR-2:scenario_id を送信用に正規化("__null__" → null、"" → null)
+    const scenarioIdForBody: string | null =
+      form.scenario_id === "__null__" || !form.scenario_id ? null : form.scenario_id;
     try {
       const res = await fetch("/api/line/accounts", {
         method: editingId ? "PUT" : "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(
           editingId
-            ? { id: editingId, ...form }
-            : { ...form, project_id: form.project_id || project?.id || null },
+            ? { id: editingId, ...form, scenario_id: scenarioIdForBody }
+            : { ...form, project_id: form.project_id || project?.id || null, scenario_id: scenarioIdForBody },
         ),
       });
       const data = await res.json();
@@ -4026,15 +4042,36 @@ export default function LineDashboard() {
                         <label className="text-xs text-gray-500 block mb-1 font-medium">アカウント名</label>
                         <input type="text" value={form.account_name} onChange={(e) => setForm({ ...form, account_name: e.target.value })} placeholder="ハピネスサロン音声相談LINE" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400" />
                       </div>
+                      {/* 段階5(案B)PR-2:「グループ」自由入力 → 「シナリオ」選択プルダウン */}
                       <div>
-                        <label className="text-xs text-gray-500 block mb-1 font-medium">グループ <span className="text-red-500">*</span></label>
-                        {editingId ? (
-                          <input type="text" value={form.group_name} onChange={(e) => setForm({ ...form, group_name: e.target.value })} placeholder="ハピネスサロン" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400" />
-                        ) : (
-                          <div className={`w-full border rounded-lg px-3 py-2 text-sm ${form.group_name ? "bg-gray-50 text-gray-700 border-gray-200" : "bg-red-50 text-red-600 border-red-200"}`}>
-                            {form.group_name || "※ グループを選んで「追加」ボタンから登録してください"}
-                          </div>
-                        )}
+                        <label className="text-xs text-gray-500 block mb-1 font-medium">シナリオ <span className="text-red-500">*</span></label>
+                        {(() => {
+                          const targetProjectId = form.project_id || project?.id || null;
+                          const visibleScenarios = targetProjectId
+                            ? scenarios.filter((s) => s.project_id === targetProjectId)
+                            : scenarios;
+                          const isLoading = scenarios.length === 0;
+                          return (
+                            <select
+                              value={form.scenario_id}
+                              disabled={isLoading}
+                              onChange={(e) => setForm({ ...form, scenario_id: e.target.value })}
+                              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400 disabled:bg-gray-100 disabled:cursor-not-allowed"
+                            >
+                              {isLoading ? (
+                                <option value="">未取得中...</option>
+                              ) : (
+                                <>
+                                  <option value="">-- シナリオを選択 --</option>
+                                  {visibleScenarios.map((s) => (
+                                    <option key={s.id} value={s.id}>{s.name}</option>
+                                  ))}
+                                  <option value="__null__">シナリオ未設定</option>
+                                </>
+                              )}
+                            </select>
+                          );
+                        })()}
                       </div>
                       <div>
                         <label className="text-xs text-gray-500 block mb-1 font-medium">チャネルID <span className="text-red-500">*</span></label>
@@ -9219,9 +9256,37 @@ export default function LineDashboard() {
                       <label className="text-xs text-gray-500 block mb-1 font-medium">アカウント名</label>
                       <input type="text" value={form.account_name} onChange={(e) => setForm({ ...form, account_name: e.target.value })} placeholder="ハピネスサロン音声相談LINE" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400" />
                     </div>
+                    {/* 段階5(案B)PR-2:旧ウィザード(登録フォーム panel)の「グループ名」入力 → 「シナリオ」選択プルダウン
+                        モーダルフォーム(showAddAccount)とは別の表示位置。同じ form state を共有するため、ロジックは統一。 */}
                     <div>
-                      <label className="text-xs text-gray-500 block mb-1 font-medium">グループ名</label>
-                      <input type="text" value={form.group_name} onChange={(e) => setForm({ ...form, group_name: e.target.value })} placeholder="ハピネスサロン" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400" />
+                      <label className="text-xs text-gray-500 block mb-1 font-medium">シナリオ <span className="text-red-500">*</span></label>
+                      {(() => {
+                        const targetProjectId = form.project_id || project?.id || null;
+                        const visibleScenarios = targetProjectId
+                          ? scenarios.filter((s) => s.project_id === targetProjectId)
+                          : scenarios;
+                        const isLoading = scenarios.length === 0;
+                        return (
+                          <select
+                            value={form.scenario_id}
+                            disabled={isLoading}
+                            onChange={(e) => setForm({ ...form, scenario_id: e.target.value })}
+                            className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400 disabled:bg-gray-100 disabled:cursor-not-allowed"
+                          >
+                            {isLoading ? (
+                              <option value="">未取得中...</option>
+                            ) : (
+                              <>
+                                <option value="">-- シナリオを選択 --</option>
+                                {visibleScenarios.map((s) => (
+                                  <option key={s.id} value={s.id}>{s.name}</option>
+                                ))}
+                                <option value="__null__">シナリオ未設定</option>
+                              </>
+                            )}
+                          </select>
+                        );
+                      })()}
                     </div>
                     <div>
                       <label className="text-xs text-gray-500 block mb-1 font-medium">チャネルID <span className="text-red-500">*</span></label>
