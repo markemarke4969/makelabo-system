@@ -3921,8 +3921,9 @@ export default function LineDashboard() {
                 const addRow = () => setBulkRows((prev) => [...prev, emptyBulkRow()]);
                 const removeRow = (i: number) => setBulkRows((prev) => prev.filter((_, j) => j !== i));
 
+                // 段階5(案B)PR-5:scenario_id を必須化("" = プレースホルダー、"__null__" = シナリオ未設定で OK)
                 const isRowFilled = (r: BulkRow) =>
-                  r.channel_id.trim() && r.channel_secret.trim() && r.channel_access_token.trim() && r.group_name.trim();
+                  r.channel_id.trim() && r.channel_secret.trim() && r.channel_access_token.trim() && r.scenario_id.trim();
 
                 const testRow = async (i: number) => {
                   const row = bulkRows[i];
@@ -3961,7 +3962,7 @@ export default function LineDashboard() {
                   if (!bulkProjectId) { alert("案件を選択してください"); return; }
                   const targets = bulkRows.map((r, i) => ({ row: r, index: i })).filter(({ row }) => isRowFilled(row));
                   if (targets.length === 0) {
-                    alert("入力された行がありません（チャネルID/シークレット/トークン/グループの全て入力が必要）");
+                    alert("入力された行がありません（チャネルID/シークレット/トークン/シナリオの全て入力が必要）");
                     return;
                   }
                   setBulkRunning(true);
@@ -3977,12 +3978,15 @@ export default function LineDashboard() {
                       return next;
                     });
                     try {
+                      // 段階5(案B)PR-5:scenario_id を主軸に送信。"__null__" は明示的な「シナリオ未設定」として null に正規化。
+                      const scenarioIdForBody =
+                        row.scenario_id === "__null__" || !row.scenario_id ? null : row.scenario_id;
                       const res = await fetch("/api/line/accounts", {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({
                           project_id: bulkProjectId,
-                          group_name: row.group_name.trim(),
+                          scenario_id: scenarioIdForBody,
                           role: row.role,
                           account_name: row.account_name.trim() || null,
                           channel_id: row.channel_id.trim(),
