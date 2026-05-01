@@ -9256,9 +9256,37 @@ export default function LineDashboard() {
                       <label className="text-xs text-gray-500 block mb-1 font-medium">アカウント名</label>
                       <input type="text" value={form.account_name} onChange={(e) => setForm({ ...form, account_name: e.target.value })} placeholder="ハピネスサロン音声相談LINE" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400" />
                     </div>
+                    {/* 段階5(案B)PR-2:旧ウィザード(登録フォーム panel)の「グループ名」入力 → 「シナリオ」選択プルダウン
+                        モーダルフォーム(showAddAccount)とは別の表示位置。同じ form state を共有するため、ロジックは統一。 */}
                     <div>
-                      <label className="text-xs text-gray-500 block mb-1 font-medium">グループ名</label>
-                      <input type="text" value={form.group_name} onChange={(e) => setForm({ ...form, group_name: e.target.value })} placeholder="ハピネスサロン" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400" />
+                      <label className="text-xs text-gray-500 block mb-1 font-medium">シナリオ <span className="text-red-500">*</span></label>
+                      {(() => {
+                        const targetProjectId = form.project_id || project?.id || null;
+                        const visibleScenarios = targetProjectId
+                          ? scenarios.filter((s) => s.project_id === targetProjectId)
+                          : scenarios;
+                        const isLoading = scenarios.length === 0;
+                        return (
+                          <select
+                            value={form.scenario_id}
+                            disabled={isLoading}
+                            onChange={(e) => setForm({ ...form, scenario_id: e.target.value })}
+                            className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400 disabled:bg-gray-100 disabled:cursor-not-allowed"
+                          >
+                            {isLoading ? (
+                              <option value="">未取得中...</option>
+                            ) : (
+                              <>
+                                <option value="">-- シナリオを選択 --</option>
+                                {visibleScenarios.map((s) => (
+                                  <option key={s.id} value={s.id}>{s.name}</option>
+                                ))}
+                                <option value="__null__">シナリオ未設定</option>
+                              </>
+                            )}
+                          </select>
+                        );
+                      })()}
                     </div>
                     <div>
                       <label className="text-xs text-gray-500 block mb-1 font-medium">チャネルID <span className="text-red-500">*</span></label>
