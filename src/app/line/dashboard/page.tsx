@@ -186,7 +186,7 @@ interface ActionRule {
   created_at: string;
 }
 
-// 段階5(案B)PR-1:アカウントの scenario_id から表示名を引くヘルパー(後続 PR で group_name 表示の置換に使用)
+// 段階5(案B):アカウントの scenario_id から表示名を引くヘルパー。
 // scenario_id が NULL/undefined、または scenarios 配列に該当 id が無い場合は "シナリオ未設定" を返す。
 function getScenarioNameForAccount(
   acc: { scenario_id?: string | null },
@@ -467,7 +467,6 @@ export default function LineDashboard() {
   const [showAddAccount, setShowAddAccount] = useState(false);
 
   // アカウント一括登録（スプレッドシート形式）
-  // 段階5(案B)PR-6:scenario_id 主軸に統一(group_name / group_is_new は撤去済)。
   // scenario_id の値:"" = プレースホルダー(未選択)、"__null__" = シナリオ未設定(送信時 null)、それ以外 = scenario.id
   interface BulkRow {
     account_name: string;
@@ -787,9 +786,9 @@ export default function LineDashboard() {
   // 全案件一覧（所属変更セレクト用）
   const [allProjects, setAllProjects] = useState<{ id: string; name: string; color: string }[]>([]);
 
-  // 段階5(案B)PR-1:全 project にぶら下がる scenarios を flat 化して保持
+  // 段階5(案B):全 project にぶら下がる scenarios を flat 化して保持
   // /api/line/projects の response に各 project.scenarios として埋め込まれている(段階5 hotfix 9ea0e4e で対応済)。
-  // 後続 PR(PR-2 以降)で group_name → scenario_id 表示置換に使用する。本 PR では setter を呼ぶだけで既存 UI は不変。
+  // アカウント編集フォーム / 一括登録 wizard / アカウント一覧テーブル / バケツ集約で参照する。
   const [scenarios, setScenarios] = useState<Scenario[]>([]);
 
   const [showStepCreator, setShowStepCreator] = useState(false);
@@ -1175,9 +1174,8 @@ export default function LineDashboard() {
 
   // 通常表示用のシナリオ別バケツ(本番 + BAN済み。サブ(standby)は別管理)
   // BAN済みアカウントは過去の友だち・チャット履歴閲覧のため表示を残す
-  // 段階5(案B)PR-4:group_name ベースから scenario_id ベースに置換。
   // - キー:getScenarioNameForAccount(acc, scenarios)(scenario_id NULL 時は「シナリオ未設定」)
-  // - closer_visible フィルタは廃止(closer 用の可視制御は将来 scenario 単位で再実装する想定)
+  // - closer 用の可視制御は将来 scenario 単位で再実装する想定(段階5 PR-4 で旧 closer_visible を撤去済)
   const sortedGroupedAccounts = accounts
     .filter((acc) => !acc.role || acc.role === "main" || acc.role === "distribute" || acc.role === "banned")
     // main を先、banned を後に並べる
