@@ -14,7 +14,9 @@ const PUSH_CONCURRENCY = 20;
 
 export interface BroadcastSequenceRow {
   id: string;
-  account_id: string;
+  // 段階5 Step 11:line_step_sequences.account_id は列削除予定のため optional + nullable に緩和。
+  // primary path(scenario_id 経由)では未取得、fallback path のみ参照。
+  account_id?: string | null;
   name: string;
   scheduled_at: string | null;
   target_condition: DeliveryCondition | null;
@@ -88,7 +90,9 @@ export async function processBroadcastSequence(seq: BroadcastSequenceRow): Promi
   }
 
   // 2) 後方互換 fallback:scenario 経由で取れなければ seq.account_id で従来取得
-  if (!account) {
+  // 段階5 Step 11:account_id 列削除後は seq.account_id が undefined/null となるため、
+  // この fallback はスキップして account=null のまま続行する(下の skipped_reason で安全終了)。
+  if (!account && seq.account_id) {
     const { data: fb } = await supabase
       .from("line_accounts")
       .select("id, channel_access_token, project_id")
@@ -344,12 +348,13 @@ export async function runScheduledBroadcasts(): Promise<{
 }> {
   const nowIso = new Date().toISOString();
 
-  // 段階5 案B:scenario_id 列も取得(列不在環境では fallback)
+  // 段階5 Step 11:primary SELECT から account_id 除外(列削除耐性)。
+  // scenario_id 列が無い環境(Step 02 未適用)では fallback で account_id を含めて再取得。
   let sequences: BroadcastSequenceRow[] = [];
   {
     const r = await supabase
       .from("line_step_sequences")
-      .select("id, account_id, name, scheduled_at, target_condition, scenario_id")
+      .select("id, name, scheduled_at, target_condition, scenario_id")
       .eq("kind", "schedule")
       .eq("status", "active")
       .is("sent_at", null)
@@ -359,7 +364,7 @@ export async function runScheduledBroadcasts(): Promise<{
       .limit(20);
 
     if (r.error && /scenario_id/i.test(r.error.message)) {
-      // scenario_id 列が無い(Step 02 未適用)→ 従来 select で再取得
+      // scenario_id 列が無い(Step 02 未適用)→ 従来 select(account_id 付き)で再取得
       const fb = await supabase
         .from("line_step_sequences")
         .select("id, account_id, name, scheduled_at, target_condition")
