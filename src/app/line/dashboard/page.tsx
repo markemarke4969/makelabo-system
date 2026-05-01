@@ -64,6 +64,20 @@ interface LineAccount {
   newsletter_from_name?: string | null;
 }
 
+// 段階5(案B)PR-1:scenario 単位移行のための型(後続 PR で group_name 系を順次置換)
+// 構造は src/app/line/projects/page.tsx の Scenario 型と整合
+interface Scenario {
+  id: string;
+  project_id: string;
+  code: string | null;
+  name: string;
+  distribute_enabled: boolean | null;
+  distribute_count: number | null;
+  reserve_count: number | null;
+  ban_sync_enabled: boolean | null;
+  sort_order: number | null;
+}
+
 interface Label {
   id: string;
   name: string;
@@ -169,6 +183,17 @@ interface ActionRule {
   action_type: ActionActionType;
   action_config: Record<string, unknown>;
   created_at: string;
+}
+
+// 段階5(案B)PR-1:アカウントの scenario_id から表示名を引くヘルパー(後続 PR で group_name 表示の置換に使用)
+// scenario_id が NULL/undefined、または scenarios 配列に該当 id が無い場合は "シナリオ未設定" を返す。
+function getScenarioNameForAccount(
+  acc: { scenario_id?: string | null },
+  scenarios: Scenario[],
+): string {
+  if (!acc.scenario_id) return "シナリオ未設定";
+  const found = scenarios.find((s) => s.id === acc.scenario_id);
+  return found ? found.name : "シナリオ未設定";
 }
 
 const DEFAULT_GREETING_MESSAGE = "{display_name}さん、友達追加ありがとうございます！";
@@ -790,6 +815,11 @@ export default function LineDashboard() {
 
   // 全案件一覧（所属変更セレクト用）
   const [allProjects, setAllProjects] = useState<{ id: string; name: string; color: string }[]>([]);
+
+  // 段階5(案B)PR-1:全 project にぶら下がる scenarios を flat 化して保持
+  // /api/line/projects の response に各 project.scenarios として埋め込まれている(段階5 hotfix 9ea0e4e で対応済)。
+  // 後続 PR(PR-2 以降)で group_name → scenario_id 表示置換に使用する。本 PR では setter を呼ぶだけで既存 UI は不変。
+  const [scenarios, setScenarios] = useState<Scenario[]>([]);
 
   const [showStepCreator, setShowStepCreator] = useState(false);
   const [stepCreatorForm, setStepCreatorForm] = useState<BroadcastForm>(emptyBroadcast);
@@ -1942,6 +1972,29 @@ export default function LineDashboard() {
     fetchSmsBalance();
     fetchReports();
   }, [fetchFollowers, fetchAccounts, fetchUnreadCounts, fetchAllProjects, fetchGroupSettings, fetchCloserUsers, fetchSmsBalance, fetchReports]);
+
+  // 段階5(案B)PR-1:scenarios を独立 fetch で取得(既存 fetchAllProjects に手を入れない方針)
+  // /api/line/projects は各 project に scenarios 配列を埋め込んで返す(段階5 hotfix 9ea0e4e で対応済)。
+  // テーブル不在(Step 01 未適用)の環境では各 project.scenarios=[] が返るので空配列で継続される。
+  // 失敗時は空配列のまま(既存 UI への影響ゼロ)。
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/line/projects");
+        if (!res.ok) return;
+        const data = (await res.json()) as Array<{ scenarios?: Scenario[] }>;
+        if (cancelled) return;
+        const flat = (Array.isArray(data) ? data : []).flatMap((p) => p.scenarios ?? []);
+        setScenarios(flat);
+      } catch {
+        /* 失敗時は空配列のまま */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (selectedAccount) {
