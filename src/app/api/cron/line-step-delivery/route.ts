@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { buildLineMessage, pushLineMessages, summarizeBuiltMessage } from "@/lib/line";
 import { buildReplacerContext, buildBranchEvalContext, defaultContext } from "@/lib/line-replacer";
+import { rewriteUrlsInMessage, persistTokens, type ClickContext } from "@/lib/click-tracking";
 
 export const maxDuration = 300;
 
@@ -119,6 +120,8 @@ async function runStepDelivery(): Promise<{
 
   // アカウント→トークンのキャッシュ
   const tokenCache = new Map<string, string | null>();
+  // 段階5 §16-9 Phase 3: ClickContext.project_id 用キャッシュ(tokenCache と同じキーを使う)
+  const projectIdCache = new Map<string, string | null>();
 
   for (const enr of rows) {
     // 2. シーケンスのステップメッセージ（last_sent_step より大きいもの）を取得
@@ -176,11 +179,12 @@ async function runStepDelivery(): Promise<{
     const cacheKey = enr.scenario_id ? `scn:${enr.scenario_id}` : `acc:${enr.account_id}`;
     if (!tokenCache.has(cacheKey)) {
       let resolvedToken: string | null = null;
+      let resolvedProjectId: string | null = null;
 
       if (enr.scenario_id) {
         const r = await supabase
           .from("line_accounts")
-          .select("channel_access_token")
+          .select("channel_access_token, project_id")
           .eq("scenario_id", enr.scenario_id)
           .eq("role", "main")
           .eq("is_active", true)
@@ -188,6 +192,7 @@ async function runStepDelivery(): Promise<{
           .maybeSingle();
         if (!r.error && r.data) {
           resolvedToken = (r.data.channel_access_token as string) ?? null;
+          resolvedProjectId = (r.data.project_id as string | null) ?? null;
         }
         // scenario 経由でアクセスエラー(列不在等)の場合は account_id fallback へ
       }
@@ -195,15 +200,18 @@ async function runStepDelivery(): Promise<{
       if (!resolvedToken) {
         const { data: acc } = await supabase
           .from("line_accounts")
-          .select("channel_access_token")
+          .select("channel_access_token, project_id")
           .eq("id", enr.account_id)
           .maybeSingle();
         resolvedToken = (acc?.channel_access_token as string) ?? null;
+        resolvedProjectId = (acc?.project_id as string | null) ?? null;
       }
 
       tokenCache.set(cacheKey, resolvedToken);
+      projectIdCache.set(cacheKey, resolvedProjectId);
     }
     const token = tokenCache.get(cacheKey);
+    const projectId = projectIdCache.get(cacheKey) ?? null;
     if (!token) {
       failed += dueMessages.length;
       continue;
@@ -220,25 +228,75 @@ async function runStepDelivery(): Promise<{
     ]);
 
     // 7. メッセージ送信
+    //
+    // 段階5 §16-9 Phase 3: enrollment 単位で URL 書き換え + token 一括永続化を事前に実施。
+    // フォールバック原則:rewrite/persist 失敗時は元メッセージで送信続行(計測ロスのみ)。
     let maxSentStep = enr.last_sent_step;
+
+    // 7-a. 全 due メッセージを組立。組立失敗(null)は skip 扱いで maxSentStep を進める。
+    type BuiltDueMessage = {
+      msg: StepMsgRow;
+      built: Record<string, unknown>;
+      payload: Record<string, unknown>;
+      sendMsg: Record<string, unknown>; // 送信用、デフォルトは元 built
+    };
+    const builts: BuiltDueMessage[] = [];
     for (const msg of dueMessages) {
       const payload = (msg.payload as Record<string, unknown> | null) ?? {
         msgType: "text",
         body: msg.body,
       };
-      const lineMsg = buildLineMessage(payload, replacerCtx, branchCtx);
-      if (!lineMsg) {
+      const built = buildLineMessage(payload, replacerCtx, branchCtx);
+      if (!built) {
         maxSentStep = Math.max(maxSentStep, msg.step_order);
         continue;
       }
+      builts.push({ msg, built, payload, sendMsg: built });
+    }
 
-      const res = await pushLineMessages(token, enr.line_user_id, [lineMsg]);
+    // 7-b. URL 書き換え + token 一括永続化
+    if (builts.length > 0) {
+      try {
+        const ctxBase: ClickContext = {
+          broadcast_sequence_id: enr.sequence_id,
+          step_message_id: "", // 各メッセージで上書き
+          step_enrollment_id: enr.id,
+          scenario_id: enr.scenario_id ?? null,
+          project_id: projectId,
+          follower_id: enr.follower_id,
+          line_user_id: enr.line_user_id,
+        };
+        const rewriteResults = builts.map((b) =>
+          rewriteUrlsInMessage(b.built, { ...ctxBase, step_message_id: b.msg.id }),
+        );
+        const allTokens = rewriteResults.flatMap((r) => r.tokens);
+        if (allTokens.length > 0) {
+          const persistResult = await persistTokens(supabase, allTokens);
+          if (persistResult.ok) {
+            for (let i = 0; i < builts.length; i++) {
+              builts[i].sendMsg = rewriteResults[i].message;
+            }
+          } else {
+            console.error(
+              "[cron/line-step-delivery] persistTokens failed, fallback to original URLs:",
+              persistResult.error,
+            );
+          }
+        }
+      } catch (e) {
+        console.error("[cron/line-step-delivery] click-tracking rewrite error, fallback:", e);
+      }
+    }
+
+    // 7-c. 送信ループ(sendMsg は rewrite 後 or 元 built)
+    for (const b of builts) {
+      const res = await pushLineMessages(token, enr.line_user_id, [b.sendMsg]);
       if (res.ok) {
         sent++;
-        maxSentStep = Math.max(maxSentStep, msg.step_order);
-        // チャット画面表示用ログ: 実際の送信内容を1行要約で残す
-        const builtType = (lineMsg.type as string) || "text";
-        const summary = summarizeBuiltMessage(lineMsg, payload);
+        maxSentStep = Math.max(maxSentStep, b.msg.step_order);
+        // チャット画面表示用ログ: 実際の送信内容を1行要約で残す(URL は元のまま表示)
+        const builtType = (b.built.type as string) || "text";
+        const summary = summarizeBuiltMessage(b.built, b.payload);
         await supabase.from("line_messages").insert({
           line_account_id: enr.account_id,
           line_user_id: enr.line_user_id,
@@ -250,7 +308,7 @@ async function runStepDelivery(): Promise<{
       } else {
         failed++;
         console.error(
-          `[cron/line-step-delivery] send failed: enrollment=${enr.id} step=${msg.step_order}`,
+          `[cron/line-step-delivery] send failed: enrollment=${enr.id} step=${b.msg.step_order}`,
           res.status,
           res.error,
         );
