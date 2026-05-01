@@ -16,6 +16,7 @@
 
 import { supabase } from "@/lib/supabase";
 import { buildLineMessage, pushLineMessages } from "@/lib/line";
+import { rewriteUrlsInMessage, persistTokens, type ClickContext } from "@/lib/click-tracking";
 
 // ------------------------------------------------------------
 // 型定義
@@ -422,13 +423,15 @@ async function runStepSequenceForUser(
   lineUserId: string,
   sequenceId: string,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
+  // 段階5 §16-9 Phase 3: ClickContext.project_id 用に project_id も取得
   const { data: acc } = await supabase
     .from("line_accounts")
-    .select("channel_access_token")
+    .select("channel_access_token, project_id")
     .eq("id", accountId)
     .maybeSingle();
   const token = acc?.channel_access_token as string | undefined;
   if (!token) return { ok: false, error: "access token missing" };
+  const accountProjectId = (acc?.project_id as string | null) ?? null;
 
   // 全メッセージ取得（delay=0 の即時送信 + delay>0 のエンロールメント用）
   const { data: allMsgs } = await supabase
@@ -444,6 +447,20 @@ async function runStepSequenceForUser(
   const immediateMsgs = allMsgs.filter((m) => m.delay_minutes === 0);
   const delayedMsgs = allMsgs.filter((m) => m.delay_minutes > 0);
 
+  // 段階5 §16-9 Phase 3: sequence の scenario_id を別 SELECT で取得(列不在環境では null フォールバック)
+  let sequenceScenarioId: string | null = null;
+  {
+    const r = await supabase
+      .from("line_step_sequences")
+      .select("scenario_id")
+      .eq("id", sequenceId)
+      .maybeSingle();
+    if (!r.error && r.data) {
+      sequenceScenarioId = (r.data.scenario_id as string | null) ?? null;
+    }
+    // scenario_id 列が無い(Step 02 未適用)等 → null のまま継続
+  }
+
   const { data: follower } = await supabase
     .from("line_followers")
     .select("id, display_name")
@@ -454,18 +471,59 @@ async function runStepSequenceForUser(
   const followerId = follower?.id as string | undefined;
 
   // 即時メッセージを送信
+  // 段階5 §16-9 Phase 3: 即時送信(delay=0)のみ click-tracking 対象。
+  //   delay > 0 のメッセージは line-step-delivery 側で送信・計測されるので、
+  //   ここで重ねて token 発行すると二重計測になる(本ループは delay=0 のみ通る)。
   if (immediateMsgs.length > 0) {
-    const built = immediateMsgs
-      .map((m) =>
-        buildLineMessage(
+    const builtPairs = immediateMsgs
+      .map((m) => {
+        const built = buildLineMessage(
           (m.payload as Record<string, unknown> | null) ?? { msgType: "text", body: m.body },
           displayName,
-        ),
-      )
-      .filter((x): x is Record<string, unknown> => x !== null);
+        );
+        return built ? { built, step_message_id: m.id as string } : null;
+      })
+      .filter(
+        (x): x is { built: Record<string, unknown>; step_message_id: string } => x !== null,
+      );
 
-    if (built.length > 0) {
-      const res = await pushLineMessages(token, lineUserId, built);
+    if (builtPairs.length > 0) {
+      const lineMessages = builtPairs.map((p) => p.built);
+
+      // URL 書き換え + token 永続化(失敗時は元メッセージで送信続行)
+      let sendMessages: Array<Record<string, unknown>> = lineMessages;
+      try {
+        const ctxBase: ClickContext = {
+          broadcast_sequence_id: sequenceId,
+          step_message_id: "", // メッセージごとに上書き
+          // 即時送信は enrollment 経由でない(enrollment 作成は delay > 0 メッセージ向け、
+          // かつ作成タイミングは下のブロックで本送信より後)。よって null。
+          step_enrollment_id: null,
+          scenario_id: sequenceScenarioId,
+          project_id: accountProjectId,
+          follower_id: followerId ?? null,
+          line_user_id: lineUserId,
+        };
+        const rewriteResults = builtPairs.map((p) =>
+          rewriteUrlsInMessage(p.built, { ...ctxBase, step_message_id: p.step_message_id }),
+        );
+        const allTokens = rewriteResults.flatMap((r) => r.tokens);
+        if (allTokens.length > 0) {
+          const persistResult = await persistTokens(supabase, allTokens);
+          if (persistResult.ok) {
+            sendMessages = rewriteResults.map((r) => r.message);
+          } else {
+            console.error(
+              "[action-rules] persistTokens failed, fallback to original URLs:",
+              persistResult.error,
+            );
+          }
+        }
+      } catch (e) {
+        console.error("[action-rules] click-tracking rewrite error, fallback:", e);
+      }
+
+      const res = await pushLineMessages(token, lineUserId, sendMessages);
       if (!res.ok) return { ok: false, error: `${res.status}: ${res.error}` };
     }
   }
