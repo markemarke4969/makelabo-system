@@ -466,6 +466,8 @@ export default function LineDashboard() {
   const [showAddAccount, setShowAddAccount] = useState(false);
 
   // アカウント一括登録（スプレッドシート形式）
+  // 段階5(案B)PR-5:scenario_id を追加(段階5 移行期は group_name と二重持ち、PR-6 で group_name 撤去予定)
+  // 値の意味:"" = プレースホルダー(未選択)、"__null__" = シナリオ未設定(送信時 null)、それ以外 = scenario.id
   interface BulkRow {
     account_name: string;
     channel_id: string;
@@ -474,6 +476,7 @@ export default function LineDashboard() {
     basic_id: string;
     group_name: string;
     group_is_new: boolean;
+    scenario_id: string;
     role: "main" | "standby";
     testing: boolean;
     testResult: { ok: boolean; text: string } | null;
@@ -488,6 +491,7 @@ export default function LineDashboard() {
     basic_id: "",
     group_name: "",
     group_is_new: false,
+    scenario_id: "",
     role: "main",
     testing: false,
     testResult: null,
