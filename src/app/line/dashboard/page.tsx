@@ -9490,13 +9490,17 @@ export default function LineDashboard() {
                 </div>
 
                 {/* 登録済みアカウント */}
+                {/* 段階5(案B)PR-3:アカウント一覧テーブルの「グループ」列を「シナリオ」列に置換。
+                    - フィルタ見出しテキストと filter ロジックを selectedAccount.scenario_id ベースに変更
+                    - セル表示は getScenarioNameForAccount(acc, scenarios) を使用(scenario_id NULL 時は「シナリオ未設定」)
+                    既存のバケツ集約構造(groupedAccounts / sortedGroupedAccounts)は本 PR では触らない(PR-4 で対応)。 */}
                 {accounts.length > 0 && (
                   <div className="bg-white rounded-lg border border-gray-200 overflow-hidden overflow-x-auto">
                     <div className="px-5 py-3 bg-gray-50 border-b border-gray-200">
                       <h3 className="text-sm font-bold text-gray-700">
                         登録済みアカウント
                         <span className="ml-2 text-xs font-normal text-gray-500">
-                          （{selectedAccount?.group_name ? `${selectedAccount.group_name}グループのみ` : "全グループ"}）
+                          （{selectedAccount?.scenario_id ? `${getScenarioNameForAccount(selectedAccount, scenarios)} のみ` : "全シナリオ"}）
                         </span>
                       </h3>
                     </div>
@@ -9505,7 +9509,7 @@ export default function LineDashboard() {
                         <tr className="border-b border-gray-200 text-gray-500 text-left bg-gray-50/50">
                           <th className="px-5 py-3 font-medium">アカウント名</th>
                           <th className="px-5 py-3 font-medium">役割</th>
-                          <th className="px-5 py-3 font-medium hidden md:table-cell">グループ</th>
+                          <th className="px-5 py-3 font-medium hidden md:table-cell">シナリオ</th>
                           <th className="px-5 py-3 font-medium hidden md:table-cell">チャネルID</th>
                           <th className="px-5 py-3 font-medium hidden md:table-cell">Basic ID</th>
                           <th className="px-5 py-3 font-medium">状態</th>
@@ -9514,7 +9518,7 @@ export default function LineDashboard() {
                       </thead>
                       <tbody>
                         {accounts
-                          .filter((acc) => !selectedAccount?.group_name || (acc.group_name ?? null) === selectedAccount.group_name)
+                          .filter((acc) => !selectedAccount?.scenario_id || (acc.scenario_id ?? null) === selectedAccount.scenario_id)
                           .map((acc) => (
                           <tr key={acc.id} className="border-b border-gray-100 hover:bg-gray-50 transition">
                             <td className="px-5 py-3">
@@ -9548,7 +9552,7 @@ export default function LineDashboard() {
                                 {!acc.role && "未設定"}
                               </button>
                             </td>
-                            <td className="px-5 py-3 text-gray-500 hidden md:table-cell">{acc.group_name ?? "—"}</td>
+                            <td className="px-5 py-3 text-gray-500 hidden md:table-cell">{getScenarioNameForAccount(acc, scenarios)}</td>
                             <td className="px-5 py-3 font-mono text-gray-500 hidden md:table-cell">{acc.channel_id}</td>
                             <td className="px-5 py-3 text-gray-500 hidden md:table-cell">{acc.basic_id ? `@${acc.basic_id}` : "未設定"}</td>
                             <td className="px-5 py-3">
