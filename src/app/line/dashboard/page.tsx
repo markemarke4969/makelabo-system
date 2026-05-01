@@ -411,7 +411,6 @@ export default function LineDashboard() {
   // 現在のユーザー情報
   const [currentUser, setCurrentUser] = useState<{ id: string; is_closer: boolean; is_admin: boolean; closer_name: string | null } | null>(null);
   // グループのクローザー表示設定
-  const [groupSettings, setGroupSettings] = useState<Record<string, boolean>>({});
   // クローザー一覧（担当クローザー選択用）
   const [closerUsers, setCloserUsers] = useState<Array<{ id: string; name: string | null; closer_name: string | null }>>([]);
 
@@ -531,15 +530,6 @@ export default function LineDashboard() {
   const [labelUserSearch, setLabelUserSearch] = useState("");
   const LABEL_USERS_PER_PAGE = 30;
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [showGroupManager, setShowGroupManager] = useState(false);
-  const [editingGroupName, setEditingGroupName] = useState<{ old: string; new: string } | null>(null);
-  const [newGroupName, setNewGroupName] = useState("");
-  const [showSortMode, setShowSortMode] = useState(false);
-  const [sortGroups, setSortGroups] = useState<{ name: string; accountIds: string[] }[]>([]);
-  const [dragType, setDragType] = useState<"group" | "account" | null>(null);
-  const [dragId, setDragId] = useState<string | null>(null); // group name or account id
-  const [dragSourceGroup, setDragSourceGroup] = useState<string | null>(null);
-  const [dropTarget, setDropTarget] = useState<{ type: "group" | "account"; id: string } | null>(null);
 
   // Feature 1: Name editing
   const [editingName, setEditingName] = useState(false);
@@ -969,19 +959,6 @@ export default function LineDashboard() {
     } catch { /* */ }
   }, [project?.id]);
 
-  const fetchGroupSettings = useCallback(async () => {
-    if (!project?.id) return;
-    try {
-      const res = await fetch(`/api/line/account-groups?project_id=${project.id}`);
-      if (res.ok) {
-        const groups = await res.json();
-        const map: Record<string, boolean> = {};
-        for (const g of groups) map[g.group_name] = !!g.closer_visible;
-        setGroupSettings(map);
-      }
-    } catch { /* */ }
-  }, [project?.id]);
-
   const fetchCloserUsers = useCallback(async () => {
     try {
       const res = await fetch("/api/line/users");
@@ -1219,177 +1196,22 @@ export default function LineDashboard() {
     });
   };
 
-  // グループ名編集
-  const renameGroup = (oldName: string, newName: string) => {
-    if (!newName.trim() || newName === oldName) {
-      setEditingGroupName(null);
-      return;
-    }
-    // 全アカウントのgroup_nameを更新（ローカル）
-    setAccounts((prev) =>
-      prev.map((acc) =>
-        (acc.group_name || "未分類") === oldName
-          ? { ...acc, group_name: newName.trim() }
-          : acc
-      )
-    );
-    setEditingGroupName(null);
-  };
-
-  const deleteGroup = (groupName: string) => {
-    if (!confirm(`グループ「${groupName}」を削除しますか？\nアカウントは「未分類」に移動します。`)) return;
-    setAccounts((prev) =>
-      prev.map((acc) =>
-        (acc.group_name || "未分類") === groupName
-          ? { ...acc, group_name: null }
-          : acc
-      )
-    );
-  };
-
-  // 表示順変更（ドラッグ＆ドロップ）
-  const enterSortMode = () => {
-    // 現在のグループ構造をsortGroupsに初期化
-    const groups: { name: string; accountIds: string[] }[] = [];
-    const seen = new Set<string>();
-    for (const acc of accounts) {
-      const gn = acc.group_name || "未分類";
-      if (!seen.has(gn)) {
-        seen.add(gn);
-        groups.push({ name: gn, accountIds: [] });
-      }
-    }
-    for (const acc of accounts) {
-      const gn = acc.group_name || "未分類";
-      const g = groups.find((g) => g.name === gn);
-      if (g) g.accountIds.push(acc.id);
-    }
-    setSortGroups(groups);
-    setShowSortMode(true);
-  };
-
-  const clearDrag = () => {
-    setDragType(null);
-    setDragId(null);
-    setDragSourceGroup(null);
-    setDropTarget(null);
-  };
-
-  // グループをドラッグ開始
-  const onGroupDragStart = (groupName: string) => {
-    setDragType("group");
-    setDragId(groupName);
-  };
-
-  // アカウントをドラッグ開始
-  const onAccountDragStart = (accId: string, fromGroup: string) => {
-    setDragType("account");
-    setDragId(accId);
-    setDragSourceGroup(fromGroup);
-  };
-
-  const onDragOverGroup = (e: React.DragEvent, groupName: string) => {
-    e.preventDefault();
-    setDropTarget({ type: "group", id: groupName });
-  };
-
-  const onDragOverAccount = (e: React.DragEvent, accId: string) => {
-    e.preventDefault();
-    setDropTarget({ type: "account", id: accId });
-  };
-
-  const onDropOnGroup = (targetGroupName: string) => {
-    if (!dragId) { clearDrag(); return; }
-
-    if (dragType === "group" && dragId !== targetGroupName) {
-      // グループ同士の並び替え
-      setSortGroups((prev) => {
-        const next = [...prev];
-        const fromIdx = next.findIndex((g) => g.name === dragId);
-        const toIdx = next.findIndex((g) => g.name === targetGroupName);
-        if (fromIdx === -1 || toIdx === -1) return prev;
-        const [moved] = next.splice(fromIdx, 1);
-        next.splice(toIdx, 0, moved);
-        return next;
-      });
-    } else if (dragType === "account") {
-      // アカウントを別グループに移動（グループヘッダーにドロップ → そのグループの末尾に追加）
-      setSortGroups((prev) => {
-        const next = prev.map((g) => ({ ...g, accountIds: [...g.accountIds] }));
-        // 元のグループから削除
-        for (const g of next) {
-          g.accountIds = g.accountIds.filter((id) => id !== dragId);
-        }
-        // ターゲットグループの末尾に追加
-        const targetG = next.find((g) => g.name === targetGroupName);
-        if (targetG && dragId) targetG.accountIds.push(dragId);
-        return next;
-      });
-    }
-    clearDrag();
-  };
-
-  const onDropOnAccount = (targetAccId: string) => {
-    if (!dragId || dragType !== "account" || dragId === targetAccId) { clearDrag(); return; }
-
-    setSortGroups((prev) => {
-      const next = prev.map((g) => ({ ...g, accountIds: [...g.accountIds] }));
-      // ターゲットがどのグループにいるか
-      const targetGroup = next.find((g) => g.accountIds.includes(targetAccId));
-      if (!targetGroup) return prev;
-
-      // 元のグループから削除
-      for (const g of next) {
-        g.accountIds = g.accountIds.filter((id) => id !== dragId);
-      }
-      // ターゲットの位置に挿入
-      const toIdx = targetGroup.accountIds.indexOf(targetAccId);
-      if (dragId) targetGroup.accountIds.splice(toIdx, 0, dragId);
-      return next;
-    });
-    clearDrag();
-  };
-
-  const saveSortOrder = () => {
-    // sortGroupsに基づいてaccountsを再構成
-    const accMap = new Map(accounts.map((a) => [a.id, a]));
-    const newAccounts: LineAccount[] = [];
-    for (const group of sortGroups) {
-      for (const accId of group.accountIds) {
-        const acc = accMap.get(accId);
-        if (acc) {
-          newAccounts.push({ ...acc, group_name: group.name === "未分類" ? null : group.name });
-        }
-      }
-    }
-    // 含まれなかったもの（万が一）
-    for (const acc of accounts) {
-      if (!newAccounts.find((a) => a.id === acc.id)) newAccounts.push(acc);
-    }
-    setAccounts(newAccounts);
-    setShowSortMode(false);
-  };
-
-  // 通常表示用のグループ（本番 + BAN済み。サブ（standby）は別管理）
+  // 通常表示用のシナリオ別バケツ(本番 + BAN済み。サブ(standby)は別管理)
   // BAN済みアカウントは過去の友だち・チャット履歴閲覧のため表示を残す
-  // クローザーの場合はcloser_visibleなグループのみ表示
-  const isCloserUser = currentUser?.is_closer && !currentUser?.is_admin;
+  // 段階5(案B)PR-4:group_name ベースから scenario_id ベースに置換。
+  // - キー:getScenarioNameForAccount(acc, scenarios)(scenario_id NULL 時は「シナリオ未設定」)
+  // - closer_visible フィルタは廃止(closer 用の可視制御は将来 scenario 単位で再実装する想定)
   const sortedGroupedAccounts = accounts
     .filter((acc) => !acc.role || acc.role === "main" || acc.role === "distribute" || acc.role === "banned")
-    .filter((acc) => {
-      if (!isCloserUser) return true;
-      const group = acc.group_name || "未分類";
-      return !!groupSettings[group];
-    })
     // main を先、banned を後に並べる
     .sort((a, b) => {
       const rank = (r?: string | null) => (r === "banned" ? 1 : 0);
       return rank(a.role) - rank(b.role);
     })
     .reduce<Record<string, LineAccount[]>>((groups, acc) => {
-      const group = acc.group_name || "未分類";
-      if (!groups[group]) groups[group] = [];
-      groups[group].push(acc);
+      const key = getScenarioNameForAccount(acc, scenarios);
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(acc);
       return groups;
     }, {});
 
@@ -1983,11 +1805,10 @@ export default function LineDashboard() {
     fetchAccounts();
     fetchUnreadCounts();
     fetchAllProjects();
-    fetchGroupSettings();
     fetchCloserUsers();
     fetchSmsBalance();
     fetchReports();
-  }, [fetchFollowers, fetchAccounts, fetchUnreadCounts, fetchAllProjects, fetchGroupSettings, fetchCloserUsers, fetchSmsBalance, fetchReports]);
+  }, [fetchFollowers, fetchAccounts, fetchUnreadCounts, fetchAllProjects, fetchCloserUsers, fetchSmsBalance, fetchReports]);
 
   // 段階5(案B)PR-1:scenarios を独立 fetch で取得(既存 fetchAllProjects に手を入れない方針)
   // /api/line/projects は各 project に scenarios 配列を埋め込んで返す(段階5 hotfix 9ea0e4e で対応済)。
@@ -2393,12 +2214,6 @@ export default function LineDashboard() {
   };
   const fmtFull = (d: string) => new Date(d).toLocaleDateString("ja-JP", { year: "numeric", month: "long", day: "numeric" });
 
-  const groupedAccounts = accounts.reduce<Record<string, LineAccount[]>>((groups, acc) => {
-    const group = acc.group_name || "未分類";
-    if (!groups[group]) groups[group] = [];
-    groups[group].push(acc);
-    return groups;
-  }, {});
 
   // チャット一覧用: 最新メッセージで並び替え（仮：followed_atの新しい順）
   const sortedFollowers = [...followers].sort((a, b) =>
@@ -4474,292 +4289,22 @@ export default function LineDashboard() {
                 );
               })()}
 
-              {/* グループ管理モーダル */}
-              {showGroupManager && (
-                <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-                  <div className="bg-white rounded-xl shadow-xl w-full max-w-md mx-4">
-                    <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
-                      <h3 className="font-bold text-gray-800">グループ管理</h3>
-                      <button onClick={() => { setShowGroupManager(false); setEditingGroupName(null); }} className="text-gray-400 hover:text-gray-600">{Icons.close}</button>
-                    </div>
-                    <div className="p-5">
-                      {/* 新規グループ作成 */}
-                      <div className="flex items-center gap-2 mb-4">
-                        <input
-                          type="text"
-                          value={newGroupName}
-                          onChange={(e) => setNewGroupName(e.target.value)}
-                          onKeyDown={async (e) => {
-                            if (e.key === "Enter" && !e.nativeEvent.isComposing && newGroupName.trim()) {
-                              const name = newGroupName.trim();
-                              if (Object.keys(groupedAccounts).includes(name)) {
-                                alert("同じ名前のグループが既にあります");
-                                return;
-                              }
-                              if (!project?.id) { alert("案件が選択されていません"); return; }
-                              const res = await fetch("/api/line/account-groups", {
-                                method: "PUT",
-                                headers: { "Content-Type": "application/json" },
-                                body: JSON.stringify({ project_id: project.id, group_name: name, closer_visible: false }),
-                              });
-                              if (!res.ok) {
-                                const d = await res.json().catch(() => ({}));
-                                alert(`グループの作成に失敗: ${d.error ?? res.status}`);
-                                return;
-                              }
-                              setAccounts((prev) => [...prev, { id: `group-placeholder-${Date.now()}`, channel_id: "", account_name: null, basic_id: null, is_active: false, group_name: name } as LineAccount]);
-                              setNewGroupName("");
-                            }
-                          }}
-                          placeholder="新しいグループ名を入力"
-                          className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
-                        />
-                        <button
-                          onClick={async () => {
-                            const name = newGroupName.trim();
-                            if (!name) return;
-                            if (Object.keys(groupedAccounts).includes(name)) {
-                              alert("同じ名前のグループが既にあります");
-                              return;
-                            }
-                            if (!project?.id) { alert("案件が選択されていません"); return; }
-                            const res = await fetch("/api/line/account-groups", {
-                              method: "PUT",
-                              headers: { "Content-Type": "application/json" },
-                              body: JSON.stringify({ project_id: project.id, group_name: name, closer_visible: false }),
-                            });
-                            if (!res.ok) {
-                              const d = await res.json().catch(() => ({}));
-                              alert(`グループの作成に失敗: ${d.error ?? res.status}`);
-                              return;
-                            }
-                            setAccounts((prev) => [...prev, { id: `group-placeholder-${Date.now()}`, channel_id: "", account_name: null, basic_id: null, is_active: false, group_name: name } as LineAccount]);
-                            setNewGroupName("");
-                          }}
-                          disabled={!newGroupName.trim()}
-                          className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs font-medium rounded-lg transition"
-                        >
-                          作成
-                        </button>
-                      </div>
-
-                      {Object.keys(groupedAccounts).length === 0 ? (
-                        <p className="text-sm text-gray-400 text-center py-4">グループがありません</p>
-                      ) : (
-                        <div className="space-y-2">
-                          {Object.entries(groupedAccounts).map(([groupName, groupAccs]) => (
-                            <div key={groupName} className="flex items-center justify-between bg-gray-50 rounded-lg px-4 py-3">
-                              {editingGroupName?.old === groupName ? (
-                                <div className="flex items-center gap-2 flex-1">
-                                  <input
-                                    type="text"
-                                    value={editingGroupName.new}
-                                    onChange={(e) => setEditingGroupName({ ...editingGroupName, new: e.target.value })}
-                                    onKeyDown={(e) => { if (e.key === "Enter" && !e.nativeEvent.isComposing) renameGroup(editingGroupName.old, editingGroupName.new); }}
-                                    autoFocus
-                                    className="flex-1 border border-blue-400 rounded-md px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400"
-                                  />
-                                  <button
-                                    onClick={() => renameGroup(editingGroupName.old, editingGroupName.new)}
-                                    className="px-2.5 py-1 bg-blue-600 text-white text-xs rounded-md hover:bg-blue-700 transition"
-                                  >
-                                    保存
-                                  </button>
-                                  <button
-                                    onClick={() => setEditingGroupName(null)}
-                                    className="px-2.5 py-1 text-gray-500 text-xs hover:bg-gray-200 rounded-md transition"
-                                  >
-                                    取消
-                                  </button>
-                                </div>
-                              ) : (
-                                <>
-                                  <div>
-                                    <span className="text-sm font-medium text-gray-800">{groupName}</span>
-                                    <span className="text-xs text-gray-400 ml-2">({groupAccs.length} アカウント)</span>
-                                  </div>
-                                  <div className="flex items-center gap-1.5">
-                                    <label className="flex items-center gap-1 cursor-pointer" title="クローザーに表示">
-                                      <input
-                                        type="checkbox"
-                                        checked={!!groupSettings[groupName]}
-                                        onChange={async (e) => {
-                                          const val = e.target.checked;
-                                          setGroupSettings((prev) => ({ ...prev, [groupName]: val }));
-                                          await fetch("/api/line/account-groups", {
-                                            method: "PUT",
-                                            headers: { "Content-Type": "application/json" },
-                                            body: JSON.stringify({ project_id: project?.id, group_name: groupName, closer_visible: val }),
-                                          });
-                                        }}
-                                        className="accent-orange-500 w-3.5 h-3.5"
-                                      />
-                                      <span className="text-[10px] text-orange-600">CL表示</span>
-                                    </label>
-                                    <button
-                                      onClick={() => setEditingGroupName({ old: groupName, new: groupName })}
-                                      className="px-2.5 py-1 text-xs text-blue-600 hover:bg-blue-50 rounded-md transition"
-                                    >
-                                      編集
-                                    </button>
-                                    {groupName !== "未分類" && (
-                                      <button
-                                        onClick={() => deleteGroup(groupName)}
-                                        className="px-2.5 py-1 text-xs text-red-500 hover:bg-red-50 rounded-md transition"
-                                      >
-                                        削除
-                                      </button>
-                                    )}
-                                  </div>
-                                </>
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                    <div className="flex justify-end px-5 py-4 border-t border-gray-200">
-                      <button onClick={() => { setShowGroupManager(false); setEditingGroupName(null); }} className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm rounded-lg transition">閉じる</button>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* 表示順変更モード */}
-              {showSortMode && (
-                <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-                  <div className="bg-white rounded-xl shadow-xl w-full max-w-lg mx-4 max-h-[85vh] flex flex-col">
-                    <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
-                      <h3 className="font-bold text-gray-800">表示順変更</h3>
-                      <button onClick={() => { setShowSortMode(false); clearDrag(); }} className="text-gray-400 hover:text-gray-600">{Icons.close}</button>
-                    </div>
-                    <div className="px-5 pt-3 flex items-center gap-4 text-[11px] text-gray-500">
-                      <span className="flex items-center gap-1">
-                        <span className="w-2 h-2 rounded-full bg-orange-400" />
-                        グループをドラッグで並び替え
-                      </span>
-                      <span className="flex items-center gap-1">
-                        <span className="w-2 h-2 rounded-full bg-green-500" />
-                        アカウントをドラッグでグループ間移動
-                      </span>
-                    </div>
-                    <div className="flex-1 overflow-y-auto p-5 space-y-2">
-                      {sortGroups.map((group) => {
-                        const isGroupDragging = dragType === "group" && dragId === group.name;
-                        const isGroupDropTarget = dropTarget?.type === "group" && dropTarget.id === group.name;
-                        return (
-                          <div
-                            key={group.name}
-                            className={`rounded-lg border transition-all ${
-                              isGroupDragging ? "opacity-50" : ""
-                            } ${isGroupDropTarget && dragType === "account" ? "border-blue-500 ring-2 ring-blue-200" : isGroupDropTarget && dragType === "group" ? "border-orange-500 ring-2 ring-orange-200" : "border-gray-200"}`}
-                          >
-                            {/* グループヘッダー（ドラッグ可能） */}
-                            <div
-                              draggable
-                              onDragStart={() => onGroupDragStart(group.name)}
-                              onDragOver={(e) => onDragOverGroup(e, group.name)}
-                              onDrop={() => onDropOnGroup(group.name)}
-                              onDragEnd={clearDrag}
-                              className="flex items-center gap-2.5 px-4 py-2.5 bg-gray-50 rounded-t-lg cursor-grab active:cursor-grabbing border-b border-gray-200"
-                            >
-                              {/* ドラッグハンドル */}
-                              <svg className="w-3.5 h-3.5 text-orange-400 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24"><circle cx="9" cy="5" r="1.5" /><circle cx="15" cy="5" r="1.5" /><circle cx="9" cy="12" r="1.5" /><circle cx="15" cy="12" r="1.5" /><circle cx="9" cy="19" r="1.5" /><circle cx="15" cy="19" r="1.5" /></svg>
-                              <span className="text-sm font-bold text-gray-700">{group.name}</span>
-                              <span className="text-[11px] text-gray-400">({group.accountIds.length})</span>
-                            </div>
-
-                            {/* グループ内のアカウント */}
-                            <div className="py-1">
-                              {group.accountIds.length === 0 ? (
-                                <div
-                                  onDragOver={(e) => onDragOverGroup(e, group.name)}
-                                  onDrop={() => onDropOnGroup(group.name)}
-                                  className="px-4 py-3 text-xs text-gray-400 text-center"
-                                >
-                                  アカウントをここにドロップ
-                                </div>
-                              ) : (
-                                group.accountIds.map((accId) => {
-                                  const acc = accounts.find((a) => a.id === accId);
-                                  if (!acc) return null;
-                                  const isAccDragging = dragType === "account" && dragId === accId;
-                                  const isAccDropTarget = dropTarget?.type === "account" && dropTarget.id === accId;
-                                  return (
-                                    <div
-                                      key={accId}
-                                      draggable
-                                      onDragStart={() => onAccountDragStart(accId, group.name)}
-                                      onDragOver={(e) => onDragOverAccount(e, accId)}
-                                      onDrop={() => onDropOnAccount(accId)}
-                                      onDragEnd={clearDrag}
-                                      className={`flex items-center gap-3 mx-2 my-1 px-3 py-2.5 rounded-md transition-all cursor-grab active:cursor-grabbing ${
-                                        isAccDragging
-                                          ? "opacity-40 bg-green-50"
-                                          : isAccDropTarget
-                                            ? "bg-green-50 border border-green-400 shadow-sm"
-                                            : "hover:bg-gray-50"
-                                      }`}
-                                    >
-                                      <svg className="w-3.5 h-3.5 text-green-500 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24"><circle cx="9" cy="5" r="1.5" /><circle cx="15" cy="5" r="1.5" /><circle cx="9" cy="12" r="1.5" /><circle cx="15" cy="12" r="1.5" /><circle cx="9" cy="19" r="1.5" /><circle cx="15" cy="19" r="1.5" /></svg>
-                                      <div className="w-6 h-6 rounded-full bg-[#06C755] flex items-center justify-center flex-shrink-0">
-                                        <span className="text-white text-[9px] font-bold">L</span>
-                                      </div>
-                                      <span className="text-sm text-gray-800 truncate">{acc.account_name ?? "未設定"}</span>
-                                    </div>
-                                  );
-                                })
-                              )}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                    <div className="flex justify-end gap-2 px-5 py-4 border-t border-gray-200">
-                      <button onClick={() => { setShowSortMode(false); clearDrag(); }} className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition">キャンセル</button>
-                      <button
-                        onClick={saveSortOrder}
-                        className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition"
-                      >
-                        保存
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              )}
-
               {loading ? (
                 <div className="text-center text-gray-400 py-20">読み込み中...</div>
               ) : accounts.length === 0 ? (
                 <div className="bg-white rounded-lg border border-gray-200 p-16 text-center text-gray-400">
                   <p className="text-lg mb-2">LINEアカウントが登録されていません</p>
-                  <p className="text-sm mb-4">まずグループを作成してください。アカウントはグループ内の「+追加」ボタンから登録します。</p>
-                  <div className="flex justify-center gap-2">
-                    <button
-                      onClick={() => setShowGroupManager(true)}
-                      className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white text-xs font-medium rounded-md transition"
-                    >
-                      {Icons.folder}
-                      グループ管理
-                    </button>
-                  </div>
+                  <p className="text-sm">「LINEアカウント登録」からアカウントを登録してください。</p>
                 </div>
               ) : (
                 <div className="space-y-5 max-w-5xl">
-                  {/* 未分類以外のグループ */}
+                  {/* シナリオ未設定以外の scenario バケツ */}
                   {Object.entries(sortedGroupedAccounts)
-                    .filter(([groupName]) => groupName !== "未分類")
-                    .map(([groupName, groupAccs]) => (
-                    <div key={groupName} className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-                      <div className="px-5 py-3 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
-                        <h3 className="text-sm font-bold text-gray-700">{groupName}</h3>
-                        <button
-                          onClick={() => { resetForm(); setForm((f) => ({ ...f, group_name: groupName })); setShowAddAccount(true); }}
-                          className="flex items-center gap-1 px-2 py-1 bg-blue-600 hover:bg-blue-700 text-white text-[11px] font-medium rounded transition"
-                        >
-                          {Icons.plus}
-                          追加
-                        </button>
+                    .filter(([scenarioName]) => scenarioName !== "シナリオ未設定")
+                    .map(([scenarioName, groupAccs]) => (
+                    <div key={scenarioName} className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+                      <div className="px-5 py-3 bg-gray-50 border-b border-gray-200">
+                        <h3 className="text-sm font-bold text-gray-700">{scenarioName}</h3>
                       </div>
                       {groupAccs.map((acc, i) => {
                         const isBanned = acc.role === "banned";
@@ -4797,40 +4342,20 @@ export default function LineDashboard() {
                     </div>
                   ))}
 
-                  {/* アクションボタン（アカウント一覧の下・未分類の上） */}
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <button
-                      onClick={() => setShowGroupManager(true)}
-                      className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white text-xs font-medium rounded-md transition"
-                    >
-                      {Icons.folder}
-                      グループ管理
-                    </button>
-                    {(!currentUser || currentUser.is_admin) && (
-                      <button
-                        onClick={enterSortMode}
-                        className="flex items-center gap-1.5 px-3 py-1.5 bg-orange-500 hover:bg-orange-600 text-white text-xs font-medium rounded-md transition"
-                      >
-                        {Icons.sort}
-                        表示順変更
-                      </button>
-                    )}
-                  </div>
-
-                  {/* 未分類グループ（既存データのみ表示、新規追加は不可） */}
+                  {/* シナリオ未設定バケツ(scenario_id NULL のアカウント) */}
                   <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
                     <div className="px-5 py-3 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
-                      <h3 className="text-sm font-bold text-gray-700">未分類</h3>
-                      <span className="text-[10px] text-gray-400">新規追加はグループ内から行ってください</span>
+                      <h3 className="text-sm font-bold text-gray-700">シナリオ未設定</h3>
+                      <span className="text-[10px] text-gray-400">アカウント編集からシナリオを選択してください</span>
                     </div>
-                    {sortedGroupedAccounts["未分類"] && sortedGroupedAccounts["未分類"].length > 0 ? (
-                      sortedGroupedAccounts["未分類"].map((acc, i) => {
+                    {sortedGroupedAccounts["シナリオ未設定"] && sortedGroupedAccounts["シナリオ未設定"].length > 0 ? (
+                      sortedGroupedAccounts["シナリオ未設定"].map((acc, i) => {
                         const isBanned = acc.role === "banned";
                         return (
                         <div
                           key={acc.id}
                           onClick={() => openAccount(acc)}
-                          className={`flex items-center justify-between px-5 py-3.5 hover:bg-blue-50/50 cursor-pointer transition-colors ${i < sortedGroupedAccounts["未分類"].length - 1 ? "border-b border-gray-100" : ""} ${isBanned ? "bg-red-50/30 opacity-80" : ""}`}
+                          className={`flex items-center justify-between px-5 py-3.5 hover:bg-blue-50/50 cursor-pointer transition-colors ${i < sortedGroupedAccounts["シナリオ未設定"].length - 1 ? "border-b border-gray-100" : ""} ${isBanned ? "bg-red-50/30 opacity-80" : ""}`}
                         >
                           <div className="flex items-center gap-3">
                             <div className={`w-9 h-9 rounded-full flex items-center justify-center ${isBanned ? "bg-gray-400 grayscale" : "bg-[#06C755]"}`}>{LINE_ICON}</div>
@@ -9490,10 +9015,6 @@ export default function LineDashboard() {
                 </div>
 
                 {/* 登録済みアカウント */}
-                {/* 段階5(案B)PR-3:アカウント一覧テーブルの「グループ」列を「シナリオ」列に置換。
-                    - フィルタ見出しテキストと filter ロジックを selectedAccount.scenario_id ベースに変更
-                    - セル表示は getScenarioNameForAccount(acc, scenarios) を使用(scenario_id NULL 時は「シナリオ未設定」)
-                    既存のバケツ集約構造(groupedAccounts / sortedGroupedAccounts)は本 PR では触らない(PR-4 で対応)。 */}
                 {accounts.length > 0 && (
                   <div className="bg-white rounded-lg border border-gray-200 overflow-hidden overflow-x-auto">
                     <div className="px-5 py-3 bg-gray-50 border-b border-gray-200">
