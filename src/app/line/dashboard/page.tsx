@@ -1196,10 +1196,11 @@ export default function LineDashboard() {
     });
   };
 
-  // 通常表示用のグループ（本番 + BAN済み。サブ（standby）は別管理）
+  // 通常表示用のシナリオ別バケツ(本番 + BAN済み。サブ(standby)は別管理)
   // BAN済みアカウントは過去の友だち・チャット履歴閲覧のため表示を残す
-  // 段階5(案B)PR-4:グループ管理 UI 廃止に伴い closer_visible フィルタを削除
-  // (closer 用の可視制御は将来 scenario 単位で再実装する想定)
+  // 段階5(案B)PR-4:group_name ベースから scenario_id ベースに置換。
+  // - キー:getScenarioNameForAccount(acc, scenarios)(scenario_id NULL 時は「シナリオ未設定」)
+  // - closer_visible フィルタは廃止(closer 用の可視制御は将来 scenario 単位で再実装する想定)
   const sortedGroupedAccounts = accounts
     .filter((acc) => !acc.role || acc.role === "main" || acc.role === "distribute" || acc.role === "banned")
     // main を先、banned を後に並べる
@@ -1208,9 +1209,9 @@ export default function LineDashboard() {
       return rank(a.role) - rank(b.role);
     })
     .reduce<Record<string, LineAccount[]>>((groups, acc) => {
-      const group = acc.group_name || "未分類";
-      if (!groups[group]) groups[group] = [];
-      groups[group].push(acc);
+      const key = getScenarioNameForAccount(acc, scenarios);
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(acc);
       return groups;
     }, {});
 
@@ -2213,12 +2214,6 @@ export default function LineDashboard() {
   };
   const fmtFull = (d: string) => new Date(d).toLocaleDateString("ja-JP", { year: "numeric", month: "long", day: "numeric" });
 
-  const groupedAccounts = accounts.reduce<Record<string, LineAccount[]>>((groups, acc) => {
-    const group = acc.group_name || "未分類";
-    if (!groups[group]) groups[group] = [];
-    groups[group].push(acc);
-    return groups;
-  }, {});
 
   // チャット一覧用: 最新メッセージで並び替え（仮：followed_atの新しい順）
   const sortedFollowers = [...followers].sort((a, b) =>
@@ -4303,20 +4298,13 @@ export default function LineDashboard() {
                 </div>
               ) : (
                 <div className="space-y-5 max-w-5xl">
-                  {/* 未分類以外のグループ */}
+                  {/* シナリオ未設定以外の scenario バケツ */}
                   {Object.entries(sortedGroupedAccounts)
-                    .filter(([groupName]) => groupName !== "未分類")
-                    .map(([groupName, groupAccs]) => (
-                    <div key={groupName} className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-                      <div className="px-5 py-3 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
-                        <h3 className="text-sm font-bold text-gray-700">{groupName}</h3>
-                        <button
-                          onClick={() => { resetForm(); setForm((f) => ({ ...f, group_name: groupName })); setShowAddAccount(true); }}
-                          className="flex items-center gap-1 px-2 py-1 bg-blue-600 hover:bg-blue-700 text-white text-[11px] font-medium rounded transition"
-                        >
-                          {Icons.plus}
-                          追加
-                        </button>
+                    .filter(([scenarioName]) => scenarioName !== "シナリオ未設定")
+                    .map(([scenarioName, groupAccs]) => (
+                    <div key={scenarioName} className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+                      <div className="px-5 py-3 bg-gray-50 border-b border-gray-200">
+                        <h3 className="text-sm font-bold text-gray-700">{scenarioName}</h3>
                       </div>
                       {groupAccs.map((acc, i) => {
                         const isBanned = acc.role === "banned";
@@ -4354,20 +4342,20 @@ export default function LineDashboard() {
                     </div>
                   ))}
 
-                  {/* 未分類グループ（既存データのみ表示、新規追加は不可） */}
+                  {/* シナリオ未設定バケツ(scenario_id NULL のアカウント) */}
                   <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
                     <div className="px-5 py-3 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
-                      <h3 className="text-sm font-bold text-gray-700">未分類</h3>
-                      <span className="text-[10px] text-gray-400">新規追加はグループ内から行ってください</span>
+                      <h3 className="text-sm font-bold text-gray-700">シナリオ未設定</h3>
+                      <span className="text-[10px] text-gray-400">アカウント編集からシナリオを選択してください</span>
                     </div>
-                    {sortedGroupedAccounts["未分類"] && sortedGroupedAccounts["未分類"].length > 0 ? (
-                      sortedGroupedAccounts["未分類"].map((acc, i) => {
+                    {sortedGroupedAccounts["シナリオ未設定"] && sortedGroupedAccounts["シナリオ未設定"].length > 0 ? (
+                      sortedGroupedAccounts["シナリオ未設定"].map((acc, i) => {
                         const isBanned = acc.role === "banned";
                         return (
                         <div
                           key={acc.id}
                           onClick={() => openAccount(acc)}
-                          className={`flex items-center justify-between px-5 py-3.5 hover:bg-blue-50/50 cursor-pointer transition-colors ${i < sortedGroupedAccounts["未分類"].length - 1 ? "border-b border-gray-100" : ""} ${isBanned ? "bg-red-50/30 opacity-80" : ""}`}
+                          className={`flex items-center justify-between px-5 py-3.5 hover:bg-blue-50/50 cursor-pointer transition-colors ${i < sortedGroupedAccounts["シナリオ未設定"].length - 1 ? "border-b border-gray-100" : ""} ${isBanned ? "bg-red-50/30 opacity-80" : ""}`}
                         >
                           <div className="flex items-center gap-3">
                             <div className={`w-9 h-9 rounded-full flex items-center justify-center ${isBanned ? "bg-gray-400 grayscale" : "bg-[#06C755]"}`}>{LINE_ICON}</div>
@@ -9027,10 +9015,6 @@ export default function LineDashboard() {
                 </div>
 
                 {/* 登録済みアカウント */}
-                {/* 段階5(案B)PR-3:アカウント一覧テーブルの「グループ」列を「シナリオ」列に置換。
-                    - フィルタ見出しテキストと filter ロジックを selectedAccount.scenario_id ベースに変更
-                    - セル表示は getScenarioNameForAccount(acc, scenarios) を使用(scenario_id NULL 時は「シナリオ未設定」)
-                    既存のバケツ集約構造(groupedAccounts / sortedGroupedAccounts)は本 PR では触らない(PR-4 で対応)。 */}
                 {accounts.length > 0 && (
                   <div className="bg-white rounded-lg border border-gray-200 overflow-hidden overflow-x-auto">
                     <div className="px-5 py-3 bg-gray-50 border-b border-gray-200">
