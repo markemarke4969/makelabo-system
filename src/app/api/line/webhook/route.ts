@@ -11,6 +11,9 @@ interface LineAccountRow {
   greeting_message: string | null;
   project_id: string | null;
   role: string | null;
+  // 段階5 Step 11:line_step_sequences クエリを scenario_id 主軸で発行するために取得。
+  // Step 02 未適用環境では SELECT fallback で除外され undefined となる。
+  scenario_id?: string | null;
 }
 
 interface LineEvent {
@@ -68,10 +71,21 @@ export async function POST(request: NextRequest) {
   // 登録されている全アカウントを取得 → 署名が一致する secret を持つアカウントを特定
   let accounts: LineAccountRow[] = [];
   {
-    // greeting_message カラム未作成環境への fallback
-    const res = await supabase
+    // 段階5 Step 11:scenario_id を含む primary SELECT(後段の line_step_sequences クエリで主軸として利用)。
+    // 列なし環境(Step 02 未適用 / 旧スキーマ)には 2 段階 fallback で対応:
+    //   - scenario_id 列なし → scenario_id を抜いて再 SELECT
+    //   - greeting_message 列なし → greeting_message + scenario_id を抜いて再 SELECT(既存パターン)
+    let res = await supabase
       .from("line_accounts")
-      .select("id, channel_id, channel_secret, channel_access_token, greeting_message, project_id, role");
+      .select("id, channel_id, channel_secret, channel_access_token, greeting_message, project_id, role, scenario_id");
+
+    if (res.error && /scenario_id/i.test(res.error.message)) {
+      // scenario_id 列なし(Step 02 未適用)→ scenario_id を抜いて再取得
+      res = await supabase
+        .from("line_accounts")
+        .select("id, channel_id, channel_secret, channel_access_token, greeting_message, project_id, role");
+    }
+
     if (res.error && /greeting_message/.test(res.error.message)) {
       const fb = await supabase
         .from("line_accounts")
@@ -406,24 +420,74 @@ async function handleFollow(event: LineEvent, account: LineAccountRow) {
   // ※ kind='step' のシーケンスのみ対象（予約配信 kind='schedule' は cron で処理）
   if (account.channel_access_token) {
     try {
-      // kind カラム未作成環境への fallback 付き
+      // 段階5 Step 11 対応:line_step_sequences は account_id → scenario_id への主軸切り替え期。
+      // primary path:account.scenario_id が取得できていれば scenario_id でフィルタ。
+      // fallback path:scenario_id 列なし(Step 02 未適用)or scenario_id 解決不能時に account_id でフィルタ(従来動作)。
+      // kind 列なし環境への fallback は scenario_id / account_id の各経路に二重に適用。
       let sequenceIds: string[] = [];
       {
-        const r = await supabase
-          .from("line_step_sequences")
-          .select("id")
-          .eq("account_id", account.id)
-          .eq("status", "active")
-          .eq("kind", "step");
-        if (r.error && /kind/.test(r.error.message)) {
-          const fb = await supabase
+        let resolved = false;
+
+        // primary:scenario_id 経路
+        if (account.scenario_id) {
+          let r = await supabase
+            .from("line_step_sequences")
+            .select("id")
+            .eq("scenario_id", account.scenario_id)
+            .eq("status", "active")
+            .eq("kind", "step");
+          if (r.error && /kind/i.test(r.error.message)) {
+            // scenario_id 経路 + kind 列なし fallback
+            r = await supabase
+              .from("line_step_sequences")
+              .select("id")
+              .eq("scenario_id", account.scenario_id)
+              .eq("status", "active");
+          }
+          if (!r.error) {
+            sequenceIds = (r.data ?? []).map((s: { id: string }) => s.id);
+            resolved = true;
+          } else if (!/scenario_id/i.test(r.error.message)) {
+            // scenario_id 列なし以外のエラーはここでログのみ出して、account_id fallback へ進む
+            console.error(
+              "[LINE Webhook] step_sequences (scenario_id 経路) fetch error:",
+              r.error.message,
+            );
+          }
+          // scenario_id 列なし(Step 02 未適用)時は resolved=false のまま account_id 経路へフォールスルー
+        }
+
+        // fallback:account_id 経路(scenario_id 解決不能 or scenario_id 列なし)
+        if (!resolved) {
+          let r = await supabase
             .from("line_step_sequences")
             .select("id")
             .eq("account_id", account.id)
-            .eq("status", "active");
-          sequenceIds = (fb.data ?? []).map((s) => s.id as string);
-        } else {
-          sequenceIds = (r.data ?? []).map((s) => s.id as string);
+            .eq("status", "active")
+            .eq("kind", "step");
+          if (r.error && /kind/i.test(r.error.message)) {
+            // account_id 経路 + kind 列なし fallback
+            r = await supabase
+              .from("line_step_sequences")
+              .select("id")
+              .eq("account_id", account.id)
+              .eq("status", "active");
+          }
+          if (!r.error) {
+            sequenceIds = (r.data ?? []).map((s: { id: string }) => s.id);
+          } else if (/account_id/i.test(r.error.message)) {
+            // Step 11 適用後 + scenario_id 解決不能 → 該当データなし扱いで silent skip
+            console.warn(
+              "[LINE Webhook] step_sequences: account_id 列なし + scenario_id 解決不能のためスキップ (account=" +
+                account.id +
+                ")",
+            );
+          } else {
+            console.error(
+              "[LINE Webhook] step_sequences (account_id 経路) fetch error:",
+              r.error.message,
+            );
+          }
         }
       }
 
