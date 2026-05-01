@@ -7,6 +7,7 @@ import {
 } from "@/lib/delivery-conditions";
 import { fireTrigger } from "@/lib/action-rules";
 import { buildReplacerContext, buildBranchEvalContext, defaultContext } from "@/lib/line-replacer";
+import { rewriteUrlsInMessage, persistTokens, type ClickContext } from "@/lib/click-tracking";
 
 // 並列送信のチャンクサイズ（LINE API レート対策）
 const PUSH_CONCURRENCY = 20;
@@ -31,6 +32,8 @@ interface StepMessageRow {
 interface AccountRow {
   id: string;
   channel_access_token: string | null;
+  // 段階5 §16-9: ClickContext.project_id 用に取得
+  project_id?: string | null;
 }
 
 interface FollowerRow {
@@ -68,7 +71,7 @@ export async function processBroadcastSequence(seq: BroadcastSequenceRow): Promi
   if (seq.scenario_id) {
     const r = await supabase
       .from("line_accounts")
-      .select("id, channel_access_token")
+      .select("id, channel_access_token, project_id")
       .eq("scenario_id", seq.scenario_id)
       .eq("role", "main")
       .eq("is_active", true)
@@ -88,7 +91,7 @@ export async function processBroadcastSequence(seq: BroadcastSequenceRow): Promi
   if (!account) {
     const { data: fb } = await supabase
       .from("line_accounts")
-      .select("id, channel_access_token")
+      .select("id, channel_access_token, project_id")
       .eq("id", seq.account_id)
       .maybeSingle<AccountRow>();
     account = fb ?? null;
@@ -186,23 +189,86 @@ export async function processBroadcastSequence(seq: BroadcastSequenceRow): Promi
           .map((m) => {
             const source = (m.payload as Record<string, unknown>) ?? { msgType: "text", body: m.body };
             const built = buildLineMessage(source, replacerCtx, branchCtx);
-            return built ? { built, source } : null;
+            return built ? { built, source, step_message_id: m.id } : null;
           })
-          .filter((x): x is { built: Record<string, unknown>; source: Record<string, unknown> } => x !== null);
+          .filter(
+            (
+              x,
+            ): x is {
+              built: Record<string, unknown>;
+              source: Record<string, unknown>;
+              step_message_id: string;
+            } => x !== null,
+          );
         const lineMessages = builtPairs.map((p) => p.built);
 
         if (lineMessages.length === 0) {
           return { ok: false as const, status: 0, error: "no_valid_messages", follower: f, builtPairs };
         }
 
+        // 段階5 §16-9 Phase 2:URL を中継 URL に書き換え + token 永続化
+        // フォールバック原則:rewrite/persist 失敗時は元メッセージで送信続行(計測ロスのみ)
+        let sendMessages: Array<Record<string, unknown>>;
+        try {
+          const ctxBase: ClickContext = {
+            broadcast_sequence_id: seq.id,
+            step_message_id: "", // メッセージごとに上書き(下のループで個別設定)
+            step_enrollment_id: null, // 予約配信は enrollment なし
+            scenario_id: seq.scenario_id ?? null,
+            project_id: account.project_id ?? null,
+            follower_id: f.id,
+            line_user_id: f.line_user_id,
+          };
+          const rewriteResults = builtPairs.map((p) =>
+            rewriteUrlsInMessage(p.built, { ...ctxBase, step_message_id: p.step_message_id }),
+          );
+          const allTokens = rewriteResults.flatMap((r) => r.tokens);
+          if (allTokens.length === 0) {
+            // URL を含まないメッセージのみ → 元のまま送信
+            sendMessages = lineMessages;
+          } else {
+            const persistResult = await persistTokens(supabase, allTokens);
+            if (!persistResult.ok) {
+              console.error(
+                "[broadcast] persistTokens failed, fallback to original URLs:",
+                persistResult.error,
+              );
+              sendMessages = lineMessages;
+            } else {
+              sendMessages = rewriteResults.map((r) => r.message);
+            }
+          }
+        } catch (e) {
+          console.error("[broadcast] click-tracking rewrite error, fallback to original:", e);
+          sendMessages = lineMessages;
+        }
+
         const res = await pushLineMessages(
           account.channel_access_token!,
           f.line_user_id,
-          lineMessages,
+          sendMessages,
         );
         return { ...res, follower: f, builtPairs } as
-          | { ok: true; follower: FollowerRow; builtPairs: Array<{ built: Record<string, unknown>; source: Record<string, unknown> }> }
-          | { ok: false; status: number; error: string; follower: FollowerRow; builtPairs: Array<{ built: Record<string, unknown>; source: Record<string, unknown> }> };
+          | {
+              ok: true;
+              follower: FollowerRow;
+              builtPairs: Array<{
+                built: Record<string, unknown>;
+                source: Record<string, unknown>;
+                step_message_id: string;
+              }>;
+            }
+          | {
+              ok: false;
+              status: number;
+              error: string;
+              follower: FollowerRow;
+              builtPairs: Array<{
+                built: Record<string, unknown>;
+                source: Record<string, unknown>;
+                step_message_id: string;
+              }>;
+            };
       }),
     );
 
