@@ -18,22 +18,42 @@ export async function GET(request: NextRequest) {
     return Response.json({ error: "account_id or scenario_id is required" }, { status: 400 });
   }
 
-  let scenarioAccountIds: string[] | null = null;
-  if (scenarioId && !accountId) {
-    const resolved = await resolveAccountIdsFromScenario(scenarioId);
-    if (resolved.account_ids.length === 0) return Response.json([]);
-    scenarioAccountIds = resolved.account_ids;
-  }
-
+  // 段階7-A2: 案 Y(過渡期ハイブリッド)直 hit 化
+  // - scenario_id 直 hit(7-A1 で列追加済、部分インデックス活用)
+  // - OR 句で「scenario_id NULL かつ配下 account_id IN 句」も拾う(MARI 既存 row 後方互換、過渡期)
+  // - 段階8 で scenario_id バックフィル完了後、OR 句後半部分を除去する cleanup PR で技術負債解消
   let lblQuery = supabase
     .from("line_labels")
     .select("id, name, color, sort_order, created_at")
     .order("sort_order", { ascending: true })
     .order("created_at", { ascending: false });
-  if (scenarioAccountIds) lblQuery = lblQuery.in("account_id", scenarioAccountIds);
-  else if (accountId) lblQuery = lblQuery.eq("account_id", accountId);
+  if (scenarioId && !accountId) {
+    const resolved = await resolveAccountIdsFromScenario(scenarioId);
+    if (resolved.account_ids.length === 0) {
+      lblQuery = lblQuery.eq("scenario_id", scenarioId);
+    } else {
+      const idsList = resolved.account_ids.map((id) => `"${id}"`).join(",");
+      lblQuery = lblQuery.or(`scenario_id.eq.${scenarioId},and(scenario_id.is.null,account_id.in.(${idsList}))`);
+    }
+  } else if (accountId) {
+    lblQuery = lblQuery.eq("account_id", accountId);
+  }
 
-  const { data: labels, error: lblErr } = await lblQuery;
+  let { data: labels, error: lblErr } = await lblQuery;
+
+  // 7-A1 未適用環境 fallback(本番では発火しない想定):scenario_id 列なしエラー → IN 句集約に切替
+  if (lblErr && scenarioId && !accountId && /scenario_id/i.test(lblErr.message)) {
+    const resolved = await resolveAccountIdsFromScenario(scenarioId);
+    if (resolved.account_ids.length === 0) return Response.json([]);
+    const fb = await supabase
+      .from("line_labels")
+      .select("id, name, color, sort_order, created_at")
+      .in("account_id", resolved.account_ids)
+      .order("sort_order", { ascending: true })
+      .order("created_at", { ascending: false });
+    labels = fb.data;
+    lblErr = fb.error;
+  }
 
   if (lblErr) {
     return Response.json({ error: lblErr.message }, { status: 500 });
