@@ -655,6 +655,10 @@ export default function LineDashboard() {
   const [editingRichMenuId, setEditingRichMenuId] = useState<string | null>(null);
   const [showRichMenuEditor, setShowRichMenuEditor] = useState(false);
   const [richMenuDeploying, setRichMenuDeploying] = useState(false);
+  // 段階6c1b: scenario 代表 menu の単一管理(scenario 経由 fetch で line_account_id IS NULL のレコード)
+  const [scenarioRichMenu, setScenarioRichMenu] = useState<RichMenu | null>(null);
+  // 段階6c1b: 部分再 deploy 中の account UUID(retry_account_ids 経由の個別再 deploy 用)
+  const [retryingAccountIds, setRetryingAccountIds] = useState<Set<string>>(new Set());
 
   // アンケート
   interface SurveyDef { id: string; name: string; status: string; description: string | null; response_count: number; questions: Array<{ id: string; question_text: string; question_type: string; options: Array<{ label: string; value: string }>; is_required: boolean; save_to_field_id: string | null; label_mapping: Record<string, string> }>; created_at: string }
