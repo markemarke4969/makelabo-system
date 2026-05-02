@@ -6075,6 +6075,46 @@ export default function LineDashboard() {
             }
           };
 
+          // 段階6c1b: 部分再 deploy(retry_account_ids 経由)。
+          // 失敗 account の個別再 deploy を C-1a API の retry_account_ids ペイロードで実行。
+          // retryingAccountIds Set で重複クリック防止 + UI disabled 制御。
+          const retryDeployForAccount = async (menu: RichMenu, accountId: string) => {
+            if (!confirm(`account に再適用しますか?(retry_account_ids 経由)`)) return;
+            setRetryingAccountIds((prev) => {
+              const next = new Set(prev);
+              next.add(accountId);
+              return next;
+            });
+            try {
+              const res = await fetch("/api/line/rich-menus/deploy", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ id: menu.id, retry_account_ids: [accountId] }),
+              });
+              const data = await res.json();
+              const ds = data.deploy_status as DeployStatus | undefined;
+              if (ds) {
+                const detail = ds.details.find((d) => d.account_id === accountId);
+                if (detail?.status === "success") {
+                  alert(`再適用完了: ${detail.account_name ?? accountId.slice(0, 8)}`);
+                } else {
+                  alert(`再適用失敗: stage ${detail?.stage ?? "?"}: ${detail?.error ?? "不明"}`);
+                }
+              } else {
+                alert(`再適用失敗: ${data.error ?? res.status}`);
+              }
+              await fetchRichMenus();
+            } catch (e) {
+              alert(`再適用エラー: ${(e as Error).message}`);
+            } finally {
+              setRetryingAccountIds((prev) => {
+                const next = new Set(prev);
+                next.delete(accountId);
+                return next;
+              });
+            }
+          };
+
           // 段階6c1b: deploy は menu.scenario_id の有無で API 内部分岐される(C-1a 入力分岐)。
           // - legacy (scenario_id NULL): 旧 single response { ok, line_rich_menu_id }
           // - scenario 代表 menu: 並列 deploy response { ok, deploy_status: { total, succeeded, failed, details: [...] } }
@@ -6518,7 +6558,16 @@ export default function LineDashboard() {
                                 </span>
                               )}
                             </div>
-                            {/* S6 で retry ボタン追加予定 */}
+                            {/* 段階6c1b S6: 失敗 account のみ「再適用」ボタン表示 */}
+                            {d.status === "failed" && (
+                              <button
+                                disabled={retryingAccountIds.has(d.account_id) || richMenuDeploying}
+                                onClick={() => retryDeployForAccount(scenarioRichMenu!, d.account_id)}
+                                className="flex-shrink-0 px-2.5 py-1 text-[10px] font-medium rounded-md bg-yellow-100 hover:bg-yellow-200 text-yellow-800 disabled:opacity-50"
+                              >
+                                {retryingAccountIds.has(d.account_id) ? "再適用中..." : "再適用"}
+                              </button>
+                            )}
                           </li>
                         ))}
                       </ul>
