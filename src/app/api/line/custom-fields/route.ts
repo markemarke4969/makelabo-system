@@ -25,21 +25,35 @@ export async function GET(request: NextRequest) {
     return Response.json({ error: "account_id or scenario_id is required" }, { status: 400 });
   }
 
-  let scenarioAccountIds: string[] | null = null;
-  if (scenarioId && !accountId) {
-    const resolved = await resolveAccountIdsFromScenario(scenarioId);
-    if (resolved.account_ids.length === 0) return Response.json([]);
-    scenarioAccountIds = resolved.account_ids;
-  }
-
+  // 段階7-A2: 案 Y(過渡期ハイブリッド)直 hit 化
   let query = supabase
     .from("line_custom_fields")
     .select("*")
     .order("sort_order", { ascending: true });
-  if (scenarioAccountIds) query = query.in("account_id", scenarioAccountIds);
-  else if (accountId) query = query.eq("account_id", accountId);
+  if (scenarioId && !accountId) {
+    const resolved = await resolveAccountIdsFromScenario(scenarioId);
+    if (resolved.account_ids.length === 0) {
+      query = query.eq("scenario_id", scenarioId);
+    } else {
+      const idsList = resolved.account_ids.map((id) => `"${id}"`).join(",");
+      query = query.or(`scenario_id.eq.${scenarioId},and(scenario_id.is.null,account_id.in.(${idsList}))`);
+    }
+  } else if (accountId) {
+    query = query.eq("account_id", accountId);
+  }
 
-  const { data, error } = await query;
+  let { data, error } = await query;
+
+  // 7-A1 未適用環境 fallback
+  if (error && scenarioId && !accountId && /scenario_id/i.test(error.message)) {
+    const resolved = await resolveAccountIdsFromScenario(scenarioId);
+    if (resolved.account_ids.length === 0) return Response.json([]);
+    ({ data, error } = await supabase
+      .from("line_custom_fields")
+      .select("*")
+      .in("account_id", resolved.account_ids)
+      .order("sort_order", { ascending: true }));
+  }
 
   if (error) return Response.json({ error: error.message }, { status: 500 });
   return Response.json(data ?? []);
