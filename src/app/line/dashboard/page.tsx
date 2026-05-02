@@ -1001,12 +1001,17 @@ export default function LineDashboard() {
   }, [project?.id]);
 
   const fetchRegForms = useCallback(async () => {
-    if (!selectedAccount?.id) return;
+    // 段階6c2: scenario 選択時は scenario_id 直渡し(配下 IN 句集約)。
+    const useScenario = selectedScenarioId && selectedScenarioId !== NULL_SCENARIO_KEY;
+    if (!useScenario && !selectedAccount?.id) { setRegForms([]); return; }
     try {
-      const res = await fetch(`/api/line/registration-forms?account_id=${selectedAccount.id}`);
+      const url = useScenario
+        ? `/api/line/registration-forms?scenario_id=${selectedScenarioId}`
+        : `/api/line/registration-forms?account_id=${selectedAccount!.id}`;
+      const res = await fetch(url);
       if (res.ok) setRegForms(await res.json());
     } catch { /* */ }
-  }, [selectedAccount?.id]);
+  }, [selectedAccount?.id, selectedScenarioId]);
 
   const fetchSmsBalance = useCallback(async () => {
     if (!project?.id) return;
@@ -1020,12 +1025,17 @@ export default function LineDashboard() {
   }, [project?.id]);
 
   const fetchSurveys = useCallback(async () => {
-    if (!selectedAccount?.id) return;
+    // 段階6c2: scenario 選択時は scenario_id 直渡し(配下 IN 句集約)。
+    const useScenario = selectedScenarioId && selectedScenarioId !== NULL_SCENARIO_KEY;
+    if (!useScenario && !selectedAccount?.id) { setSurveys([]); return; }
     try {
-      const res = await fetch(`/api/line/surveys?account_id=${selectedAccount.id}`);
+      const url = useScenario
+        ? `/api/line/surveys?scenario_id=${selectedScenarioId}`
+        : `/api/line/surveys?account_id=${selectedAccount!.id}`;
+      const res = await fetch(url);
       if (res.ok) setSurveys(await res.json());
     } catch { /* */ }
-  }, [selectedAccount?.id]);
+  }, [selectedAccount?.id, selectedScenarioId]);
 
   const fetchRichMenus = useCallback(async () => {
     if (!selectedAccount?.id) { setRichMenus([]); return; }
@@ -1113,18 +1123,27 @@ export default function LineDashboard() {
 
   // アクションルール一覧取得
   const fetchActionRules = useCallback(async () => {
-    if (!selectedAccount) { setActionRules([]); return; }
+    // 段階6c2: scenario 選択時は scenario_id 直渡し(配下 IN 句集約)。
+    const useScenario = selectedScenarioId && selectedScenarioId !== NULL_SCENARIO_KEY;
+    if (!useScenario && !selectedAccount?.id) { setActionRules([]); return; }
     try {
-      const res = await fetch(`/api/line/action-rules?account_id=${selectedAccount.id}`);
+      const url = useScenario
+        ? `/api/line/action-rules?scenario_id=${selectedScenarioId}`
+        : `/api/line/action-rules?account_id=${selectedAccount!.id}`;
+      const res = await fetch(url);
       if (res.ok) setActionRules(await res.json());
     } catch { /* */ }
-  }, [selectedAccount?.id]);
+  }, [selectedAccount?.id, selectedScenarioId]);
 
-  // ラベル一覧取得（アカウント単位）
+  // ラベル一覧取得(段階6c2: scenario 配下統合表示)
   const fetchLabels = useCallback(async () => {
-    if (!selectedAccount) { setLabels([]); return; }
+    const useScenario = selectedScenarioId && selectedScenarioId !== NULL_SCENARIO_KEY;
+    if (!useScenario && !selectedAccount?.id) { setLabels([]); return; }
     try {
-      const res = await fetch(`/api/line/labels?account_id=${selectedAccount.id}`);
+      const url = useScenario
+        ? `/api/line/labels?scenario_id=${selectedScenarioId}`
+        : `/api/line/labels?account_id=${selectedAccount!.id}`;
+      const res = await fetch(url);
       if (res.ok) {
         const data = await res.json();
         setLabels(
@@ -1138,26 +1157,36 @@ export default function LineDashboard() {
         );
       }
     } catch { /* */ }
-  }, [selectedAccount?.id]);
+  }, [selectedAccount?.id, selectedScenarioId]);
 
   const fetchTemplates = useCallback(async () => {
-    if (!selectedAccount) { setTemplates([]); return; }
+    // 段階6c2: scenario 選択時は scenario_id 直渡し(配下 IN 句集約)。
+    const useScenario = selectedScenarioId && selectedScenarioId !== NULL_SCENARIO_KEY;
+    if (!useScenario && !selectedAccount?.id) { setTemplates([]); return; }
     try {
-      const res = await fetch(`/api/line/templates?account_id=${selectedAccount.id}`);
+      const url = useScenario
+        ? `/api/line/templates?scenario_id=${selectedScenarioId}`
+        : `/api/line/templates?account_id=${selectedAccount!.id}`;
+      const res = await fetch(url);
       if (res.ok) {
         const data = await res.json();
         setTemplates(data as Template[]);
       }
     } catch { /* */ }
-  }, [selectedAccount?.id]);
+  }, [selectedAccount?.id, selectedScenarioId]);
 
   const fetchCustomFields = useCallback(async () => {
-    if (!selectedAccount) { setCustomFields([]); return; }
+    // 段階6c2: scenario 選択時は scenario_id 直渡し(配下 IN 句集約)。
+    const useScenario = selectedScenarioId && selectedScenarioId !== NULL_SCENARIO_KEY;
+    if (!useScenario && !selectedAccount?.id) { setCustomFields([]); return; }
     try {
-      const res = await fetch(`/api/line/custom-fields?account_id=${selectedAccount.id}`);
+      const url = useScenario
+        ? `/api/line/custom-fields?scenario_id=${selectedScenarioId}`
+        : `/api/line/custom-fields?account_id=${selectedAccount!.id}`;
+      const res = await fetch(url);
       if (res.ok) setCustomFields(await res.json());
     } catch { /* */ }
-  }, [selectedAccount?.id]);
+  }, [selectedAccount?.id, selectedScenarioId]);
 
   const fetchReminders = useCallback(async () => {
     // 段階6b2: scenario 選択時は scenario_id 直渡し(配下 IN 句集約)。
@@ -2323,14 +2352,18 @@ export default function LineDashboard() {
 
   // 対象者確認モーダルを開く
   const openAudiencePreview = async (form: BroadcastForm) => {
-    if (!selectedAccount) return;
+    // 段階6c2: scenario 経由を優先(配下統合プレビュー)。selectedAccount or selectedScenarioId のいずれか必須。
+    const useScenario = selectedScenarioId && selectedScenarioId !== NULL_SCENARIO_KEY;
+    if (!useScenario && !selectedAccount?.id) return;
     setAudiencePreview({ open: true, loading: true, total: 0, matched: 0, sample: [], unsupported: [], error: null });
     try {
       const res = await fetch("/api/line/audience-preview", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          account_id: selectedAccount.id,
+          ...(useScenario
+            ? { scenario_id: selectedScenarioId }
+            : { account_id: selectedAccount!.id }),
           condition:
             form.condition === "filtered"
               ? form.targetCondition

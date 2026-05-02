@@ -1,23 +1,39 @@
 import { NextRequest } from "next/server";
 import { supabase } from "@/lib/supabase";
+import { resolveAccountIdsFromScenario } from "@/lib/scenario-resolve";
+
+// 段階6c2: scenario_id クエリ追加(配下 account_ids 解決 → IN 句集約)。
 
 // アンケート一覧取得
 export async function GET(request: NextRequest) {
   const accountId = request.nextUrl.searchParams.get("account_id");
-  if (!accountId) return Response.json({ error: "account_id required" }, { status: 400 });
+  const scenarioId = request.nextUrl.searchParams.get("scenario_id");
+  if (!accountId && !scenarioId) {
+    return Response.json({ error: "account_id or scenario_id required" }, { status: 400 });
+  }
 
-  const { data, error } = await supabase
+  let scenarioAccountIds: string[] | null = null;
+  if (scenarioId && !accountId) {
+    const resolved = await resolveAccountIdsFromScenario(scenarioId);
+    if (resolved.account_ids.length === 0) return Response.json([]);
+    scenarioAccountIds = resolved.account_ids;
+  }
+
+  let query = supabase
     .from("line_surveys")
     .select("*")
-    .eq("account_id", accountId)
     .order("created_at", { ascending: false });
+  if (scenarioAccountIds) query = query.in("account_id", scenarioAccountIds);
+  else if (accountId) query = query.eq("account_id", accountId);
+
+  const { data, error } = await query;
 
   if (error) return Response.json({ error: error.message }, { status: 500 });
 
   // 質問と回答数を結合
   const ids = (data ?? []).map((s) => s.id as string);
-  let questionsMap: Record<string, unknown[]> = {};
-  let responseCounts: Record<string, number> = {};
+  const questionsMap: Record<string, unknown[]> = {};
+  const responseCounts: Record<string, number> = {};
 
   if (ids.length > 0) {
     const { data: questions } = await supabase

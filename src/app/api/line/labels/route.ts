@@ -1,24 +1,39 @@
 import { NextRequest } from "next/server";
 import { supabase } from "@/lib/supabase";
+import { resolveAccountIdsFromScenario } from "@/lib/scenario-resolve";
 
 // ------------------------------------------------------------
-// GET /api/line/labels?account_id=<uuid>
+// GET /api/line/labels?account_id=<uuid> または ?scenario_id=<uuid>
 //   → ラベル一覧 + 付与済みフォロワーID配列を返す
 //   レスポンス: [{ id, name, color, sort_order, assigned_user_ids: string[] }]
 //   assigned_user_ids は line_followers.line_user_id を採用（UI 側が line_user_id で扱っているため）
+//
+// 段階6c2: scenario_id クエリ追加(配下 account_ids 解決 → IN 句集約)。
+// 同名ラベルが配下複数 account にある場合は N 個重複表示(段階7 で schema 移行 + マージ)。
 // ------------------------------------------------------------
 export async function GET(request: NextRequest) {
   const accountId = request.nextUrl.searchParams.get("account_id");
-  if (!accountId) {
-    return Response.json({ error: "account_id is required" }, { status: 400 });
+  const scenarioId = request.nextUrl.searchParams.get("scenario_id");
+  if (!accountId && !scenarioId) {
+    return Response.json({ error: "account_id or scenario_id is required" }, { status: 400 });
   }
 
-  const { data: labels, error: lblErr } = await supabase
+  let scenarioAccountIds: string[] | null = null;
+  if (scenarioId && !accountId) {
+    const resolved = await resolveAccountIdsFromScenario(scenarioId);
+    if (resolved.account_ids.length === 0) return Response.json([]);
+    scenarioAccountIds = resolved.account_ids;
+  }
+
+  let lblQuery = supabase
     .from("line_labels")
     .select("id, name, color, sort_order, created_at")
-    .eq("account_id", accountId)
     .order("sort_order", { ascending: true })
     .order("created_at", { ascending: false });
+  if (scenarioAccountIds) lblQuery = lblQuery.in("account_id", scenarioAccountIds);
+  else if (accountId) lblQuery = lblQuery.eq("account_id", accountId);
+
+  const { data: labels, error: lblErr } = await lblQuery;
 
   if (lblErr) {
     return Response.json({ error: lblErr.message }, { status: 500 });

@@ -1,13 +1,18 @@
 import { NextRequest } from "next/server";
 import { supabase } from "@/lib/supabase";
+import { resolveAccountIdsFromScenario } from "@/lib/scenario-resolve";
+
+// 段階6c2: scenario_id クエリ追加(配下 account_ids 解決 → IN 句集約)。
+// follower_id パスは個別 follower の値取得、scenario 概念無関係 → 拡張対象外。
 
 // カスタムフィールド定義の CRUD
 export async function GET(request: NextRequest) {
   const accountId = request.nextUrl.searchParams.get("account_id");
+  const scenarioId = request.nextUrl.searchParams.get("scenario_id");
   const followerId = request.nextUrl.searchParams.get("follower_id");
 
   if (followerId) {
-    // フォロワーの全カスタム値を取得
+    // フォロワーの全カスタム値を取得(scenario_id とは独立、follower 単位)
     const { data, error } = await supabase
       .from("line_follower_custom_values")
       .select("*, line_custom_fields(*)")
@@ -16,15 +21,25 @@ export async function GET(request: NextRequest) {
     return Response.json(data ?? []);
   }
 
-  if (!accountId) {
-    return Response.json({ error: "account_id is required" }, { status: 400 });
+  if (!accountId && !scenarioId) {
+    return Response.json({ error: "account_id or scenario_id is required" }, { status: 400 });
   }
 
-  const { data, error } = await supabase
+  let scenarioAccountIds: string[] | null = null;
+  if (scenarioId && !accountId) {
+    const resolved = await resolveAccountIdsFromScenario(scenarioId);
+    if (resolved.account_ids.length === 0) return Response.json([]);
+    scenarioAccountIds = resolved.account_ids;
+  }
+
+  let query = supabase
     .from("line_custom_fields")
     .select("*")
-    .eq("account_id", accountId)
     .order("sort_order", { ascending: true });
+  if (scenarioAccountIds) query = query.in("account_id", scenarioAccountIds);
+  else if (accountId) query = query.eq("account_id", accountId);
+
+  const { data, error } = await query;
 
   if (error) return Response.json({ error: error.message }, { status: 500 });
   return Response.json(data ?? []);
