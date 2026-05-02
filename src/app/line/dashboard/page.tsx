@@ -599,9 +599,33 @@ export default function LineDashboard() {
 
   // リッチメニュー
   interface RichMenuArea { actionType: "none" | "uri" | "message" | "postback"; uri: string; text: string; data: string; label: string }
+  // 段階6c1a で line_rich_menus.deploy_status JSONB に書き込まれる構造(SQL マイグレーション設計 L146-161 準拠)
+  interface DeployDetail {
+    account_id: string;
+    account_name: string | null;
+    status: "success" | "failed";
+    stage: number; // 0=token / 1=create / 2=upload / 3=success
+    line_rich_menu_id?: string;
+    deployed_at?: string;
+    error?: string;
+    http_status?: number;
+  }
+  interface DeployStatus {
+    started_at: string;
+    completed_at: string;
+    total: number;
+    succeeded: number;
+    failed: number;
+    details: DeployDetail[];
+  }
   interface RichMenu {
     id: string;
-    line_account_id: string;
+    // 段階6c1a で NULLABLE 化(scenario 代表 menu は line_account_id NULL + scenario_id NOT NULL)
+    line_account_id: string | null;
+    // 段階6c1a 追加(scenario 単位の代表 menu 識別)
+    scenario_id: string | null;
+    // 段階6c1a 追加(scenario 一括 deploy の集約結果。代表 menu でのみ使用)
+    deploy_status: DeployStatus | null;
     name: string;
     line_rich_menu_id: string | null;
     image_url: string | null;
@@ -616,7 +640,8 @@ export default function LineDashboard() {
     created_at: string;
   }
   const [richMenus, setRichMenus] = useState<RichMenu[]>([]);
-  const emptyRichMenu: Omit<RichMenu, "id" | "line_account_id" | "line_rich_menu_id" | "status" | "deployed_at" | "created_at"> = {
+  // 段階6c1b: form は UI 編集状態のみ管理(scope=account_id/scenario_id は menu 側に紐付く情報)
+  const emptyRichMenu: Omit<RichMenu, "id" | "line_account_id" | "scenario_id" | "deploy_status" | "line_rich_menu_id" | "status" | "deployed_at" | "created_at"> = {
     name: "",
     image_url: null,
     size_type: "large",
@@ -630,6 +655,10 @@ export default function LineDashboard() {
   const [editingRichMenuId, setEditingRichMenuId] = useState<string | null>(null);
   const [showRichMenuEditor, setShowRichMenuEditor] = useState(false);
   const [richMenuDeploying, setRichMenuDeploying] = useState(false);
+  // 段階6c1b: scenario 代表 menu の単一管理(scenario 経由 fetch で line_account_id IS NULL のレコード)
+  const [scenarioRichMenu, setScenarioRichMenu] = useState<RichMenu | null>(null);
+  // 段階6c1b: 部分再 deploy 中の account UUID(retry_account_ids 経由の個別再 deploy 用)
+  const [retryingAccountIds, setRetryingAccountIds] = useState<Set<string>>(new Set());
 
   // アンケート
   interface SurveyDef { id: string; name: string; status: string; description: string | null; response_count: number; questions: Array<{ id: string; question_text: string; question_type: string; options: Array<{ label: string; value: string }>; is_required: boolean; save_to_field_id: string | null; label_mapping: Record<string, string> }>; created_at: string }
@@ -1037,13 +1066,48 @@ export default function LineDashboard() {
     } catch { /* */ }
   }, [selectedAccount?.id, selectedScenarioId]);
 
+  // 段階6c1b: scenario 経由は「scenario 代表 menu(line_account_id IS NULL)」を 1 件取得 +
+  // 配下 account の legacy menu(scenario_id IS NULL)を Promise.all で取得して fallback 表示。
+  // ケース B 対応(C-1a API は scenario_id eq のみ → legacy fetch を別途必要)。
+  // hybrid menu(scenario_id + line_account_id 両方持つ)は段階6 では UI 非表示(段階7 持ち越し)。
   const fetchRichMenus = useCallback(async () => {
-    if (!selectedAccount?.id) { setRichMenus([]); return; }
-    try {
-      const res = await fetch(`/api/line/rich-menus?account_id=${selectedAccount.id}`);
-      if (res.ok) setRichMenus(await res.json());
-    } catch { /* */ }
-  }, [selectedAccount?.id]);
+    const useScenario = selectedScenarioId && selectedScenarioId !== NULL_SCENARIO_KEY;
+    if (useScenario) {
+      try {
+        // 1. scenario 代表 menu 取得
+        const sRes = await fetch(`/api/line/rich-menus?scenario_id=${selectedScenarioId}`);
+        const sData = (sRes.ok ? await sRes.json() : []) as RichMenu[];
+        const rep = sData.find((m) => m.line_account_id === null) ?? null;
+        setScenarioRichMenu(rep);
+
+        // 2. legacy fallback:配下 account の scenario_id NULL の旧 menu を Promise.all で取得
+        const scopedAccounts = accounts.filter((a) => a.scenario_id === selectedScenarioId);
+        const legacyResults = await Promise.all(
+          scopedAccounts.map((a) =>
+            fetch(`/api/line/rich-menus?account_id=${a.id}`)
+              .then((r) => (r.ok ? (r.json() as Promise<RichMenu[]>) : Promise.resolve([] as RichMenu[])))
+              .catch(() => [] as RichMenu[]),
+          ),
+        );
+        // hybrid 重複除去のため scenario_id NULL のレコードのみを legacy 扱い
+        const legacyMenus = legacyResults.flat().filter((m) => !m.scenario_id);
+        setRichMenus(legacyMenus);
+      } catch {
+        setScenarioRichMenu(null);
+        setRichMenus([]);
+      }
+    } else if (selectedAccount?.id) {
+      // legacy 経路(scenario 未選択 + account 単位、現実装では到達しないが API 後方互換のため維持)
+      try {
+        const res = await fetch(`/api/line/rich-menus?account_id=${selectedAccount.id}`);
+        if (res.ok) setRichMenus(await res.json());
+        setScenarioRichMenu(null);
+      } catch { /* */ }
+    } else {
+      setScenarioRichMenu(null);
+      setRichMenus([]);
+    }
+  }, [selectedAccount?.id, selectedScenarioId, accounts]);
 
   const fetchReengagements = useCallback(async () => {
     // 段階6b2: scenario 選択時は scenario_id 直渡し(配下 IN 句集約)。
@@ -5977,8 +6041,11 @@ export default function LineDashboard() {
 
           const selectedTemplate = RICH_MENU_TEMPLATES.find((t) => t.value === richMenuForm.template_type) ?? RICH_MENU_TEMPLATES[0];
 
+          // 段階6c1b: scenario 経由時は POST body に scenario_id、account 経由時は line_account_id(legacy)。
+          // PUT は id 経由で scope 不問(menu 自体の scope は保存時のみ確定)。
           const saveRichMenu = async () => {
-            if (!selectedAccount) return;
+            const useScenario = selectedScenarioId && selectedScenarioId !== NULL_SCENARIO_KEY;
+            if (!useScenario && !selectedAccount) return;
             if (!richMenuForm.name.trim()) { alert("管理名称を入力してください"); return; }
             if (!richMenuForm.image_url) { alert("画像をアップロードしてください"); return; }
             try {
@@ -5990,10 +6057,14 @@ export default function LineDashboard() {
                 });
                 if (!res.ok) { const d = await res.json().catch(() => ({})); alert(`保存失敗: ${d.error ?? res.status}`); return; }
               } else {
+                // 新規作成: scope を scenario_id か line_account_id で指定(C-1a API の scope_check 整合)
+                const scopeBody = useScenario
+                  ? { scenario_id: selectedScenarioId }
+                  : { line_account_id: selectedAccount!.id };
                 const res = await fetch("/api/line/rich-menus", {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ line_account_id: selectedAccount.id, ...richMenuForm }),
+                  body: JSON.stringify({ ...scopeBody, ...richMenuForm }),
                 });
                 if (!res.ok) { const d = await res.json().catch(() => ({})); alert(`作成失敗: ${d.error ?? res.status}`); return; }
               }
@@ -6004,8 +6075,55 @@ export default function LineDashboard() {
             }
           };
 
+          // 段階6c1b: 部分再 deploy(retry_account_ids 経由)。
+          // 失敗 account の個別再 deploy を C-1a API の retry_account_ids ペイロードで実行。
+          // retryingAccountIds Set で重複クリック防止 + UI disabled 制御。
+          const retryDeployForAccount = async (menu: RichMenu, accountId: string) => {
+            if (!confirm(`account に再適用しますか?(retry_account_ids 経由)`)) return;
+            setRetryingAccountIds((prev) => {
+              const next = new Set(prev);
+              next.add(accountId);
+              return next;
+            });
+            try {
+              const res = await fetch("/api/line/rich-menus/deploy", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ id: menu.id, retry_account_ids: [accountId] }),
+              });
+              const data = await res.json();
+              const ds = data.deploy_status as DeployStatus | undefined;
+              if (ds) {
+                const detail = ds.details.find((d) => d.account_id === accountId);
+                if (detail?.status === "success") {
+                  alert(`再適用完了: ${detail.account_name ?? accountId.slice(0, 8)}`);
+                } else {
+                  alert(`再適用失敗: stage ${detail?.stage ?? "?"}: ${detail?.error ?? "不明"}`);
+                }
+              } else {
+                alert(`再適用失敗: ${data.error ?? res.status}`);
+              }
+              await fetchRichMenus();
+            } catch (e) {
+              alert(`再適用エラー: ${(e as Error).message}`);
+            } finally {
+              setRetryingAccountIds((prev) => {
+                const next = new Set(prev);
+                next.delete(accountId);
+                return next;
+              });
+            }
+          };
+
+          // 段階6c1b: deploy は menu.scenario_id の有無で API 内部分岐される(C-1a 入力分岐)。
+          // - legacy (scenario_id NULL): 旧 single response { ok, line_rich_menu_id }
+          // - scenario 代表 menu: 並列 deploy response { ok, deploy_status: { total, succeeded, failed, details: [...] } }
           const deployRichMenu = async (menu: RichMenu) => {
-            if (!confirm(`「${menu.name}」を LINE に適用しますか？\n※既存のリッチメニューは置き換えられます`)) return;
+            const isScenarioMenu = !!menu.scenario_id && menu.line_account_id === null;
+            const confirmMsg = isScenarioMenu
+              ? `「${menu.name}」をシナリオ配下の全 LINE アカウントに一括適用しますか？\n※既存のリッチメニューは置き換えられます`
+              : `「${menu.name}」を LINE に適用しますか？\n※既存のリッチメニューは置き換えられます`;
+            if (!confirm(confirmMsg)) return;
             setRichMenuDeploying(true);
             try {
               const res = await fetch("/api/line/rich-menus/deploy", {
@@ -6014,12 +6132,21 @@ export default function LineDashboard() {
                 body: JSON.stringify({ id: menu.id }),
               });
               const data = await res.json();
-              if (res.ok) {
-                alert(`適用完了: richMenuId=${data.line_rich_menu_id}`);
-                await fetchRichMenus();
+              if (isScenarioMenu) {
+                const ds = data.deploy_status as DeployStatus | undefined;
+                if (ds) {
+                  alert(`適用完了: ${ds.succeeded}/${ds.total} 成功 / ${ds.failed} 失敗`);
+                } else {
+                  alert(`適用失敗: ${data.error ?? res.status}`);
+                }
               } else {
-                alert(`適用失敗: ${data.error ?? res.status}`);
+                if (res.ok) {
+                  alert(`適用完了: richMenuId=${data.line_rich_menu_id}`);
+                } else {
+                  alert(`適用失敗: ${data.error ?? res.status}`);
+                }
               }
+              await fetchRichMenus();
             } catch (e) {
               alert(`適用エラー: ${(e as Error).message}`);
             } finally {
@@ -6308,14 +6435,207 @@ export default function LineDashboard() {
                     </button>
                   </div>
                 </div>
-              ) : (
-                <div className="max-w-6xl">
-                  {richMenus.length === 0 ? (
+              ) : (() => {
+                const useScenarioUI = selectedScenarioId && selectedScenarioId !== NULL_SCENARIO_KEY;
+                const scopedAccounts = useScenarioUI
+                  ? accounts.filter((a) => a.scenario_id === selectedScenarioId)
+                  : [];
+                const fmtTimestamp = (s: string | null | undefined) =>
+                  s ? new Date(s).toLocaleString("ja-JP", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—";
+                return (
+                <div className="max-w-6xl space-y-5">
+                  {/* 段階6c1b: scenario 経由時の代表メニューパネル */}
+                  {useScenarioUI && (
+                    <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+                      <div className="px-5 py-3 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
+                        <h3 className="text-sm font-bold text-gray-700">代表メニュー(シナリオ単位)</h3>
+                        <span className="text-[10px] text-gray-400">配下 {scopedAccounts.length} アカウントへ一括 deploy</span>
+                      </div>
+                      {!scenarioRichMenu ? (
+                        <div className="px-5 py-12 text-center text-gray-400">
+                          <p className="text-sm mb-3">代表メニューが未作成です</p>
+                          <button
+                            onClick={() => openRichMenuEditor(null)}
+                            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded-md transition"
+                          >
+                            {Icons.plus} 代表メニューを作成
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="px-5 py-4 flex items-start gap-5">
+                          {/* サムネイル */}
+                          <div className="flex-shrink-0 w-40">
+                            {scenarioRichMenu.image_url ? (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img src={scenarioRichMenu.image_url} alt={scenarioRichMenu.name} className="w-full rounded border border-gray-200 object-cover" />
+                            ) : (
+                              <div className="w-full aspect-[3/2] bg-gray-100 rounded border border-gray-200 flex items-center justify-center text-gray-400 text-xs">画像なし</div>
+                            )}
+                          </div>
+                          {/* メタ情報 + ボタン */}
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 mb-2">
+                              <span className="text-sm font-bold text-gray-800 truncate">{scenarioRichMenu.name}</span>
+                              <span className={`px-2 py-0.5 text-[10px] rounded-full font-medium ${
+                                scenarioRichMenu.status === "deployed" ? "bg-green-100 text-green-700" :
+                                scenarioRichMenu.status === "partial" ? "bg-yellow-100 text-yellow-700" :
+                                "bg-gray-100 text-gray-500"
+                              }`}>
+                                {scenarioRichMenu.status === "deployed" ? "適用済" :
+                                 scenarioRichMenu.status === "partial" ? "部分適用" : "下書き"}
+                              </span>
+                              {scenarioRichMenu.is_default && (
+                                <span className="px-2 py-0.5 text-[10px] bg-blue-100 text-blue-700 rounded">DEFAULT</span>
+                              )}
+                            </div>
+                            <div className="text-xs text-gray-500 mb-3 space-y-0.5">
+                              <div>サイズ: {scenarioRichMenu.size_type === "large" ? "大" : "小"} / レイアウト: <span className="font-mono">{scenarioRichMenu.template_type}</span></div>
+                              <div>チャットバー: 「{scenarioRichMenu.chat_bar_text}」</div>
+                              {scenarioRichMenu.deployed_at && <div>最終 deploy: {fmtTimestamp(scenarioRichMenu.deployed_at)}</div>}
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <button
+                                onClick={() => openRichMenuEditor(scenarioRichMenu)}
+                                className="px-3 py-1.5 text-xs font-medium rounded-md bg-gray-100 hover:bg-gray-200 text-gray-700"
+                              >
+                                編集
+                              </button>
+                              <button
+                                disabled={richMenuDeploying}
+                                onClick={() => deployRichMenu(scenarioRichMenu)}
+                                className="px-3 py-1.5 text-xs font-medium rounded-md bg-[#06C755] hover:bg-[#05a648] text-white disabled:opacity-50"
+                              >
+                                {richMenuDeploying ? "適用中..." : "LINE に一括適用"}
+                              </button>
+                              <button
+                                onClick={async () => {
+                                  if (!confirm(`代表メニュー「${scenarioRichMenu.name}」を削除しますか？\n※配下アカウントの LINE 側 menu も削除されます`)) return;
+                                  await fetch("/api/line/rich-menus", {
+                                    method: "DELETE",
+                                    headers: { "Content-Type": "application/json" },
+                                    body: JSON.stringify({ id: scenarioRichMenu.id }),
+                                  });
+                                  fetchRichMenus();
+                                }}
+                                className="px-3 py-1.5 text-xs text-red-500 hover:bg-red-50 rounded-md"
+                              >
+                                削除
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* 段階6c1b: deploy_status JSONB の集計表示 + per-account 詳細パネル */}
+                  {useScenarioUI && scenarioRichMenu?.deploy_status && (
+                    <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+                      <div className="px-5 py-3 bg-gray-50 border-b border-gray-200 flex items-center justify-between flex-wrap gap-2">
+                        <h3 className="text-sm font-bold text-gray-700">デプロイ状況</h3>
+                        <div className="text-xs text-gray-500 flex items-center gap-3">
+                          <span className="text-green-700">✓ {scenarioRichMenu.deploy_status.succeeded}/{scenarioRichMenu.deploy_status.total} 成功</span>
+                          {scenarioRichMenu.deploy_status.failed > 0 && (
+                            <span className="text-red-600">✗ {scenarioRichMenu.deploy_status.failed} 失敗</span>
+                          )}
+                          <span className="text-gray-400">last: {fmtTimestamp(scenarioRichMenu.deploy_status.completed_at)}</span>
+                        </div>
+                      </div>
+                      <ul className="divide-y divide-gray-100">
+                        {scenarioRichMenu.deploy_status.details.map((d) => (
+                          <li key={d.account_id} className="px-5 py-2.5 flex items-center justify-between gap-3">
+                            <div className="flex items-center gap-2 min-w-0 flex-1">
+                              <span className={`text-xs font-bold flex-shrink-0 ${d.status === "success" ? "text-green-600" : "text-red-600"}`}>
+                                {d.status === "success" ? "✓" : "✗"}
+                              </span>
+                              <span className="text-xs text-gray-700 truncate">{d.account_name ?? d.account_id.slice(0, 8)}</span>
+                              {d.status === "success" && d.line_rich_menu_id && (
+                                <span className="text-[10px] text-gray-400 font-mono truncate">({d.line_rich_menu_id.slice(0, 24)}...)</span>
+                              )}
+                              {d.status === "failed" && (
+                                <span className="text-[10px] text-red-600 truncate" title={d.error}>
+                                  stage {d.stage}: {d.error?.slice(0, 60)}
+                                </span>
+                              )}
+                            </div>
+                            {/* 段階6c1b S6: 失敗 account のみ「再適用」ボタン表示 */}
+                            {d.status === "failed" && (
+                              <button
+                                disabled={retryingAccountIds.has(d.account_id) || richMenuDeploying}
+                                onClick={() => retryDeployForAccount(scenarioRichMenu!, d.account_id)}
+                                className="flex-shrink-0 px-2.5 py-1 text-[10px] font-medium rounded-md bg-yellow-100 hover:bg-yellow-200 text-yellow-800 disabled:opacity-50"
+                              >
+                                {retryingAccountIds.has(d.account_id) ? "再適用中..." : "再適用"}
+                              </button>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {/* 段階6c1b: legacy fallback(配下 account の旧 menu、scenario_id NULL のもの) */}
+                  {useScenarioUI && richMenus.length > 0 && (
+                    <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+                      <div className="px-5 py-3 bg-yellow-50 border-b border-yellow-200">
+                        <h3 className="text-sm font-bold text-yellow-800">配下 account の旧メニュー({richMenus.length} 件)</h3>
+                        <p className="text-[10px] text-yellow-700 mt-0.5">scenario 単位移行前の account 個別 menu。代表メニュー作成後は不要になります。</p>
+                      </div>
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="border-b border-gray-200 text-gray-500 text-left bg-gray-50">
+                            <th className="px-5 py-2 font-medium">管理名称</th>
+                            <th className="px-5 py-2 font-medium w-32">所属 account</th>
+                            <th className="px-5 py-2 font-medium w-24">サイズ</th>
+                            <th className="px-5 py-2 font-medium w-28">ステータス</th>
+                            <th className="px-5 py-2 font-medium w-32"></th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {richMenus.map((rm) => {
+                            const acc = accounts.find((a) => a.id === rm.line_account_id);
+                            return (
+                              <tr key={rm.id} className="border-b border-gray-100">
+                                <td className="px-5 py-2 text-gray-800">{rm.name}</td>
+                                <td className="px-5 py-2 text-gray-500 text-xs truncate" title={acc?.account_name ?? "—"}>{acc?.account_name ?? "—"}</td>
+                                <td className="px-5 py-2 text-gray-500 text-xs">{rm.size_type === "large" ? "大" : "小"}</td>
+                                <td className="px-5 py-2">
+                                  <span className={`px-2 py-0.5 text-xs rounded-full font-medium ${rm.status === "deployed" ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"}`}>
+                                    {rm.status === "deployed" ? "適用済" : "下書き"}
+                                  </span>
+                                </td>
+                                <td className="px-5 py-2 text-right">
+                                  <button
+                                    onClick={async () => {
+                                      if (!confirm(`旧メニュー「${rm.name}」を削除しますか？`)) return;
+                                      await fetch("/api/line/rich-menus", {
+                                        method: "DELETE",
+                                        headers: { "Content-Type": "application/json" },
+                                        body: JSON.stringify({ id: rm.id }),
+                                      });
+                                      fetchRichMenus();
+                                    }}
+                                    className="px-2 py-1 text-xs text-red-500 hover:bg-red-50 rounded-md"
+                                  >
+                                    削除
+                                  </button>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+
+                  {/* legacy 経路(account 単位、現実装では到達不可。API 後方互換のため UI 残置) */}
+                  {!useScenarioUI && richMenus.length === 0 && (
                     <div className="bg-white rounded-lg border border-gray-200 p-16 text-center text-gray-400">
                       <p className="text-lg mb-2">リッチメニューがありません</p>
                       <p className="text-sm">「新規作成」から作ってください</p>
                     </div>
-                  ) : (
+                  )}
+                  {!useScenarioUI && richMenus.length > 0 && (
                     <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
                       <table className="w-full text-sm">
                         <thead>
@@ -6374,7 +6694,8 @@ export default function LineDashboard() {
                     </div>
                   )}
                 </div>
-              )}
+                );
+              })()}
             </main>
           </>
           );
