@@ -1066,13 +1066,48 @@ export default function LineDashboard() {
     } catch { /* */ }
   }, [selectedAccount?.id, selectedScenarioId]);
 
+  // 段階6c1b: scenario 経由は「scenario 代表 menu(line_account_id IS NULL)」を 1 件取得 +
+  // 配下 account の legacy menu(scenario_id IS NULL)を Promise.all で取得して fallback 表示。
+  // ケース B 対応(C-1a API は scenario_id eq のみ → legacy fetch を別途必要)。
+  // hybrid menu(scenario_id + line_account_id 両方持つ)は段階6 では UI 非表示(段階7 持ち越し)。
   const fetchRichMenus = useCallback(async () => {
-    if (!selectedAccount?.id) { setRichMenus([]); return; }
-    try {
-      const res = await fetch(`/api/line/rich-menus?account_id=${selectedAccount.id}`);
-      if (res.ok) setRichMenus(await res.json());
-    } catch { /* */ }
-  }, [selectedAccount?.id]);
+    const useScenario = selectedScenarioId && selectedScenarioId !== NULL_SCENARIO_KEY;
+    if (useScenario) {
+      try {
+        // 1. scenario 代表 menu 取得
+        const sRes = await fetch(`/api/line/rich-menus?scenario_id=${selectedScenarioId}`);
+        const sData = (sRes.ok ? await sRes.json() : []) as RichMenu[];
+        const rep = sData.find((m) => m.line_account_id === null) ?? null;
+        setScenarioRichMenu(rep);
+
+        // 2. legacy fallback:配下 account の scenario_id NULL の旧 menu を Promise.all で取得
+        const scopedAccounts = accounts.filter((a) => a.scenario_id === selectedScenarioId);
+        const legacyResults = await Promise.all(
+          scopedAccounts.map((a) =>
+            fetch(`/api/line/rich-menus?account_id=${a.id}`)
+              .then((r) => (r.ok ? (r.json() as Promise<RichMenu[]>) : Promise.resolve([] as RichMenu[])))
+              .catch(() => [] as RichMenu[]),
+          ),
+        );
+        // hybrid 重複除去のため scenario_id NULL のレコードのみを legacy 扱い
+        const legacyMenus = legacyResults.flat().filter((m) => !m.scenario_id);
+        setRichMenus(legacyMenus);
+      } catch {
+        setScenarioRichMenu(null);
+        setRichMenus([]);
+      }
+    } else if (selectedAccount?.id) {
+      // legacy 経路(scenario 未選択 + account 単位、現実装では到達しないが API 後方互換のため維持)
+      try {
+        const res = await fetch(`/api/line/rich-menus?account_id=${selectedAccount.id}`);
+        if (res.ok) setRichMenus(await res.json());
+        setScenarioRichMenu(null);
+      } catch { /* */ }
+    } else {
+      setScenarioRichMenu(null);
+      setRichMenus([]);
+    }
+  }, [selectedAccount?.id, selectedScenarioId, accounts]);
 
   const fetchReengagements = useCallback(async () => {
     // 段階6b2: scenario 選択時は scenario_id 直渡し(配下 IN 句集約)。
