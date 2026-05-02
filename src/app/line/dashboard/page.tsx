@@ -6041,8 +6041,11 @@ export default function LineDashboard() {
 
           const selectedTemplate = RICH_MENU_TEMPLATES.find((t) => t.value === richMenuForm.template_type) ?? RICH_MENU_TEMPLATES[0];
 
+          // 段階6c1b: scenario 経由時は POST body に scenario_id、account 経由時は line_account_id(legacy)。
+          // PUT は id 経由で scope 不問(menu 自体の scope は保存時のみ確定)。
           const saveRichMenu = async () => {
-            if (!selectedAccount) return;
+            const useScenario = selectedScenarioId && selectedScenarioId !== NULL_SCENARIO_KEY;
+            if (!useScenario && !selectedAccount) return;
             if (!richMenuForm.name.trim()) { alert("管理名称を入力してください"); return; }
             if (!richMenuForm.image_url) { alert("画像をアップロードしてください"); return; }
             try {
@@ -6054,10 +6057,14 @@ export default function LineDashboard() {
                 });
                 if (!res.ok) { const d = await res.json().catch(() => ({})); alert(`保存失敗: ${d.error ?? res.status}`); return; }
               } else {
+                // 新規作成: scope を scenario_id か line_account_id で指定(C-1a API の scope_check 整合)
+                const scopeBody = useScenario
+                  ? { scenario_id: selectedScenarioId }
+                  : { line_account_id: selectedAccount!.id };
                 const res = await fetch("/api/line/rich-menus", {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ line_account_id: selectedAccount.id, ...richMenuForm }),
+                  body: JSON.stringify({ ...scopeBody, ...richMenuForm }),
                 });
                 if (!res.ok) { const d = await res.json().catch(() => ({})); alert(`作成失敗: ${d.error ?? res.status}`); return; }
               }
