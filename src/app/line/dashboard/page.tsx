@@ -599,9 +599,33 @@ export default function LineDashboard() {
 
   // リッチメニュー
   interface RichMenuArea { actionType: "none" | "uri" | "message" | "postback"; uri: string; text: string; data: string; label: string }
+  // 段階6c1a で line_rich_menus.deploy_status JSONB に書き込まれる構造(SQL マイグレーション設計 L146-161 準拠)
+  interface DeployDetail {
+    account_id: string;
+    account_name: string | null;
+    status: "success" | "failed";
+    stage: number; // 0=token / 1=create / 2=upload / 3=success
+    line_rich_menu_id?: string;
+    deployed_at?: string;
+    error?: string;
+    http_status?: number;
+  }
+  interface DeployStatus {
+    started_at: string;
+    completed_at: string;
+    total: number;
+    succeeded: number;
+    failed: number;
+    details: DeployDetail[];
+  }
   interface RichMenu {
     id: string;
-    line_account_id: string;
+    // 段階6c1a で NULLABLE 化(scenario 代表 menu は line_account_id NULL + scenario_id NOT NULL)
+    line_account_id: string | null;
+    // 段階6c1a 追加(scenario 単位の代表 menu 識別)
+    scenario_id: string | null;
+    // 段階6c1a 追加(scenario 一括 deploy の集約結果。代表 menu でのみ使用)
+    deploy_status: DeployStatus | null;
     name: string;
     line_rich_menu_id: string | null;
     image_url: string | null;
@@ -616,7 +640,8 @@ export default function LineDashboard() {
     created_at: string;
   }
   const [richMenus, setRichMenus] = useState<RichMenu[]>([]);
-  const emptyRichMenu: Omit<RichMenu, "id" | "line_account_id" | "line_rich_menu_id" | "status" | "deployed_at" | "created_at"> = {
+  // 段階6c1b: form は UI 編集状態のみ管理(scope=account_id/scenario_id は menu 側に紐付く情報)
+  const emptyRichMenu: Omit<RichMenu, "id" | "line_account_id" | "scenario_id" | "deploy_status" | "line_rich_menu_id" | "status" | "deployed_at" | "created_at"> = {
     name: "",
     image_url: null,
     size_type: "large",
