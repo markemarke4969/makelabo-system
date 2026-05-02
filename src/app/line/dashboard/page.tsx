@@ -6075,8 +6075,15 @@ export default function LineDashboard() {
             }
           };
 
+          // 段階6c1b: deploy は menu.scenario_id の有無で API 内部分岐される(C-1a 入力分岐)。
+          // - legacy (scenario_id NULL): 旧 single response { ok, line_rich_menu_id }
+          // - scenario 代表 menu: 並列 deploy response { ok, deploy_status: { total, succeeded, failed, details: [...] } }
           const deployRichMenu = async (menu: RichMenu) => {
-            if (!confirm(`「${menu.name}」を LINE に適用しますか？\n※既存のリッチメニューは置き換えられます`)) return;
+            const isScenarioMenu = !!menu.scenario_id && menu.line_account_id === null;
+            const confirmMsg = isScenarioMenu
+              ? `「${menu.name}」をシナリオ配下の全 LINE アカウントに一括適用しますか？\n※既存のリッチメニューは置き換えられます`
+              : `「${menu.name}」を LINE に適用しますか？\n※既存のリッチメニューは置き換えられます`;
+            if (!confirm(confirmMsg)) return;
             setRichMenuDeploying(true);
             try {
               const res = await fetch("/api/line/rich-menus/deploy", {
@@ -6085,12 +6092,21 @@ export default function LineDashboard() {
                 body: JSON.stringify({ id: menu.id }),
               });
               const data = await res.json();
-              if (res.ok) {
-                alert(`適用完了: richMenuId=${data.line_rich_menu_id}`);
-                await fetchRichMenus();
+              if (isScenarioMenu) {
+                const ds = data.deploy_status as DeployStatus | undefined;
+                if (ds) {
+                  alert(`適用完了: ${ds.succeeded}/${ds.total} 成功 / ${ds.failed} 失敗`);
+                } else {
+                  alert(`適用失敗: ${data.error ?? res.status}`);
+                }
               } else {
-                alert(`適用失敗: ${data.error ?? res.status}`);
+                if (res.ok) {
+                  alert(`適用完了: richMenuId=${data.line_rich_menu_id}`);
+                } else {
+                  alert(`適用失敗: ${data.error ?? res.status}`);
+                }
               }
+              await fetchRichMenus();
             } catch (e) {
               alert(`適用エラー: ${(e as Error).message}`);
             } finally {
@@ -6379,14 +6395,198 @@ export default function LineDashboard() {
                     </button>
                   </div>
                 </div>
-              ) : (
-                <div className="max-w-6xl">
-                  {richMenus.length === 0 ? (
+              ) : (() => {
+                const useScenarioUI = selectedScenarioId && selectedScenarioId !== NULL_SCENARIO_KEY;
+                const scopedAccounts = useScenarioUI
+                  ? accounts.filter((a) => a.scenario_id === selectedScenarioId)
+                  : [];
+                const fmtTimestamp = (s: string | null | undefined) =>
+                  s ? new Date(s).toLocaleString("ja-JP", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—";
+                return (
+                <div className="max-w-6xl space-y-5">
+                  {/* 段階6c1b: scenario 経由時の代表メニューパネル */}
+                  {useScenarioUI && (
+                    <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+                      <div className="px-5 py-3 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
+                        <h3 className="text-sm font-bold text-gray-700">代表メニュー(シナリオ単位)</h3>
+                        <span className="text-[10px] text-gray-400">配下 {scopedAccounts.length} アカウントへ一括 deploy</span>
+                      </div>
+                      {!scenarioRichMenu ? (
+                        <div className="px-5 py-12 text-center text-gray-400">
+                          <p className="text-sm mb-3">代表メニューが未作成です</p>
+                          <button
+                            onClick={() => openRichMenuEditor(null)}
+                            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded-md transition"
+                          >
+                            {Icons.plus} 代表メニューを作成
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="px-5 py-4 flex items-start gap-5">
+                          {/* サムネイル */}
+                          <div className="flex-shrink-0 w-40">
+                            {scenarioRichMenu.image_url ? (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img src={scenarioRichMenu.image_url} alt={scenarioRichMenu.name} className="w-full rounded border border-gray-200 object-cover" />
+                            ) : (
+                              <div className="w-full aspect-[3/2] bg-gray-100 rounded border border-gray-200 flex items-center justify-center text-gray-400 text-xs">画像なし</div>
+                            )}
+                          </div>
+                          {/* メタ情報 + ボタン */}
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 mb-2">
+                              <span className="text-sm font-bold text-gray-800 truncate">{scenarioRichMenu.name}</span>
+                              <span className={`px-2 py-0.5 text-[10px] rounded-full font-medium ${
+                                scenarioRichMenu.status === "deployed" ? "bg-green-100 text-green-700" :
+                                scenarioRichMenu.status === "partial" ? "bg-yellow-100 text-yellow-700" :
+                                "bg-gray-100 text-gray-500"
+                              }`}>
+                                {scenarioRichMenu.status === "deployed" ? "適用済" :
+                                 scenarioRichMenu.status === "partial" ? "部分適用" : "下書き"}
+                              </span>
+                              {scenarioRichMenu.is_default && (
+                                <span className="px-2 py-0.5 text-[10px] bg-blue-100 text-blue-700 rounded">DEFAULT</span>
+                              )}
+                            </div>
+                            <div className="text-xs text-gray-500 mb-3 space-y-0.5">
+                              <div>サイズ: {scenarioRichMenu.size_type === "large" ? "大" : "小"} / レイアウト: <span className="font-mono">{scenarioRichMenu.template_type}</span></div>
+                              <div>チャットバー: 「{scenarioRichMenu.chat_bar_text}」</div>
+                              {scenarioRichMenu.deployed_at && <div>最終 deploy: {fmtTimestamp(scenarioRichMenu.deployed_at)}</div>}
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <button
+                                onClick={() => openRichMenuEditor(scenarioRichMenu)}
+                                className="px-3 py-1.5 text-xs font-medium rounded-md bg-gray-100 hover:bg-gray-200 text-gray-700"
+                              >
+                                編集
+                              </button>
+                              <button
+                                disabled={richMenuDeploying}
+                                onClick={() => deployRichMenu(scenarioRichMenu)}
+                                className="px-3 py-1.5 text-xs font-medium rounded-md bg-[#06C755] hover:bg-[#05a648] text-white disabled:opacity-50"
+                              >
+                                {richMenuDeploying ? "適用中..." : "LINE に一括適用"}
+                              </button>
+                              <button
+                                onClick={async () => {
+                                  if (!confirm(`代表メニュー「${scenarioRichMenu.name}」を削除しますか？\n※配下アカウントの LINE 側 menu も削除されます`)) return;
+                                  await fetch("/api/line/rich-menus", {
+                                    method: "DELETE",
+                                    headers: { "Content-Type": "application/json" },
+                                    body: JSON.stringify({ id: scenarioRichMenu.id }),
+                                  });
+                                  fetchRichMenus();
+                                }}
+                                className="px-3 py-1.5 text-xs text-red-500 hover:bg-red-50 rounded-md"
+                              >
+                                削除
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* 段階6c1b: deploy_status JSONB の集計表示 + per-account 詳細パネル */}
+                  {useScenarioUI && scenarioRichMenu?.deploy_status && (
+                    <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+                      <div className="px-5 py-3 bg-gray-50 border-b border-gray-200 flex items-center justify-between flex-wrap gap-2">
+                        <h3 className="text-sm font-bold text-gray-700">デプロイ状況</h3>
+                        <div className="text-xs text-gray-500 flex items-center gap-3">
+                          <span className="text-green-700">✓ {scenarioRichMenu.deploy_status.succeeded}/{scenarioRichMenu.deploy_status.total} 成功</span>
+                          {scenarioRichMenu.deploy_status.failed > 0 && (
+                            <span className="text-red-600">✗ {scenarioRichMenu.deploy_status.failed} 失敗</span>
+                          )}
+                          <span className="text-gray-400">last: {fmtTimestamp(scenarioRichMenu.deploy_status.completed_at)}</span>
+                        </div>
+                      </div>
+                      <ul className="divide-y divide-gray-100">
+                        {scenarioRichMenu.deploy_status.details.map((d) => (
+                          <li key={d.account_id} className="px-5 py-2.5 flex items-center justify-between gap-3">
+                            <div className="flex items-center gap-2 min-w-0 flex-1">
+                              <span className={`text-xs font-bold flex-shrink-0 ${d.status === "success" ? "text-green-600" : "text-red-600"}`}>
+                                {d.status === "success" ? "✓" : "✗"}
+                              </span>
+                              <span className="text-xs text-gray-700 truncate">{d.account_name ?? d.account_id.slice(0, 8)}</span>
+                              {d.status === "success" && d.line_rich_menu_id && (
+                                <span className="text-[10px] text-gray-400 font-mono truncate">({d.line_rich_menu_id.slice(0, 24)}...)</span>
+                              )}
+                              {d.status === "failed" && (
+                                <span className="text-[10px] text-red-600 truncate" title={d.error}>
+                                  stage {d.stage}: {d.error?.slice(0, 60)}
+                                </span>
+                              )}
+                            </div>
+                            {/* S6 で retry ボタン追加予定 */}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {/* 段階6c1b: legacy fallback(配下 account の旧 menu、scenario_id NULL のもの) */}
+                  {useScenarioUI && richMenus.length > 0 && (
+                    <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+                      <div className="px-5 py-3 bg-yellow-50 border-b border-yellow-200">
+                        <h3 className="text-sm font-bold text-yellow-800">配下 account の旧メニュー({richMenus.length} 件)</h3>
+                        <p className="text-[10px] text-yellow-700 mt-0.5">scenario 単位移行前の account 個別 menu。代表メニュー作成後は不要になります。</p>
+                      </div>
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="border-b border-gray-200 text-gray-500 text-left bg-gray-50">
+                            <th className="px-5 py-2 font-medium">管理名称</th>
+                            <th className="px-5 py-2 font-medium w-32">所属 account</th>
+                            <th className="px-5 py-2 font-medium w-24">サイズ</th>
+                            <th className="px-5 py-2 font-medium w-28">ステータス</th>
+                            <th className="px-5 py-2 font-medium w-32"></th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {richMenus.map((rm) => {
+                            const acc = accounts.find((a) => a.id === rm.line_account_id);
+                            return (
+                              <tr key={rm.id} className="border-b border-gray-100">
+                                <td className="px-5 py-2 text-gray-800">{rm.name}</td>
+                                <td className="px-5 py-2 text-gray-500 text-xs truncate" title={acc?.account_name ?? "—"}>{acc?.account_name ?? "—"}</td>
+                                <td className="px-5 py-2 text-gray-500 text-xs">{rm.size_type === "large" ? "大" : "小"}</td>
+                                <td className="px-5 py-2">
+                                  <span className={`px-2 py-0.5 text-xs rounded-full font-medium ${rm.status === "deployed" ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"}`}>
+                                    {rm.status === "deployed" ? "適用済" : "下書き"}
+                                  </span>
+                                </td>
+                                <td className="px-5 py-2 text-right">
+                                  <button
+                                    onClick={async () => {
+                                      if (!confirm(`旧メニュー「${rm.name}」を削除しますか？`)) return;
+                                      await fetch("/api/line/rich-menus", {
+                                        method: "DELETE",
+                                        headers: { "Content-Type": "application/json" },
+                                        body: JSON.stringify({ id: rm.id }),
+                                      });
+                                      fetchRichMenus();
+                                    }}
+                                    className="px-2 py-1 text-xs text-red-500 hover:bg-red-50 rounded-md"
+                                  >
+                                    削除
+                                  </button>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+
+                  {/* legacy 経路(account 単位、現実装では到達不可。API 後方互換のため UI 残置) */}
+                  {!useScenarioUI && richMenus.length === 0 && (
                     <div className="bg-white rounded-lg border border-gray-200 p-16 text-center text-gray-400">
                       <p className="text-lg mb-2">リッチメニューがありません</p>
                       <p className="text-sm">「新規作成」から作ってください</p>
                     </div>
-                  ) : (
+                  )}
+                  {!useScenarioUI && richMenus.length > 0 && (
                     <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
                       <table className="w-full text-sm">
                         <thead>
@@ -6445,7 +6645,8 @@ export default function LineDashboard() {
                     </div>
                   )}
                 </div>
-              )}
+                );
+              })()}
             </main>
           </>
           );
