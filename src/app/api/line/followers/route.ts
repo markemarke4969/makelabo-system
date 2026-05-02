@@ -1,23 +1,28 @@
 import { NextRequest } from "next/server";
 import { supabase } from "@/lib/supabase";
+import { resolveAccountIdsFromScenario } from "@/lib/scenario-resolve";
 
 // ============================================================
-// LINE フォロワー API(段階5 案B 対応・後方互換維持)
+// LINE フォロワー API(段階6a:scenario_id クエリ追加・後方互換維持)
 // ============================================================
+// scenario_id クエリ(段階6a 追加):
+//   - line_followers.scenario_id NOT NULL(段階5 Step 11)+ idx_line_followers_scenario あり
+//   - 直 hit クエリで scenario 配下 follower を一括取得
+//   - account_id クエリは後方互換維持(scenario_id 未対応の呼び出し元向け)
+//
 // closer_visible_only クエリ:
 //   - 段階5 以前:line_account_groups.closer_visible で絞り込み
 //   - Step 12 適用後:line_account_groups テーブル削除済 → 絞り込み無効化(全表示)
 //
 // クローザー権限制御を将来も維持したい場合、line_scenarios に closer_visible 列を追加して
-// 同等のロジックを再実装する想定(本タスクスコープ外、別タスクで対応)。
-//
-// 草案出典: C:\Users\lmsml\.claude\plans\07-calm-pudding.md §11(低優先度・followers)
+// 同等のロジックを再実装する想定(段階7 別タスク)。
 // ============================================================
 
 export async function GET(request: NextRequest) {
   const testOnly = request.nextUrl.searchParams.get("test_only") === "1";
   const accountId = request.nextUrl.searchParams.get("account_id");
   const projectId = request.nextUrl.searchParams.get("project_id");
+  const scenarioId = request.nextUrl.searchParams.get("scenario_id");
   // クローザーログイン時: closer_visible=true のグループのアカウントのみに限定
   const closerVisibleOnly = request.nextUrl.searchParams.get("closer_visible_only") === "1";
 
@@ -105,22 +110,46 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  const buildQuery = (withTestFilter: boolean) => {
+  const buildQuery = (withTestFilter: boolean, useScenarioDirectHit: boolean) => {
     let q = supabase
       .from("line_followers")
       .select("*")
       .order("followed_at", { ascending: false });
-    if (accountId) q = q.eq("line_account_id", accountId);
-    else if (accountIdsFromProject) q = q.in("line_account_id", accountIdsFromProject);
+    if (useScenarioDirectHit && scenarioId) {
+      // 段階6a: line_followers.scenario_id 直 hit(NOT NULL 済 + idx あり)
+      q = q.eq("scenario_id", scenarioId);
+    } else if (accountId) {
+      q = q.eq("line_account_id", accountId);
+    } else if (accountIdsFromProject) {
+      q = q.in("line_account_id", accountIdsFromProject);
+    }
     if (withTestFilter) q = q.eq("is_test", true);
     return q;
   };
 
-  let { data, error } = await buildQuery(testOnly);
+  // scenario_id クエリ優先(account_id / project_id と排他)。Step 02 未適用環境では列なしエラー → fallback
+  const useScenarioPath = !!scenarioId && !accountId;
+
+  let { data, error } = await buildQuery(testOnly, useScenarioPath);
+
+  // scenario_id 列なし(Step 02 未適用)→ scenario→account_ids 解決 → IN 句 fallback
+  if (error && useScenarioPath && /scenario_id/i.test(error.message)) {
+    const resolved = await resolveAccountIdsFromScenario(scenarioId!);
+    if (resolved.account_ids.length === 0) {
+      return Response.json([]);
+    }
+    let fbQuery = supabase
+      .from("line_followers")
+      .select("*")
+      .in("line_account_id", resolved.account_ids)
+      .order("followed_at", { ascending: false });
+    if (testOnly) fbQuery = fbQuery.eq("is_test", true);
+    ({ data, error } = await fbQuery);
+  }
 
   // is_test カラム未作成時の fallback
   if (error && testOnly && /is_test/.test(error.message)) {
-    ({ data, error } = await buildQuery(false));
+    ({ data, error } = await buildQuery(false, useScenarioPath));
   }
 
   if (error) {
