@@ -2005,32 +2005,6 @@ export default function LineDashboard() {
     }
   };
 
-  // 段階6a: 「どの LINE 発」バッジ。scenario 配下 account 数 ≥ 2 の時のみ表示。
-  // chat / followers サブビューで配下統合時に発信元を視覚化(MARI 等の配下 1 本 scenario では非表示)。
-  const renderLineAccountBadge = (lineAccountId: string | null | undefined): React.ReactNode => {
-    if (!lineAccountId) return null;
-    if (!selectedScenarioId || selectedScenarioId === NULL_SCENARIO_KEY) return null;
-    const scopedAccounts = accounts.filter((a) => a.scenario_id === selectedScenarioId);
-    if (scopedAccounts.length < 2) return null;
-    const acc = accounts.find((a) => a.id === lineAccountId);
-    if (!acc) return null;
-    const head = (acc.account_name ?? "?").trim().slice(0, 1);
-    // account.id ハッシュから決定論的に色を選ぶ(account 数が増えても安定)
-    const palette = ["#06C755", "#4f8ff7", "#f59e0b", "#ec4899", "#8b5cf6", "#10b981", "#ef4444", "#0ea5e9"];
-    let hash = 0;
-    for (let i = 0; i < lineAccountId.length; i++) hash = (hash * 31 + lineAccountId.charCodeAt(i)) >>> 0;
-    const color = palette[hash % palette.length];
-    return (
-      <span
-        className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full bg-white/90 text-gray-700 border border-gray-200 align-middle"
-        title={`発信元: ${acc.account_name ?? "(未設定)"}`}
-      >
-        <span className="inline-block w-2 h-2 rounded-full" style={{ backgroundColor: color }} />
-        {head}
-      </span>
-    );
-  };
-
   // 段階6a: シナリオクリック時のハンドラ。
   // 1) selectedScenarioId に scenario.id(または NULL_SCENARIO_KEY)をセット
   // 2) 配下の主 account(role='main' 優先 + sort_order 最小)を selectedAccount に自動セット
@@ -5307,8 +5281,6 @@ export default function LineDashboard() {
                                   <div>
                                     <div className="font-medium text-gray-800 group-hover:text-blue-600 group-hover:underline flex items-center gap-1.5">
                                       <span>{f.display_name ?? "名前なし"}</span>
-                                      {/* 段階6a: 「どの LINE 発」バッジ(scenario 配下 ≥ 2 のみ表示) */}
-                                      {renderLineAccountBadge(f.line_account_id ?? f.account_id ?? null)}
                                       {f.is_test && <span className="ml-1 px-1.5 py-0.5 text-[10px] bg-purple-100 text-purple-700 rounded">TEST</span>}
                                     </div>
                                     <div className="text-xs text-gray-400 font-mono">{f.line_user_id.slice(0, 12)}...</div>
