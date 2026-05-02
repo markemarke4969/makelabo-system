@@ -6416,16 +6416,28 @@ export default function LineDashboard() {
                       />
                       <p className="text-[10px] text-gray-400 mt-1">最大14文字</p>
                     </div>
-                    <div className="flex items-end gap-4">
-                      <label className="flex items-center gap-1.5 cursor-pointer">
-                        <input type="checkbox" checked={richMenuForm.selected} onChange={(e) => setRichMenuForm({ ...richMenuForm, selected: e.target.checked })} className="accent-[#06C755]" />
-                        <span className="text-sm">初期表示する</span>
-                      </label>
-                      <label className="flex items-center gap-1.5 cursor-pointer">
-                        <input type="checkbox" checked={richMenuForm.is_default} onChange={(e) => setRichMenuForm({ ...richMenuForm, is_default: e.target.checked })} className="accent-[#06C755]" />
-                        <span className="text-sm">デフォルトに設定</span>
-                      </label>
-                    </div>
+                    {/* 段階6c1b 修正: scenario 経由時(代表メニュー)は両 checkbox を非表示にして
+                        運用者の混乱を防ぐ。代表メニューは LINE トーク画面に常時表示される(deploy/route.ts L240
+                        で setDefault 強制実行)。legacy(account 単位)は既存挙動維持。 */}
+                    {selectedScenarioId && selectedScenarioId !== NULL_SCENARIO_KEY ? (
+                      <div className="flex items-end">
+                        <p className="text-[11px] text-gray-500 leading-snug">
+                          シナリオ代表メニューは LINE トーク画面に常時表示されます<br />
+                          <span className="text-gray-400">(配下全 LINE アカウントに一括 deploy + setDefault)</span>
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="flex items-end gap-4">
+                        <label className="flex items-center gap-1.5 cursor-pointer">
+                          <input type="checkbox" checked={richMenuForm.selected} onChange={(e) => setRichMenuForm({ ...richMenuForm, selected: e.target.checked })} className="accent-[#06C755]" />
+                          <span className="text-sm">初期表示する</span>
+                        </label>
+                        <label className="flex items-center gap-1.5 cursor-pointer">
+                          <input type="checkbox" checked={richMenuForm.is_default} onChange={(e) => setRichMenuForm({ ...richMenuForm, is_default: e.target.checked })} className="accent-[#06C755]" />
+                          <span className="text-sm">デフォルトに設定</span>
+                        </label>
+                      </div>
+                    )}
                   </div>
 
                   <div className="flex justify-end gap-2 pt-2 border-t border-gray-200">

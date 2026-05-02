@@ -235,8 +235,10 @@ async function deployToOneAccount(
     };
   }
 
-  // 5. is_default ならデフォルト設定(失敗は無視、status は success)
-  if (menu.is_default) {
+  // 5. デフォルト設定(失敗は無視、status は success)
+  // 段階6c1b 修正: scenario 代表 menu(menu.scenario_id NOT NULL)は配下 follower 共通の代表という設計思想 = 常に default 扱い。
+  // legacy(account 単位)は menu.is_default=true の時のみ default(後方互換維持、複数 menu 切替運用が残せるように)。
+  if (menu.is_default || menu.scenario_id) {
     await fetch(`https://api.line.me/v2/bot/user/all/richmenu/${richMenuId}`, {
       method: "POST",
       headers: { Authorization: `Bearer ${token}` },
