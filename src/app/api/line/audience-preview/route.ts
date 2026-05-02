@@ -7,9 +7,14 @@ import {
   listUnsupportedFields,
   FIELD_LABELS,
 } from "@/lib/delivery-conditions";
+import { resolveAccountIdsFromScenario } from "@/lib/scenario-resolve";
+
+// 段階6c2: scenario_id サポート追加。account_id or scenario_id のいずれか必須。
+// scenario 経由時は配下全 account の followers を IN 句で取得 → 条件評価。
 
 interface Body {
-  account_id: string;
+  account_id?: string;
+  scenario_id?: string;
   condition: DeliveryCondition;
   // クライアント側でキャッシュしたラベル付与状態を受け取る
   labels?: Array<{ id: string; assigned_users: string[] }>;
@@ -23,8 +28,18 @@ export async function POST(request: NextRequest) {
     return Response.json({ error: "invalid_json" }, { status: 400 });
   }
 
-  if (!body.account_id || !body.condition) {
-    return Response.json({ error: "account_id and condition are required" }, { status: 400 });
+  if ((!body.account_id && !body.scenario_id) || !body.condition) {
+    return Response.json({ error: "(account_id or scenario_id) and condition are required" }, { status: 400 });
+  }
+
+  // scenario 経由時は配下 account_ids を解決
+  let scenarioAccountIds: string[] | null = null;
+  if (body.scenario_id && !body.account_id) {
+    const resolved = await resolveAccountIdsFromScenario(body.scenario_id);
+    if (resolved.account_ids.length === 0) {
+      return Response.json({ total: 0, matched: 0, sample: [], unsupported_fields: [] });
+    }
+    scenarioAccountIds = resolved.account_ids;
   }
 
   // 1. 対象アカウントの「配信可能」な友だちを取得
@@ -38,23 +53,25 @@ export async function POST(request: NextRequest) {
   }> | null = null;
   let error: { message: string } | null = null;
 
+  const buildFollowersQuery = (withInflowRouteCol: boolean) => {
+    const cols = withInflowRouteCol
+      ? "id, line_user_id, display_name, followed_at, inflow_route_id"
+      : "id, line_user_id, display_name, followed_at";
+    let q = supabase.from("line_followers").select(cols).eq("status", "following");
+    if (scenarioAccountIds) q = q.in("line_account_id", scenarioAccountIds);
+    else if (body.account_id) q = q.eq("line_account_id", body.account_id);
+    return q;
+  };
+
   {
-    const r = await supabase
-      .from("line_followers")
-      .select("id, line_user_id, display_name, followed_at, inflow_route_id")
-      .eq("line_account_id", body.account_id)
-      .eq("status", "following");
+    const r = await buildFollowersQuery(true);
     followers = r.data as typeof followers;
     error = r.error;
   }
 
   if (error && /inflow_route_id/.test(error.message)) {
-    const fb = await supabase
-      .from("line_followers")
-      .select("id, line_user_id, display_name, followed_at")
-      .eq("line_account_id", body.account_id)
-      .eq("status", "following");
-    followers = (fb.data ?? []).map((r: any) => ({ ...r, inflow_route_id: null }));
+    const fb = await buildFollowersQuery(false);
+    followers = ((fb.data ?? []) as unknown as Array<{ id: string; line_user_id: string; display_name: string | null; followed_at: string }>).map((r) => ({ ...r, inflow_route_id: null }));
     error = fb.error;
   }
 
