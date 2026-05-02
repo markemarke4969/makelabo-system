@@ -1036,12 +1036,18 @@ export default function LineDashboard() {
   }, [selectedAccount?.id]);
 
   const fetchReengagements = useCallback(async () => {
-    if (!selectedAccount?.id) return;
+    // 段階6b2: scenario 選択時は scenario_id 直渡し(配下 IN 句集約)。
+    // NULL_SCENARIO_KEY バケツ時は selectedAccount があれば account_id fallback。
+    const useScenario = selectedScenarioId && selectedScenarioId !== NULL_SCENARIO_KEY;
+    if (!useScenario && !selectedAccount?.id) { setReengagements([]); return; }
     try {
-      const res = await fetch(`/api/line/reengagement?account_id=${selectedAccount.id}`);
+      const url = useScenario
+        ? `/api/line/reengagement?scenario_id=${selectedScenarioId}`
+        : `/api/line/reengagement?account_id=${selectedAccount!.id}`;
+      const res = await fetch(url);
       if (res.ok) setReengagements(await res.json());
     } catch { /* */ }
-  }, [selectedAccount?.id]);
+  }, [selectedAccount?.id, selectedScenarioId]);
 
   // 全案件取得（所属変更セレクト用）
   const fetchAllProjects = useCallback(async () => {
@@ -1154,20 +1160,30 @@ export default function LineDashboard() {
   }, [selectedAccount?.id]);
 
   const fetchReminders = useCallback(async () => {
-    if (!selectedAccount) { setReminders([]); return; }
+    // 段階6b2: scenario 選択時は scenario_id 直渡し(配下 IN 句集約)。
+    const useScenario = selectedScenarioId && selectedScenarioId !== NULL_SCENARIO_KEY;
+    if (!useScenario && !selectedAccount?.id) { setReminders([]); return; }
     try {
-      const res = await fetch(`/api/line/reminders?account_id=${selectedAccount.id}`);
+      const url = useScenario
+        ? `/api/line/reminders?scenario_id=${selectedScenarioId}`
+        : `/api/line/reminders?account_id=${selectedAccount!.id}`;
+      const res = await fetch(url);
       if (res.ok) setReminders(await res.json());
     } catch { /* */ }
-  }, [selectedAccount?.id]);
+  }, [selectedAccount?.id, selectedScenarioId]);
 
   const fetchNewsletters = useCallback(async () => {
-    if (!selectedAccount) { setNewsletters([]); return; }
+    // 段階6b2: scenario 選択時は scenario_id 直渡し(配下 IN 句集約)。
+    const useScenario = selectedScenarioId && selectedScenarioId !== NULL_SCENARIO_KEY;
+    if (!useScenario && !selectedAccount?.id) { setNewsletters([]); return; }
     try {
-      const res = await fetch(`/api/line/newsletter?account_id=${selectedAccount.id}`);
+      const url = useScenario
+        ? `/api/line/newsletter?scenario_id=${selectedScenarioId}`
+        : `/api/line/newsletter?account_id=${selectedAccount!.id}`;
+      const res = await fetch(url);
       if (res.ok) setNewsletters(await res.json());
     } catch { /* */ }
-  }, [selectedAccount?.id]);
+  }, [selectedAccount?.id, selectedScenarioId]);
 
   // 未読件数を計算（全メッセージから取得）
   const fetchUnreadCounts = useCallback(async () => {

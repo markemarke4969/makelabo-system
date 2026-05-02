@@ -3,25 +3,43 @@ import { supabase } from "@/lib/supabase";
 import { buildLineMessage, pushLineMessages } from "@/lib/line";
 import { evalCondition, DeliveryCondition, FollowerLite } from "@/lib/delivery-conditions";
 import { buildReplacerContext, defaultContext } from "@/lib/line-replacer";
+import { resolveAccountIdsFromScenario } from "@/lib/scenario-resolve";
 
 export const maxDuration = 300;
+
+// 段階6b2: scenario_id クエリ追加(scenario 配下統合表示)。
+// line_reengagement_broadcasts には scenario_id 列なし(段階7 で schema 移行検討)→ IN 句集約。
+// reengagement_messages は既に broadcast_id IN 句で結合(L29 周辺)→ scenario 統合でも自然動作。
 
 // 掘り起こし配信一覧
 export async function GET(request: NextRequest) {
   const accountId = request.nextUrl.searchParams.get("account_id");
-  if (!accountId) return Response.json({ error: "account_id required" }, { status: 400 });
+  const scenarioId = request.nextUrl.searchParams.get("scenario_id");
+  if (!accountId && !scenarioId) {
+    return Response.json({ error: "account_id or scenario_id required" }, { status: 400 });
+  }
 
-  const { data, error } = await supabase
+  let scenarioAccountIds: string[] | null = null;
+  if (scenarioId && !accountId) {
+    const resolved = await resolveAccountIdsFromScenario(scenarioId);
+    if (resolved.account_ids.length === 0) return Response.json([]);
+    scenarioAccountIds = resolved.account_ids;
+  }
+
+  let query = supabase
     .from("line_reengagement_broadcasts")
     .select("*")
-    .eq("account_id", accountId)
     .order("created_at", { ascending: false });
+  if (scenarioAccountIds) query = query.in("account_id", scenarioAccountIds);
+  else if (accountId) query = query.eq("account_id", accountId);
+
+  const { data, error } = await query;
 
   if (error) return Response.json({ error: error.message }, { status: 500 });
 
   // メッセージも結合
   const ids = (data ?? []).map((b) => b.id as string);
-  let messagesMap: Record<string, unknown[]> = {};
+  const messagesMap: Record<string, unknown[]> = {};
   if (ids.length > 0) {
     const { data: msgs } = await supabase
       .from("line_reengagement_messages")
@@ -125,7 +143,7 @@ export async function PUT(request: NextRequest) {
 
     // ラベル取得
     const followerIds = (allFollowers ?? []).map((f) => f.id as string);
-    let labelMap: Record<string, string[]> = {};
+    const labelMap: Record<string, string[]> = {};
     if (followerIds.length > 0) {
       const { data: flLabels } = await supabase
         .from("line_follower_labels")
