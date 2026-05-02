@@ -32,6 +32,8 @@ interface Follower {
   unfollowed_at: string | null;
   created_at: string;
   account_id?: string;
+  // 段階6a: 「どの LINE 発」バッジ表示用に DB 列(line_followers.line_account_id)を型に追加
+  line_account_id?: string | null;
   memo?: string | null;
   labels?: string[];
   is_test?: boolean;
@@ -46,6 +48,8 @@ interface Message {
   raw_event: Record<string, unknown>;
   sent_at: string;
   is_read?: boolean;
+  // 段階6a: 「どの LINE 発」バッジ表示用に DB 列(line_messages.line_account_id)を型に追加
+  line_account_id?: string | null;
 }
 
 interface LineAccount {
@@ -160,8 +164,10 @@ interface InflowGroup {
 }
 
 // メインビュー
-type MainView = "accounts" | "account-detail" | "settings";
-// アカウント詳細内のサブビュー
+// 段階6a:"accounts" を完全削除し、"scenarios" / "scenario-detail" に置換。
+// scenario-detail = 旧 account-detail を継承した「機能画面そのもの」(中間ビューではない)。
+type MainView = "scenarios" | "scenario-detail" | "settings";
+// シナリオ詳細内のサブビュー(旧 account-detail のサブビューをそのまま継承、18 種)
 type AccountSubView = "followers" | "chat" | "step" | "schedule" | "sent" | "friend-page" | "labels" | "templates" | "inflow" | "actions" | "custom-fields" | "reminders" | "newsletter" | "reengagement" | "surveys" | "reg-forms" | "reports" | "rich-menu";
 
 // アクションルール
@@ -195,6 +201,31 @@ function getScenarioNameForAccount(
   if (!acc.scenario_id) return "シナリオ未設定";
   const found = scenarios.find((s) => s.id === acc.scenario_id);
   return found ? found.name : "シナリオ未設定";
+}
+
+// 段階6a: selectedScenarioId に格納する「シナリオ未設定」バケツの sentinel。
+// 通常 scenario は UUID、未設定バケツは NULL_SCENARIO_KEY、未選択は null で区別。
+const NULL_SCENARIO_KEY = "__null__";
+
+// 段階6a:scenario 配下の「主 account」を解決(role='main' 優先 + sort_order/order_index 最小)。
+// account-detail サブビューの大半はフェーズ A 時点でも account_id ベースで動かすため、
+// scenario クリック時に主 account を selectedAccount に自動セットする土台として使う。
+// fallback:配下が banned のみ等で main が無い場合は最初の account、それも 0 件なら null。
+function resolveMainAccountForScenario(
+  acc: Array<{ id: string; scenario_id?: string | null; role?: string | null; order_index?: number | null }>,
+  scenarioId: string | null,
+): { id: string } | null {
+  if (!scenarioId) return null;
+  const inScope = acc.filter((a) => (a.scenario_id ?? null) === (scenarioId === NULL_SCENARIO_KEY ? null : scenarioId));
+  if (inScope.length === 0) return null;
+  const sortByOrder = (a: { order_index?: number | null }, b: { order_index?: number | null }) =>
+    (a.order_index ?? 0) - (b.order_index ?? 0);
+  const main = inScope.filter((a) => a.role === "main").sort(sortByOrder);
+  if (main.length > 0) return { id: main[0].id };
+  const distribute = inScope.filter((a) => a.role === "distribute").sort(sortByOrder);
+  if (distribute.length > 0) return { id: distribute[0].id };
+  // banned 含む全体から最初の 1 件を返す(scenario-detail の表示維持のため)
+  return { id: inScope.sort(sortByOrder)[0].id };
 }
 
 const DEFAULT_GREETING_MESSAGE = "{display_name}さん、友達追加ありがとうございます！";
@@ -443,8 +474,12 @@ export default function LineDashboard() {
   }, [router]);
 
   // ビュー状態
-  const [mainView, setMainView] = useState<MainView>("accounts");
+  // 段階6a: 初期 mainView は "scenarios"(シナリオ一覧)
+  const [mainView, setMainView] = useState<MainView>("scenarios");
   const [accountSubView, setAccountSubView] = useState<AccountSubView>("chat");
+  // 段階6a: 選択中シナリオ id。null=未選択 / UUID=通常シナリオ / NULL_SCENARIO_KEY="シナリオ未設定" バケツ。
+  // sessionStorage("line_scenario_id") に永続化、案件切替時にクリア。
+  const [selectedScenarioId, setSelectedScenarioId] = useState<string | null>(null);
 
   // データ
   const [followers, setFollowers] = useState<Follower[]>([]);
@@ -905,18 +940,22 @@ export default function LineDashboard() {
     if (!project?.id) { setFollowers([]); return; }
     setLoading(true);
     try {
-      // 個別アカウント選択中はそのアカウントのフォロワーのみ。未選択時は案件単位で取得。
+      // 段階6a: scenario 選択時は scenario_id 直 hit(配下統合)。
+      // selectedScenarioId が NULL_SCENARIO_KEY(未設定バケツ)or null 時は従来パス(account_id or project_id)。
       const closerFlag =
         currentUser?.is_closer && !currentUser?.is_admin
           ? `&closer_visible_only=1&project_id=${project.id}`
           : "";
-      const url = selectedAccount?.id
-        ? `/api/line/followers?account_id=${selectedAccount.id}${closerFlag}`
-        : `/api/line/followers?project_id=${project.id}${closerFlag ? "&closer_visible_only=1" : ""}`;
+      const useScenario = selectedScenarioId && selectedScenarioId !== NULL_SCENARIO_KEY;
+      const url = useScenario
+        ? `/api/line/followers?scenario_id=${selectedScenarioId}${closerFlag}`
+        : selectedAccount?.id
+          ? `/api/line/followers?account_id=${selectedAccount.id}${closerFlag}`
+          : `/api/line/followers?project_id=${project.id}${closerFlag ? "&closer_visible_only=1" : ""}`;
       const res = await fetch(url);
       setFollowers(await res.json());
     } catch { /* */ } finally { setLoading(false); }
-  }, [project?.id, selectedAccount?.id, currentUser?.is_closer, currentUser?.is_admin]);
+  }, [project?.id, selectedAccount?.id, selectedScenarioId, currentUser?.is_closer, currentUser?.is_admin]);
 
   const fetchMessages = useCallback(async (userId?: string) => {
     try {
@@ -1172,23 +1211,6 @@ export default function LineDashboard() {
     });
   };
 
-  // 通常表示用のシナリオ別バケツ(本番 + BAN済み。サブ(standby)は別管理)
-  // BAN済みアカウントは過去の友だち・チャット履歴閲覧のため表示を残す
-  // - キー:getScenarioNameForAccount(acc, scenarios)(scenario_id NULL 時は「シナリオ未設定」)
-  // - closer 用の可視制御は将来 scenario 単位で再実装する想定(段階5 PR-4 で旧 closer_visible を撤去済)
-  const sortedGroupedAccounts = accounts
-    .filter((acc) => !acc.role || acc.role === "main" || acc.role === "distribute" || acc.role === "banned")
-    // main を先、banned を後に並べる
-    .sort((a, b) => {
-      const rank = (r?: string | null) => (r === "banned" ? 1 : 0);
-      return rank(a.role) - rank(b.role);
-    })
-    .reduce<Record<string, LineAccount[]>>((groups, acc) => {
-      const key = getScenarioNameForAccount(acc, scenarios);
-      if (!groups[key]) groups[key] = [];
-      groups[key].push(acc);
-      return groups;
-    }, {});
 
   // 選択削除
   const toggleSelect = (id: string) => {
@@ -1807,6 +1829,66 @@ export default function LineDashboard() {
     };
   }, []);
 
+  // 段階6a: sessionStorage から selectedScenarioId / mainView / accountSubView を復元。
+  // restoreCompletedRef で 1 回限定 + 復元完了まで永続化 useEffect を抑制(初回 mount で
+  // selectedScenarioId=null 永続化が走り sessionStorage を消すバグの根本解決)。
+  // - NULL_SCENARIO_KEY は常に有効(「未設定」バケツは常時存在)
+  // - UUID は scenarios 配列に該当 id があり、かつ現 project に属する場合のみ復元
+  // - 復元成立時は mainView="scenario-detail" + 配下主 account を selectedAccount に同期
+  //   (accounts ロード前ならスキップ、ユーザー操作時に解決される。許容)
+  // - accountSubView も併せて復元(chat 表示中リロード → chat に復帰)
+  const restoreCompletedRef = useRef(false);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (scenarios.length === 0) return;
+    if (restoreCompletedRef.current) return;
+
+    const stored = sessionStorage.getItem("line_scenario_id");
+    if (stored) {
+      if (stored === NULL_SCENARIO_KEY) {
+        setSelectedScenarioId(NULL_SCENARIO_KEY);
+        setMainView("scenario-detail");
+        const main = resolveMainAccountForScenario(accounts, NULL_SCENARIO_KEY);
+        if (main) setSelectedAccount(accounts.find((a) => a.id === main.id) ?? null);
+      } else {
+        const found = scenarios.find((s) => s.id === stored);
+        const valid = found && (!project?.id || found.project_id === project.id);
+        if (valid) {
+          setSelectedScenarioId(stored);
+          setMainView("scenario-detail");
+          const main = resolveMainAccountForScenario(accounts, stored);
+          if (main) setSelectedAccount(accounts.find((a) => a.id === main.id) ?? null);
+        } else {
+          sessionStorage.removeItem("line_scenario_id");
+        }
+      }
+      const storedSub = sessionStorage.getItem("line_account_sub_view");
+      if (storedSub) setAccountSubView(storedSub as AccountSubView);
+    }
+    restoreCompletedRef.current = true;
+  }, [scenarios, project?.id, accounts]);
+
+  // 段階6a: selectedScenarioId 変更を sessionStorage に永続化。null は削除。
+  // 復元完了前(restoreCompletedRef=false)は触らない(初回 mount で sessionStorage を消すバグ防止)。
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!restoreCompletedRef.current) return;
+    if (selectedScenarioId === null) {
+      sessionStorage.removeItem("line_scenario_id");
+    } else {
+      sessionStorage.setItem("line_scenario_id", selectedScenarioId);
+    }
+  }, [selectedScenarioId]);
+
+  // 段階6a: accountSubView 永続化(scenario-detail 表示中のみ。リロード時にサブビュー復帰)。
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!restoreCompletedRef.current) return;
+    if (mainView === "scenario-detail") {
+      sessionStorage.setItem("line_account_sub_view", accountSubView);
+    }
+  }, [accountSubView, mainView]);
+
   useEffect(() => {
     if (selectedAccount) {
       fetchStepSequences();
@@ -1923,9 +2005,49 @@ export default function LineDashboard() {
     }
   };
 
-  const openAccount = (acc: LineAccount) => {
-    setSelectedAccount(acc);
-    setMainView("account-detail");
+  // 段階6a: 「どの LINE 発」バッジ。scenario 配下 account 数 ≥ 2 の時のみ表示。
+  // chat / followers サブビューで配下統合時に発信元を視覚化(MARI 等の配下 1 本 scenario では非表示)。
+  const renderLineAccountBadge = (lineAccountId: string | null | undefined): React.ReactNode => {
+    if (!lineAccountId) return null;
+    if (!selectedScenarioId || selectedScenarioId === NULL_SCENARIO_KEY) return null;
+    const scopedAccounts = accounts.filter((a) => a.scenario_id === selectedScenarioId);
+    if (scopedAccounts.length < 2) return null;
+    const acc = accounts.find((a) => a.id === lineAccountId);
+    if (!acc) return null;
+    const head = (acc.account_name ?? "?").trim().slice(0, 1);
+    // account.id ハッシュから決定論的に色を選ぶ(account 数が増えても安定)
+    const palette = ["#06C755", "#4f8ff7", "#f59e0b", "#ec4899", "#8b5cf6", "#10b981", "#ef4444", "#0ea5e9"];
+    let hash = 0;
+    for (let i = 0; i < lineAccountId.length; i++) hash = (hash * 31 + lineAccountId.charCodeAt(i)) >>> 0;
+    const color = palette[hash % palette.length];
+    return (
+      <span
+        className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full bg-white/90 text-gray-700 border border-gray-200 align-middle"
+        title={`発信元: ${acc.account_name ?? "(未設定)"}`}
+      >
+        <span className="inline-block w-2 h-2 rounded-full" style={{ backgroundColor: color }} />
+        {head}
+      </span>
+    );
+  };
+
+  // 段階6a: シナリオクリック時のハンドラ。
+  // 1) selectedScenarioId に scenario.id(または NULL_SCENARIO_KEY)をセット
+  // 2) 配下の主 account(role='main' 優先 + sort_order 最小)を selectedAccount に自動セット
+  //    → フェーズ A 時点で他サブビュー(step / labels / 等)は引き続き account_id 経由で動作
+  //    → フェーズ B/C で順次 scenario_id 経由に置換
+  // 3) scenario-detail/chat に遷移(中間ビュー無し)
+  const openScenario = (scenarioId: string | null) => {
+    const key = scenarioId ?? NULL_SCENARIO_KEY;
+    setSelectedScenarioId(key);
+    const main = resolveMainAccountForScenario(accounts, key);
+    if (main) {
+      const fullAcc = accounts.find((a) => a.id === main.id) ?? null;
+      setSelectedAccount(fullAcc);
+    } else {
+      setSelectedAccount(null);
+    }
+    setMainView("scenario-detail");
     setAccountSubView("chat");
     setSelectedUser(null);
   };
@@ -3690,7 +3812,14 @@ export default function LineDashboard() {
             </button>
           </div>
           <button
-            onClick={() => router.push("/line/projects")}
+            onClick={() => {
+              // 段階6a: 案件切替時は selectedScenarioId をクリア(別案件のシナリオ引き継ぎ防止)
+              if (typeof window !== "undefined") sessionStorage.removeItem("line_scenario_id");
+              setSelectedScenarioId(null);
+              setSelectedAccount(null);
+              setSelectedUser(null);
+              router.push("/line/projects");
+            }}
             className="mt-2 w-full px-2 py-1 text-[11px] text-white/50 hover:text-white hover:bg-white/10 rounded-md transition text-center border border-white/10"
           >
             案件を切り替える
@@ -3698,18 +3827,18 @@ export default function LineDashboard() {
         </div>
 
         <nav className="flex-1 py-2 overflow-y-auto">
-          {/* メインビューがaccountsまたはsettings */}
-          {mainView !== "account-detail" ? (
+          {/* mainView が scenarios / settings の時は通常サイドバー(scenario-detail は別レイアウト) */}
+          {mainView !== "scenario-detail" ? (
             <>
               <div className="px-3 pt-2 pb-1">
                 <span className="text-[10px] uppercase tracking-wider text-white/40 font-medium">シナリオ管理</span>
               </div>
               <button
-                onClick={() => { setMainView("accounts"); setSelectedAccount(null); setSelectedUser(null); setShowMobileSidebar(false); }}
-                className={`w-full flex items-center gap-2.5 px-4 py-2 text-[13px] transition-colors ${mainView === "accounts" ? "bg-white/10 text-white border-l-[3px] border-[#06C755]" : "text-white/60 hover:text-white hover:bg-white/5"}`}
+                onClick={() => { setMainView("scenarios"); setSelectedAccount(null); setSelectedUser(null); setShowMobileSidebar(false); }}
+                className={`w-full flex items-center gap-2.5 px-4 py-2 text-[13px] transition-colors ${mainView === "scenarios" ? "bg-white/10 text-white border-l-[3px] border-[#06C755]" : "text-white/60 hover:text-white hover:bg-white/5"}`}
               >
                 {Icons.users}
-                配信アカウント
+                シナリオ一覧
               </button>
 
               <div className="px-3 pt-4 pb-1">
@@ -3727,32 +3856,49 @@ export default function LineDashboard() {
               <div className="px-3 pt-4 pb-1">
                 <span className="text-[10px] uppercase tracking-wider text-white/40 font-medium">設定</span>
               </div>
+              {/* 段階6a: アカウント管理は scenario 選択必須(selectedScenarioId が null の時 disabled) */}
               <button
-                onClick={() => { setMainView("settings"); setShowMobileSidebar(false); }}
-                className={`w-full flex items-center gap-2.5 px-4 py-2 text-[13px] transition-colors ${mainView === "settings" ? "bg-white/10 text-white border-l-[3px] border-[#06C755]" : "text-white/60 hover:text-white hover:bg-white/5"}`}
+                onClick={() => {
+                  if (selectedScenarioId === null) return;
+                  setMainView("settings");
+                  setShowMobileSidebar(false);
+                }}
+                disabled={selectedScenarioId === null}
+                title={selectedScenarioId === null ? "シナリオを選択してから開いてください" : undefined}
+                className={`w-full flex items-center gap-2.5 px-4 py-2 text-[13px] transition-colors ${
+                  selectedScenarioId === null
+                    ? "text-white/30 cursor-not-allowed"
+                    : mainView === "settings"
+                      ? "bg-white/10 text-white border-l-[3px] border-[#06C755]"
+                      : "text-white/60 hover:text-white hover:bg-white/5"
+                }`}
               >
                 {Icons.settings}
                 アカウント管理
               </button>
             </>
           ) : (
-            /* アカウント詳細時のサイドバー */
+            /* シナリオ詳細時のサイドバー(段階6a: 旧アカウント詳細のサイドバーを継承) */
             <>
               <button
-                onClick={() => { setMainView("accounts"); setSelectedAccount(null); setSelectedUser(null); setShowMobileSidebar(false); }}
+                onClick={() => { setMainView("scenarios"); setSelectedAccount(null); setSelectedUser(null); setShowMobileSidebar(false); }}
                 className="w-full flex items-center gap-2 px-4 py-2.5 text-[13px] text-white/50 hover:text-white hover:bg-white/5 transition-colors border-b border-white/10"
               >
                 {Icons.back}
-                アカウント一覧に戻る
+                シナリオ一覧に戻る
               </button>
 
-              {/* 選択中アカウント名 */}
+              {/* 選択中シナリオ名(段階6a:旧アカウント名表示をシナリオ名に置換) */}
               <div className="px-4 py-3 border-b border-white/10">
                 <div className="flex items-center gap-2">
                   <div className="w-6 h-6 rounded-full bg-[#06C755] flex items-center justify-center flex-shrink-0">
-                    <span className="text-white text-[10px] font-bold">L</span>
+                    <span className="text-white text-[10px] font-bold">S</span>
                   </div>
-                  <span className="text-xs font-medium text-white truncate">{selectedAccount?.account_name ?? "アカウント"}</span>
+                  <span className="text-xs font-medium text-white truncate">
+                    {selectedScenarioId === NULL_SCENARIO_KEY
+                      ? "シナリオ未設定"
+                      : (scenarios.find((s) => s.id === selectedScenarioId)?.name ?? "シナリオ")}
+                  </span>
                 </div>
               </div>
 
@@ -3775,7 +3921,7 @@ export default function LineDashboard() {
                 className="w-full flex items-center gap-2.5 px-4 py-2 text-[13px] text-white/60 hover:text-white hover:bg-white/5 transition-colors"
               >
                 {Icons.settings}
-                アカウント設定
+                アカウント管理
               </button>
             </>
           )}
@@ -3798,27 +3944,19 @@ export default function LineDashboard() {
         </div>
 
         {/* ============================================================ */}
-        {/* アカウント一覧 */}
+        {/* シナリオ一覧(段階6a:旧「アカウント一覧」を完全置換) */}
         {/* ============================================================ */}
-        {mainView === "accounts" && (
+        {mainView === "scenarios" && (
           <>
             <header className="bg-white border-b border-gray-200 px-4 md:px-6 py-3 flex items-center justify-between flex-shrink-0">
-              <h1 className="text-base font-bold text-gray-800">アカウント一覧</h1>
-              <button
-                onClick={() => {
-                  setBulkProjectId(project?.id ?? "");
-                  setBulkRows(Array.from({ length: 10 }, () => emptyBulkRow()));
-                  setShowWizard(true);
-                }}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded-md transition"
-              >
-                {Icons.plus}
-                新規登録
-              </button>
+              <h1 className="text-base font-bold text-gray-800">シナリオ一覧</h1>
+              <span className="text-[11px] text-gray-400">アカウント追加・編集は「アカウント管理」タブから</span>
             </header>
 
             <main className="flex-1 overflow-y-auto p-4 md:p-6">
-              {/* アカウント追加モーダル */}
+              {/* 段階6a: アカウント追加モーダル / 一括登録ウィザードは settings にも triggered できるよう
+                  scenarios ブロック内に残置(showAddAccount / showWizard state ベースで条件レンダリング)。
+                  settings から開く時は setMainView("scenarios") + フラグ立てが必要(後段で対応) */}
               {showAddAccount && (
                 <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
                   <div className="bg-white rounded-xl shadow-xl w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto">
@@ -4239,105 +4377,65 @@ export default function LineDashboard() {
                 );
               })()}
 
+              {/* 段階6a: シナリオカードのみ列挙(技術情報 basic_id/channel_id 等は非表示)。
+                  クリックで openScenario → scenario-detail/chat に直接遷移(中間ビュー無し)。
+                  「シナリオ未設定」もカード化、配下件数を黄色バッジで表示。 */}
               {loading ? (
                 <div className="text-center text-gray-400 py-20">読み込み中...</div>
-              ) : accounts.length === 0 ? (
-                <div className="bg-white rounded-lg border border-gray-200 p-16 text-center text-gray-400">
-                  <p className="text-lg mb-2">LINEアカウントが登録されていません</p>
-                  <p className="text-sm">「LINEアカウント登録」からアカウントを登録してください。</p>
-                </div>
-              ) : (
-                <div className="space-y-5 max-w-5xl">
-                  {/* シナリオ未設定以外の scenario バケツ */}
-                  {Object.entries(sortedGroupedAccounts)
-                    .filter(([scenarioName]) => scenarioName !== "シナリオ未設定")
-                    .map(([scenarioName, groupAccs]) => (
-                    <div key={scenarioName} className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-                      <div className="px-5 py-3 bg-gray-50 border-b border-gray-200">
-                        <h3 className="text-sm font-bold text-gray-700">{scenarioName}</h3>
+              ) : (() => {
+                const projectScenarios = scenarios
+                  .filter((s) => !project?.id || s.project_id === project.id)
+                  .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
+                const unsetCount = accounts.filter((a) => !a.scenario_id).length;
+                if (projectScenarios.length === 0 && accounts.length === 0) {
+                  return (
+                    <div className="bg-white rounded-lg border border-gray-200 p-16 text-center text-gray-400">
+                      <p className="text-lg mb-2">シナリオが登録されていません</p>
+                      <p className="text-sm">案件管理ページからシナリオを追加してください。</p>
+                    </div>
+                  );
+                }
+                return (
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 max-w-6xl">
+                    {projectScenarios.map((s) => {
+                      const count = accounts.filter((a) => a.scenario_id === s.id).length;
+                      return (
+                        <button
+                          key={s.id}
+                          onClick={() => openScenario(s.id)}
+                          className="bg-white rounded-lg border border-gray-200 hover:border-blue-400 hover:shadow-md transition-all p-5 text-left"
+                        >
+                          <div className="flex items-center justify-between mb-2">
+                            <h3 className="text-sm font-bold text-gray-800 truncate">{s.name}</h3>
+                            {Icons.chevronRight}
+                          </div>
+                          <div className="text-xs text-gray-500">
+                            配下アカウント: <span className="font-medium text-gray-700">{count}</span> 件
+                          </div>
+                        </button>
+                      );
+                    })}
+                    {/* シナリオ未設定 バケツ(常時カード化、見逃し防止のため右上に黄色バッジ) */}
+                    <button
+                      onClick={() => openScenario(null)}
+                      className="relative bg-white rounded-lg border border-gray-200 hover:border-yellow-400 hover:shadow-md transition-all p-5 text-left"
+                    >
+                      {unsetCount > 0 && (
+                        <span className="absolute top-2 right-2 text-[10px] font-semibold bg-yellow-100 text-yellow-700 border border-yellow-300 px-2 py-0.5 rounded">
+                          ⚠ {unsetCount} 件未設定
+                        </span>
+                      )}
+                      <div className="flex items-center justify-between mb-2 mt-1">
+                        <h3 className="text-sm font-bold text-gray-600 truncate">シナリオ未設定</h3>
+                        {Icons.chevronRight}
                       </div>
-                      {groupAccs.map((acc, i) => {
-                        const isBanned = acc.role === "banned";
-                        return (
-                        <div
-                          key={acc.id}
-                          onClick={() => openAccount(acc)}
-                          className={`flex items-center justify-between px-5 py-3.5 hover:bg-blue-50/50 cursor-pointer transition-colors ${i < groupAccs.length - 1 ? "border-b border-gray-100" : ""} ${isBanned ? "bg-red-50/30 opacity-80" : ""}`}
-                        >
-                          <div className="flex items-center gap-3">
-                            <div className={`w-9 h-9 rounded-full flex items-center justify-center ${isBanned ? "bg-gray-400 grayscale" : "bg-[#06C755]"}`}>{LINE_ICON}</div>
-                            <div>
-                              <div className="text-sm font-medium text-gray-800 flex items-center gap-2">
-                                {acc.account_name ?? "未設定"}
-                                {isBanned && (
-                                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-100 text-red-600 font-semibold">BAN</span>
-                                )}
-                              </div>
-                              {acc.basic_id && <div className="text-xs text-gray-400">@{acc.basic_id}</div>}
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-4">
-                            {isBanned ? (
-                              <span className="text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-600">BAN済</span>
-                            ) : (
-                              <span className={`text-xs px-2 py-0.5 rounded-full ${acc.is_active ? "bg-green-100 text-green-600" : "bg-gray-100 text-gray-400"}`}>
-                                {acc.is_active ? "有効" : "無効"}
-                              </span>
-                            )}
-                            {Icons.chevronRight}
-                          </div>
-                        </div>
-                        );
-                      })}
-                    </div>
-                  ))}
-
-                  {/* シナリオ未設定バケツ(scenario_id NULL のアカウント) */}
-                  <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-                    <div className="px-5 py-3 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
-                      <h3 className="text-sm font-bold text-gray-700">シナリオ未設定</h3>
-                      <span className="text-[10px] text-gray-400">アカウント編集からシナリオを選択してください</span>
-                    </div>
-                    {sortedGroupedAccounts["シナリオ未設定"] && sortedGroupedAccounts["シナリオ未設定"].length > 0 ? (
-                      sortedGroupedAccounts["シナリオ未設定"].map((acc, i) => {
-                        const isBanned = acc.role === "banned";
-                        return (
-                        <div
-                          key={acc.id}
-                          onClick={() => openAccount(acc)}
-                          className={`flex items-center justify-between px-5 py-3.5 hover:bg-blue-50/50 cursor-pointer transition-colors ${i < sortedGroupedAccounts["シナリオ未設定"].length - 1 ? "border-b border-gray-100" : ""} ${isBanned ? "bg-red-50/30 opacity-80" : ""}`}
-                        >
-                          <div className="flex items-center gap-3">
-                            <div className={`w-9 h-9 rounded-full flex items-center justify-center ${isBanned ? "bg-gray-400 grayscale" : "bg-[#06C755]"}`}>{LINE_ICON}</div>
-                            <div>
-                              <div className="text-sm font-medium text-gray-800 flex items-center gap-2">
-                                {acc.account_name ?? "未設定"}
-                                {isBanned && (
-                                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-100 text-red-600 font-semibold">BAN</span>
-                                )}
-                              </div>
-                              {acc.basic_id && <div className="text-xs text-gray-400">@{acc.basic_id}</div>}
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-4">
-                            {isBanned ? (
-                              <span className="text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-600">BAN済</span>
-                            ) : (
-                              <span className={`text-xs px-2 py-0.5 rounded-full ${acc.is_active ? "bg-green-100 text-green-600" : "bg-gray-100 text-gray-400"}`}>
-                                {acc.is_active ? "有効" : "無効"}
-                              </span>
-                            )}
-                            {Icons.chevronRight}
-                          </div>
-                        </div>
-                        );
-                      })
-                    ) : (
-                      <div className="px-5 py-4 text-center text-gray-400 text-xs">アカウントなし</div>
-                    )}
+                      <div className="text-xs text-gray-500">
+                        配下アカウント: <span className="font-medium text-gray-700">{unsetCount}</span> 件
+                      </div>
+                    </button>
                   </div>
-                </div>
-              )}
+                );
+              })()}
             </main>
           </>
         )}
@@ -4345,7 +4443,7 @@ export default function LineDashboard() {
         {/* ============================================================ */}
         {/* アカウント詳細: チャット一覧 */}
         {/* ============================================================ */}
-        {mainView === "account-detail" && accountSubView === "chat" && (
+        {mainView === "scenario-detail" && accountSubView === "chat" && (
           <div className="flex-1 flex min-h-0">
             {/* --- チャットリスト（左） --- */}
             <div className={`${showMobileChat ? "hidden" : "flex"} md:flex w-full md:w-72 bg-white border-r border-gray-200 flex-col flex-shrink-0`}>
@@ -4830,7 +4928,7 @@ export default function LineDashboard() {
                     </button>
                   </div>
 
-                  {/* ステータス */}
+                  {/* ステータス + 段階6a:登録 LINE / ベーシックID(scenario 配下統合時のメタデータ) */}
                   <div className="px-4 py-3 border-b border-gray-200">
                     <div className="flex items-center justify-between text-xs">
                       <span className="text-gray-500">ステータス</span>
@@ -4844,6 +4942,27 @@ export default function LineDashboard() {
                       <span className="text-gray-500">登録日</span>
                       <span className="text-gray-700">{fmtShort(selectedUser.created_at)}</span>
                     </div>
+                    {/* 段階6a: scenario 配下統合時に「この follower がどの LINE 経由か」を明示 */}
+                    {(() => {
+                      const accId = selectedUser.line_account_id ?? selectedUser.account_id ?? null;
+                      const acc = accId ? accounts.find((a) => a.id === accId) : null;
+                      return (
+                        <>
+                          <div className="flex items-center justify-between text-xs mt-2 gap-2">
+                            <span className="text-gray-500 flex-shrink-0">登録 LINE</span>
+                            <span className="text-gray-700 truncate" title={acc?.account_name ?? "—"}>
+                              {acc?.account_name ?? "—"}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between text-xs mt-2 gap-2">
+                            <span className="text-gray-500 flex-shrink-0">ベーシックID</span>
+                            <span className="text-gray-700 truncate font-mono" title={acc?.basic_id ? `@${acc.basic_id}` : "—"}>
+                              {acc?.basic_id ? `@${acc.basic_id}` : "—"}
+                            </span>
+                          </div>
+                        </>
+                      );
+                    })()}
                   </div>
 
                   {/* Feature 2: ラベル with picker */}
@@ -5084,7 +5203,7 @@ export default function LineDashboard() {
         {/* ============================================================ */}
         {/* アカウント詳細: 読者一覧 */}
         {/* ============================================================ */}
-        {mainView === "account-detail" && accountSubView === "followers" && (
+        {mainView === "scenario-detail" && accountSubView === "followers" && (
           <>
             <header className="bg-white border-b border-gray-200 px-4 md:px-6 py-3 flex items-center justify-between flex-shrink-0">
               <div className="flex items-center gap-3">
@@ -5186,9 +5305,11 @@ export default function LineDashboard() {
                                     <div className="w-9 h-9 rounded-full bg-gray-200 flex items-center justify-center text-gray-400">{Icons.user}</div>
                                   )}
                                   <div>
-                                    <div className="font-medium text-gray-800 group-hover:text-blue-600 group-hover:underline">
-                                      {f.display_name ?? "名前なし"}
-                                      {f.is_test && <span className="ml-1.5 px-1.5 py-0.5 text-[10px] bg-purple-100 text-purple-700 rounded">TEST</span>}
+                                    <div className="font-medium text-gray-800 group-hover:text-blue-600 group-hover:underline flex items-center gap-1.5">
+                                      <span>{f.display_name ?? "名前なし"}</span>
+                                      {/* 段階6a: 「どの LINE 発」バッジ(scenario 配下 ≥ 2 のみ表示) */}
+                                      {renderLineAccountBadge(f.line_account_id ?? f.account_id ?? null)}
+                                      {f.is_test && <span className="ml-1 px-1.5 py-0.5 text-[10px] bg-purple-100 text-purple-700 rounded">TEST</span>}
                                     </div>
                                     <div className="text-xs text-gray-400 font-mono">{f.line_user_id.slice(0, 12)}...</div>
                                   </div>
@@ -5253,7 +5374,7 @@ export default function LineDashboard() {
         {/* ============================================================ */}
         {/* アカウント詳細: ステップ配信 */}
         {/* ============================================================ */}
-        {mainView === "account-detail" && accountSubView === "step" && (
+        {mainView === "scenario-detail" && accountSubView === "step" && (
           <>
             <header className="bg-white border-b border-gray-200 px-6 py-3 flex items-center flex-shrink-0">
               <h1 className="text-base font-bold text-gray-800">ステップ配信</h1>
@@ -5515,7 +5636,7 @@ export default function LineDashboard() {
         {/* ============================================================ */}
         {/* アカウント詳細: 予約配信 */}
         {/* ============================================================ */}
-        {mainView === "account-detail" && accountSubView === "schedule" && (
+        {mainView === "scenario-detail" && accountSubView === "schedule" && (
           <>
             <header className="bg-white border-b border-gray-200 px-6 py-3 flex-shrink-0">
               <h1 className="text-base font-bold text-gray-800">予約配信</h1>
@@ -5689,7 +5810,7 @@ export default function LineDashboard() {
         {/* ============================================================ */}
         {/* アカウント詳細: 送信済み（予約配信） */}
         {/* ============================================================ */}
-        {mainView === "account-detail" && accountSubView === "sent" && (
+        {mainView === "scenario-detail" && accountSubView === "sent" && (
           <>
             <header className="bg-white border-b border-gray-200 px-6 py-3 flex-shrink-0">
               <h1 className="text-base font-bold text-gray-800">送信済み</h1>
@@ -5793,7 +5914,7 @@ export default function LineDashboard() {
         {/* ============================================================ */}
         {/* アカウント詳細: リッチメニュー */}
         {/* ============================================================ */}
-        {mainView === "account-detail" && accountSubView === "rich-menu" && (() => {
+        {mainView === "scenario-detail" && accountSubView === "rich-menu" && (() => {
           const RICH_MENU_TEMPLATES: ReadonlyArray<{
             value: string;
             label: string;
@@ -6241,7 +6362,7 @@ export default function LineDashboard() {
         {/* ============================================================ */}
         {/* アカウント詳細: 友だち追加ページ */}
         {/* ============================================================ */}
-        {mainView === "account-detail" && accountSubView === "friend-page" && (
+        {mainView === "scenario-detail" && accountSubView === "friend-page" && (
           <>
             <header className="bg-white border-b border-gray-200 px-6 py-3 flex-shrink-0">
               <h1 className="text-base font-bold text-gray-800">友だち追加ページ</h1>
@@ -6288,7 +6409,7 @@ export default function LineDashboard() {
         {/* ============================================================ */}
         {/* アカウント詳細: ラベル管理 */}
         {/* ============================================================ */}
-        {mainView === "account-detail" && accountSubView === "labels" && (
+        {mainView === "scenario-detail" && accountSubView === "labels" && (
           <>
             <header className="bg-white border-b border-gray-200 px-4 md:px-6 py-3 flex-shrink-0">
               <h1 className="text-base font-bold text-gray-800">ラベル管理</h1>
@@ -6530,7 +6651,7 @@ export default function LineDashboard() {
         {/* ============================================================ */}
         {/* アカウント詳細: アクション管理 */}
         {/* ============================================================ */}
-        {mainView === "account-detail" && accountSubView === "actions" && (
+        {mainView === "scenario-detail" && accountSubView === "actions" && (
           <>
             <header className="bg-white border-b border-gray-200 px-4 md:px-6 py-3 flex-shrink-0">
               <h1 className="text-base font-bold text-gray-800">アクション管理</h1>
@@ -7031,7 +7152,7 @@ export default function LineDashboard() {
         {/* ============================================================ */}
         {/* アカウント詳細: 定型文管理 (Feature 5) */}
         {/* ============================================================ */}
-        {mainView === "account-detail" && accountSubView === "templates" && (
+        {mainView === "scenario-detail" && accountSubView === "templates" && (
           <>
             <header className="bg-white border-b border-gray-200 px-4 md:px-6 py-3 flex-shrink-0">
               <h1 className="text-base font-bold text-gray-800">テンプレート管理</h1>
@@ -7215,7 +7336,7 @@ export default function LineDashboard() {
         {/* ============================================================ */}
         {/* アカウント詳細: 独自置き換え文字 */}
         {/* ============================================================ */}
-        {mainView === "account-detail" && accountSubView === "custom-fields" && (
+        {mainView === "scenario-detail" && accountSubView === "custom-fields" && (
           <>
             <header className="bg-white border-b border-gray-200 px-4 md:px-6 py-3 flex items-center justify-between flex-shrink-0">
               <h1 className="text-base font-bold text-gray-800">独自置き換え文字管理</h1>
@@ -7357,7 +7478,7 @@ export default function LineDashboard() {
         {/* ============================================================ */}
         {/* アカウント詳細: リマインダ配信 */}
         {/* ============================================================ */}
-        {mainView === "account-detail" && accountSubView === "reminders" && (
+        {mainView === "scenario-detail" && accountSubView === "reminders" && (
           <>
             <header className="bg-white border-b border-gray-200 px-4 md:px-6 py-3 flex-shrink-0">
               <h1 className="text-base font-bold text-gray-800">リマインダ配信</h1>
@@ -7486,7 +7607,7 @@ export default function LineDashboard() {
         {/* ============================================================ */}
         {/* アカウント詳細: アンケート */}
         {/* ============================================================ */}
-        {mainView === "account-detail" && accountSubView === "surveys" && (
+        {mainView === "scenario-detail" && accountSubView === "surveys" && (
           <>
             <header className="bg-white border-b border-gray-200 px-4 md:px-6 py-3 flex-shrink-0">
               <h1 className="text-base font-bold text-gray-800">アンケート</h1>
@@ -7670,7 +7791,7 @@ export default function LineDashboard() {
         {/* ============================================================ */}
         {/* アカウント詳細: 登録フォーム */}
         {/* ============================================================ */}
-        {mainView === "account-detail" && accountSubView === "reg-forms" && (
+        {mainView === "scenario-detail" && accountSubView === "reg-forms" && (
           <>
             <header className="bg-white border-b border-gray-200 px-4 md:px-6 py-3 flex-shrink-0">
               <h1 className="text-base font-bold text-gray-800">登録フォーム</h1>
@@ -7824,7 +7945,7 @@ export default function LineDashboard() {
         {/* ============================================================ */}
         {/* アカウント詳細: レポート */}
         {/* ============================================================ */}
-        {mainView === "account-detail" && accountSubView === "reports" && (
+        {mainView === "scenario-detail" && accountSubView === "reports" && (
           <>
             <header className="bg-white border-b border-gray-200 px-4 md:px-6 py-3 flex items-center justify-between flex-shrink-0">
               <h1 className="text-base font-bold text-gray-800">レポート</h1>
@@ -7963,7 +8084,7 @@ export default function LineDashboard() {
         {/* ============================================================ */}
         {/* アカウント詳細: 掘り起こし配信 */}
         {/* ============================================================ */}
-        {mainView === "account-detail" && accountSubView === "reengagement" && (
+        {mainView === "scenario-detail" && accountSubView === "reengagement" && (
           <>
             <header className="bg-white border-b border-gray-200 px-4 md:px-6 py-3 flex items-center justify-between flex-shrink-0">
               <h1 className="text-base font-bold text-gray-800">掘り起こし配信</h1>
@@ -8183,7 +8304,7 @@ export default function LineDashboard() {
         {/* ============================================================ */}
         {/* アカウント詳細: メルマガ */}
         {/* ============================================================ */}
-        {mainView === "account-detail" && accountSubView === "newsletter" && (
+        {mainView === "scenario-detail" && accountSubView === "newsletter" && (
           <>
             <header className="bg-white border-b border-gray-200 px-4 md:px-6 py-3 flex items-center justify-between flex-shrink-0">
               <h1 className="text-base font-bold text-gray-800">メルマガ管理</h1>
@@ -8332,7 +8453,7 @@ export default function LineDashboard() {
         {/* ============================================================ */}
         {/* アカウント詳細: 流入経路 */}
         {/* ============================================================ */}
-        {mainView === "account-detail" && accountSubView === "inflow" && (
+        {mainView === "scenario-detail" && accountSubView === "inflow" && (
           <>
             <header className="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between flex-shrink-0">
               <div className="flex items-center gap-3">
@@ -8713,11 +8834,108 @@ export default function LineDashboard() {
         {/* ============================================================ */}
         {mainView === "settings" && (
           <>
-            <header className="bg-white border-b border-gray-200 px-6 py-3 flex-shrink-0">
-              <h1 className="text-base font-bold text-gray-800">アカウント管理</h1>
+            <header className="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between flex-shrink-0">
+              <div className="flex items-center gap-3">
+                <h1 className="text-base font-bold text-gray-800">アカウント管理</h1>
+                {selectedScenarioId && selectedScenarioId !== NULL_SCENARIO_KEY && (
+                  <span className="text-xs text-gray-500">
+                    シナリオ: <span className="font-medium text-gray-700">{scenarios.find((s) => s.id === selectedScenarioId)?.name ?? "—"}</span>
+                  </span>
+                )}
+                {selectedScenarioId === NULL_SCENARIO_KEY && (
+                  <span className="text-xs text-gray-500">シナリオ: <span className="font-medium text-gray-700">未設定バケツ</span></span>
+                )}
+              </div>
+              <button
+                onClick={() => {
+                  setBulkProjectId(project?.id ?? "");
+                  setBulkRows(Array.from({ length: 10 }, () => emptyBulkRow()));
+                  // wizard モーダルは scenarios ブロック内に配置されているため、
+                  // 一旦 mainView を scenarios に戻して wizard を開く
+                  setMainView("scenarios");
+                  setShowWizard(true);
+                }}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded-md transition"
+              >
+                {Icons.plus}
+                新規一括登録
+              </button>
             </header>
             <main className="flex-1 overflow-y-auto p-4 md:p-6">
               <div className="max-w-4xl space-y-6">
+                {/* 段階6a: scenario 配下 LINE アカウント一覧 + 編集ボタン。
+                    各行の「編集」で startEdit(acc) → 下の編集フォームに展開。
+                    現状の編集フォーム(下)はそのまま流用(form state ベース、selectedAccount は表示制御に使用)。 */}
+                {(() => {
+                  const isNullBucket = selectedScenarioId === NULL_SCENARIO_KEY;
+                  const scopedAccounts = accounts
+                    .filter((a) => !a.role || a.role === "main" || a.role === "distribute" || a.role === "standby" || a.role === "banned")
+                    .filter((a) => isNullBucket ? !a.scenario_id : a.scenario_id === selectedScenarioId)
+                    .sort((a, b) => (a.order_index ?? 0) - (b.order_index ?? 0));
+                  return (
+                    <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+                      <div className="px-5 py-3 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
+                        <h3 className="text-sm font-bold text-gray-700">配下 LINE アカウント({scopedAccounts.length} 件)</h3>
+                        <span className="text-[10px] text-gray-400">編集ボタンで下の編集フォームに展開</span>
+                      </div>
+                      {scopedAccounts.length === 0 ? (
+                        <div className="px-5 py-6 text-center text-gray-400 text-xs">このシナリオに紐づく LINE アカウントはありません</div>
+                      ) : (
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="text-gray-500 text-left bg-white border-b border-gray-100">
+                              <th className="px-4 py-2 font-medium">アカウント名</th>
+                              <th className="px-4 py-2 font-medium hidden md:table-cell">basic_id</th>
+                              <th className="px-4 py-2 font-medium hidden md:table-cell">役割</th>
+                              <th className="px-4 py-2 font-medium">状態</th>
+                              <th className="px-4 py-2 font-medium text-right">操作</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {scopedAccounts.map((acc) => {
+                              const isBanned = acc.role === "banned";
+                              const isCurrent = selectedAccount?.id === acc.id;
+                              return (
+                                <tr key={acc.id} className={`border-b border-gray-100 ${isCurrent ? "bg-blue-50/40" : "hover:bg-gray-50"}`}>
+                                  <td className="px-4 py-2 text-gray-800 font-medium">
+                                    <div className="flex items-center gap-2">
+                                      <div className={`w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 ${isBanned ? "bg-gray-400 grayscale" : "bg-[#06C755]"}`}>{LINE_ICON}</div>
+                                      <span className="truncate">{acc.account_name ?? "未設定"}</span>
+                                    </div>
+                                  </td>
+                                  <td className="px-4 py-2 text-gray-500 text-xs hidden md:table-cell">{acc.basic_id ? `@${acc.basic_id}` : "—"}</td>
+                                  <td className="px-4 py-2 text-gray-500 text-xs hidden md:table-cell">{acc.role ?? "—"}</td>
+                                  <td className="px-4 py-2">
+                                    {isBanned ? (
+                                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-100 text-red-600">BAN済</span>
+                                    ) : (
+                                      <span className={`text-[10px] px-2 py-0.5 rounded-full ${acc.is_active ? "bg-green-100 text-green-600" : "bg-gray-100 text-gray-400"}`}>
+                                        {acc.is_active ? "有効" : "無効"}
+                                      </span>
+                                    )}
+                                  </td>
+                                  <td className="px-4 py-2 text-right">
+                                    <button
+                                      onClick={() => {
+                                        setSelectedAccount(acc);
+                                        startEdit(acc);
+                                        setShowAddAccount(false); // settings 内の form を直接使う(モーダル不要)
+                                      }}
+                                      className={`text-xs px-3 py-1 rounded-md transition ${isCurrent ? "bg-blue-600 text-white" : "bg-gray-100 text-gray-700 hover:bg-gray-200"}`}
+                                    >
+                                      {isCurrent ? "編集中" : "編集"}
+                                    </button>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      )}
+                    </div>
+                  );
+                })()}
+
                 {/* BAN対策: LIFF中継URL表示(案B 実装、2026-04-30: 案件単位 LIFF ID 対応) */}
                 {project?.code && <LiffRelayCard projectCode={project.code} />}
 
