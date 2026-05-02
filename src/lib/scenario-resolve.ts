@@ -41,14 +41,22 @@ export async function resolveScenarioFromAccount(
  * - scenario_id NULL の account も含めたい場合は呼び出し側で別途処理(現状は対応外)
  * - scenario_id 列なし(Step 02 未適用)→ 空配列 + columnMissing=true
  * - 配下 0 件 → 空配列 + columnMissing=false
+ *
+ * 段階6c1: options.roles で role 絞り込み(リッチメニュー一括 deploy 用途で main+distribute を指定)。
+ * 既存呼出(reminders / labels 等)は roles 未指定で従来通り全件取得(後方互換)。
  */
 export async function resolveAccountIdsFromScenario(
   scenarioId: string,
+  options?: { roles?: ("main" | "distribute" | "standby" | "banned")[] },
 ): Promise<{ account_ids: string[]; columnMissing: boolean }> {
-  const r = await supabase
+  let query = supabase
     .from("line_accounts")
     .select("id")
     .eq("scenario_id", scenarioId);
+  if (options?.roles && options.roles.length > 0) {
+    query = query.in("role", options.roles);
+  }
+  const r = await query;
   if (r.error) {
     if (/scenario_id/i.test(r.error.message)) {
       return { account_ids: [], columnMissing: true };
