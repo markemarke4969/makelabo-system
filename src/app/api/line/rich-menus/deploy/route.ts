@@ -146,7 +146,10 @@ interface DeployDetail {
   account_id: string;
   account_name: string | null;
   status: "success" | "failed";
-  stage: number; // 0=token / 1=create / 2=upload / 3=success
+  // stage = 終端ステップ番号(0=token / 1=create / 2=upload / 3=setDefault または全完了)
+  // 段階7-B3:stage=3 + status=failed → setDefault 失敗(従来は握りつぶされ status=success だった)
+  // stage=3 + status=success → 全完了(従来挙動、legacy record 互換)
+  stage: number;
   line_rich_menu_id?: string;
   deployed_at?: string;
   error?: string;
@@ -236,14 +239,39 @@ async function deployToOneAccount(
     };
   }
 
-  // 5. デフォルト設定(失敗は無視、status は success)
+  // 5. デフォルト設定
   // 段階6c1b 修正: scenario 代表 menu(menu.scenario_id NOT NULL)は配下 follower 共通の代表という設計思想 = 常に default 扱い。
   // legacy(account 単位)は menu.is_default=true の時のみ default(後方互換維持、複数 menu 切替運用が残せるように)。
+  // 段階7-B3:従来は .catch 握りつぶしで失敗を隠蔽していたが、deploy_status に正しく失敗を記録するよう
+  // 変更(BAN 対応の信頼性確保)。L242 の if 条件(段階6c1b 追補の強制実行ロジック)は不変。
   if (menu.is_default || menu.scenario_id) {
-    await fetch(`https://api.line.me/v2/bot/user/all/richmenu/${richMenuId}`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}` },
-    }).catch((e) => console.error("set default failed:", e));
+    try {
+      const setDefaultRes = await fetch(`https://api.line.me/v2/bot/user/all/richmenu/${richMenuId}`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!setDefaultRes.ok) {
+        const errBody = await setDefaultRes.text().catch(() => "");
+        return {
+          account_id: accountId,
+          account_name: accountName,
+          status: "failed",
+          stage: 3,
+          line_rich_menu_id: richMenuId,
+          error: `setDefault 失敗: ${errBody.slice(0, 200)}`,
+          http_status: setDefaultRes.status,
+        };
+      }
+    } catch (e) {
+      return {
+        account_id: accountId,
+        account_name: accountName,
+        status: "failed",
+        stage: 3,
+        line_rich_menu_id: richMenuId,
+        error: `setDefault 例外: ${(e as Error).message}`,
+      };
+    }
   }
 
   return {

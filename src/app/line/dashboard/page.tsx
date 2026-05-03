@@ -604,7 +604,9 @@ export default function LineDashboard() {
     account_id: string;
     account_name: string | null;
     status: "success" | "failed";
-    stage: number; // 0=token / 1=create / 2=upload / 3=success
+    // stage = 終端ステップ番号(0=token / 1=create / 2=upload / 3=setDefault または全完了)
+    // 段階7-B3:stage=3 + status=failed → setDefault 失敗、stage=3 + status=success → 全完了
+    stage: number;
     line_rich_menu_id?: string;
     deployed_at?: string;
     error?: string;
