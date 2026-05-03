@@ -1133,21 +1133,32 @@ export default function LineDashboard() {
     } catch { /* */ }
   }, [selectedAccount?.id]);
 
-  // 流入経路一覧取得（案件単位）
+  // 流入経路一覧取得(scenario 単位 または 案件単位)
+  // 段階7-C1: scenario 単位移行に伴い scenario_id 経路を追加(commit 3)
+  // - useScenario=true: scenario_id クエリで /api/line/inflow-routes を呼び、scenario 配下 routes を取得
+  // - useScenario=false(NULL_SCENARIO_KEY または scenario 未選択): 従来通り project_id ベース(後方互換)
+  // - キャッシュ回避クエリ &_t=Date.now() は両経路で維持
+  // 参考実装:fetchLabels(L1195 周辺)などと同じ useScenario 判定パターン
   const fetchInflowRoutes = useCallback(async () => {
-    if (!project?.id) {
+    const useScenario = selectedScenarioId && selectedScenarioId !== NULL_SCENARIO_KEY;
+    if (!useScenario && !project?.id) {
       setInflowRoutes([]);
       return;
     }
     try {
       // キャッシュを回避して確実に最新を取得
-      const res = await fetch(
-        `/api/line/inflow-routes?project_id=${project.id}&_t=${Date.now()}`,
-        { cache: "no-store" },
-      );
+      const url = useScenario
+        ? `/api/line/inflow-routes?scenario_id=${selectedScenarioId}&_t=${Date.now()}`
+        : `/api/line/inflow-routes?project_id=${project!.id}&_t=${Date.now()}`;
+      const res = await fetch(url, { cache: "no-store" });
       if (res.ok) {
         const json = (await res.json()) as InflowRoute[];
-        console.log("[fetchInflowRoutes] got", json.length, "routes for project", project.id);
+        console.log(
+          "[fetchInflowRoutes] got",
+          json.length,
+          useScenario ? "routes for scenario" : "routes for project",
+          useScenario ? selectedScenarioId : project!.id,
+        );
         setInflowRoutes(json);
         setInflowRoutesLastFetched(new Date());
       } else {
@@ -1158,7 +1169,7 @@ export default function LineDashboard() {
     } catch (e) {
       console.error("[fetchInflowRoutes] network error", e);
     }
-  }, [project?.id]);
+  }, [project?.id, selectedScenarioId]);
 
   // 流入経路グループ一覧取得
   const fetchInflowGroups = useCallback(async () => {

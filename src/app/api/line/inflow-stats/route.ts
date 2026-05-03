@@ -1,29 +1,75 @@
 import { NextRequest } from "next/server";
 import { supabase, supabaseAdmin } from "@/lib/supabase";
+import { resolveAccountIdsFromScenario } from "@/lib/scenario-resolve";
 
 export const dynamic = "force-dynamic";
 
 // GET /api/line/inflow-stats?account_id=...&days=30
+//   または ?project_id=... / ?scenario_id=...
 // Response:
 // {
 //   routes: [{ id, name, code, is_active, total_clicks }],
 //   daily: [{ date: "2026-04-01", total: 12, by_route: { [route_id]: 3 } }]
 // }
+//
+// 段階7-C1: scenario_id クエリ受付追加(commit 1 inflow-routes と同パターン)
+//   - routeQuery 部分のみ修正、後段の click/registered/daily 集計は route_id ベースで自動連動
+//   - 過渡期 OR 句:scenario_id 直 hit + scenario_id NULL かつ配下 account_id IN
+//   - 孤児ルート(scenario_id NULL かつ account_id NULL)は非表示(判断 A=(b) 過渡期許容)
 export async function GET(request: NextRequest) {
   const projectId = request.nextUrl.searchParams.get("project_id");
   const accountId = request.nextUrl.searchParams.get("account_id"); // 後方互換
+  const scenarioId = request.nextUrl.searchParams.get("scenario_id");
   const daysParam = request.nextUrl.searchParams.get("days");
   const days = Math.max(1, Math.min(365, Number(daysParam ?? "30") || 30));
 
-  // 1. 流入経路一覧を取得
+  // クエリ何も指定がない場合は 400(commit 1 と整合)
+  if (!projectId && !accountId && !scenarioId) {
+    return Response.json(
+      { error: "project_id, account_id, or scenario_id is required" },
+      { status: 400 },
+    );
+  }
+
+  // 1. 流入経路一覧を取得(scope 解決 = scenario_id / account_id / project_id のいずれか)
   let routeQuery = supabase
     .from("line_inflow_routes")
     .select("id, account_id, project_id, name, code, is_active, created_at")
     .order("created_at", { ascending: false });
-  if (projectId) routeQuery = routeQuery.eq("project_id", projectId);
-  else if (accountId) routeQuery = routeQuery.eq("account_id", accountId);
+  if (accountId) {
+    // accountId 優先(scenarioId 同時指定でも accountId 単独として扱う、判断 D)
+    routeQuery = routeQuery.eq("account_id", accountId);
+  } else if (scenarioId) {
+    const resolved = await resolveAccountIdsFromScenario(scenarioId);
+    if (resolved.account_ids.length === 0) {
+      routeQuery = routeQuery.eq("scenario_id", scenarioId);
+    } else {
+      const idsList = resolved.account_ids.map((id) => `"${id}"`).join(",");
+      routeQuery = routeQuery.or(
+        `scenario_id.eq.${scenarioId},and(scenario_id.is.null,account_id.in.(${idsList}))`,
+      );
+    }
+  } else if (projectId) {
+    routeQuery = routeQuery.eq("project_id", projectId);
+  }
 
-  const { data: routes, error: routesErr } = await routeQuery;
+  let { data: routes, error: routesErr } = await routeQuery;
+
+  // 段階5-step02 未適用環境 fallback(本番では発火しない想定):scenario_id 列なしエラー → IN 句集約に切替
+  if (routesErr && scenarioId && !accountId && /scenario_id/i.test(routesErr.message)) {
+    const resolved = await resolveAccountIdsFromScenario(scenarioId);
+    if (resolved.account_ids.length === 0) {
+      return Response.json({ routes: [], daily: [] });
+    }
+    const fb = await supabase
+      .from("line_inflow_routes")
+      .select("id, account_id, project_id, name, code, is_active, created_at")
+      .in("account_id", resolved.account_ids)
+      .order("created_at", { ascending: false });
+    routes = fb.data;
+    routesErr = fb.error;
+  }
+
   if (routesErr) {
     return Response.json({ error: routesErr.message }, { status: 500 });
   }
