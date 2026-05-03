@@ -1066,31 +1066,22 @@ export default function LineDashboard() {
     } catch { /* */ }
   }, [selectedAccount?.id, selectedScenarioId]);
 
-  // 段階6c1b: scenario 経由は「scenario 代表 menu(line_account_id IS NULL)」を 1 件取得 +
-  // 配下 account の legacy menu(scenario_id IS NULL)を Promise.all で取得して fallback 表示。
-  // ケース B 対応(C-1a API は scenario_id eq のみ → legacy fetch を別途必要)。
-  // hybrid menu(scenario_id + line_account_id 両方持つ)は段階6 では UI 非表示(段階7 持ち越し)。
+  // 段階7-B1: scenario 経由は OR 句直 hit API で 1 リクエスト化(N+1 解消)。
+  // GET /api/line/rich-menus?scenario_id=X が
+  //   - scenario 代表 menu(scenario_id eq、line_account_id IS NULL)
+  //   - 配下 account の legacy fallback(scenario_id IS NULL かつ line_account_id IN 配下)
+  // を 1 クエリで返すため、UI 側はフラットな配列を line_account_id IS NULL かどうかで分岐。
+  // hybrid menu(scenario_id + line_account_id 両方持つ)は段階7-B2 持ち越し。
   const fetchRichMenus = useCallback(async () => {
     const useScenario = selectedScenarioId && selectedScenarioId !== NULL_SCENARIO_KEY;
     if (useScenario) {
       try {
-        // 1. scenario 代表 menu 取得
-        const sRes = await fetch(`/api/line/rich-menus?scenario_id=${selectedScenarioId}`);
-        const sData = (sRes.ok ? await sRes.json() : []) as RichMenu[];
-        const rep = sData.find((m) => m.line_account_id === null) ?? null;
+        const res = await fetch(`/api/line/rich-menus?scenario_id=${selectedScenarioId}`);
+        const data = (res.ok ? await res.json() : []) as RichMenu[];
+        const rep = data.find((m) => m.line_account_id === null) ?? null;
+        // legacy fallback は scenario_id NULL のレコード(hybrid 重複除去のため)
+        const legacyMenus = data.filter((m) => !m.scenario_id);
         setScenarioRichMenu(rep);
-
-        // 2. legacy fallback:配下 account の scenario_id NULL の旧 menu を Promise.all で取得
-        const scopedAccounts = accounts.filter((a) => a.scenario_id === selectedScenarioId);
-        const legacyResults = await Promise.all(
-          scopedAccounts.map((a) =>
-            fetch(`/api/line/rich-menus?account_id=${a.id}`)
-              .then((r) => (r.ok ? (r.json() as Promise<RichMenu[]>) : Promise.resolve([] as RichMenu[])))
-              .catch(() => [] as RichMenu[]),
-          ),
-        );
-        // hybrid 重複除去のため scenario_id NULL のレコードのみを legacy 扱い
-        const legacyMenus = legacyResults.flat().filter((m) => !m.scenario_id);
         setRichMenus(legacyMenus);
       } catch {
         setScenarioRichMenu(null);
@@ -1107,7 +1098,7 @@ export default function LineDashboard() {
       setScenarioRichMenu(null);
       setRichMenus([]);
     }
-  }, [selectedAccount?.id, selectedScenarioId, accounts]);
+  }, [selectedAccount?.id, selectedScenarioId]);
 
   const fetchReengagements = useCallback(async () => {
     // 段階6b2: scenario 選択時は scenario_id 直渡し(配下 IN 句集約)。
@@ -6427,14 +6418,20 @@ export default function LineDashboard() {
                         </p>
                       </div>
                     ) : (
-                      <div className="flex items-end gap-4">
+                      // 段階7-B1: legacy 経路の checkbox 文言を候補 B(警告強め)に改善。
+                      // 段階6 で is_default チェック忘れによる「メニューエリアごと表示されない」事故が
+                      // 発生したため、is_default は【必須】+ 赤字で再発防止。
+                      <div className="flex flex-col gap-2">
                         <label className="flex items-center gap-1.5 cursor-pointer">
                           <input type="checkbox" checked={richMenuForm.selected} onChange={(e) => setRichMenuForm({ ...richMenuForm, selected: e.target.checked })} className="accent-[#06C755]" />
-                          <span className="text-sm">初期表示する</span>
+                          <span className="text-sm">友達追加時にメニューを開いた状態にする</span>
                         </label>
-                        <label className="flex items-center gap-1.5 cursor-pointer">
-                          <input type="checkbox" checked={richMenuForm.is_default} onChange={(e) => setRichMenuForm({ ...richMenuForm, is_default: e.target.checked })} className="accent-[#06C755]" />
-                          <span className="text-sm">デフォルトに設定</span>
+                        <label className="flex items-start gap-1.5 cursor-pointer">
+                          <input type="checkbox" checked={richMenuForm.is_default} onChange={(e) => setRichMenuForm({ ...richMenuForm, is_default: e.target.checked })} className="accent-[#06C755] mt-0.5" />
+                          <span className="text-sm leading-snug">
+                            友達のトーク画面にメニューを表示する
+                            <span className="ml-1 text-red-600 font-bold">【必須】チェックなしだと表示されません</span>
+                          </span>
                         </label>
                       </div>
                     )}

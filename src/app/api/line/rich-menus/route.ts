@@ -1,13 +1,17 @@
 import { NextRequest } from "next/server";
 import { supabase } from "@/lib/supabase";
+import { resolveAccountIdsFromScenario } from "@/lib/scenario-resolve";
 
 // ============================================================
 // 段階6c1a: scenario_id 対応(代表リッチメニュー = scenario 単位の 1 menu 管理)
-// - GET ?scenario_id=X: scenario 代表 menu を返す(line_account_id IS NULL)
+// - GET ?scenario_id=X: scenario 代表 menu + 配下 account の legacy fallback を 1 リクエストで返す
 // - POST { scenario_id, name, ... }: scenario 代表 menu を作成
 // - PUT: patch リストに scenario_id を将来用フックとして追加(NULL 許容)
 // - DELETE: scenario 代表 menu の場合、deploy_status.details[] の各 account の
 //   line_rich_menu_id を順次 LINE API DELETE してから DB 削除(失敗してもスキップ)
+//
+// 段階7-B1: GET を 7-A2 と同じ OR 句構文に統一(N+1 解消)
+//   注: rich-menus は他 9 ルートと違って account 列が `line_account_id`(他は `account_id`)
 // ============================================================
 
 interface DeployDetail {
@@ -24,16 +28,26 @@ export async function GET(request: NextRequest) {
     return Response.json({ error: "account_id or scenario_id is required" }, { status: 400 });
   }
 
+  // 段階7-B1: 案 Y(過渡期ハイブリッド)直 hit + legacy fallback を 1 クエリで返す
+  // - scenario_id 直 hit(代表 menu = line_account_id NULL で scenario_id を持つ row)
+  // - OR 句で「scenario_id NULL かつ line_account_id IN 句」も拾う(配下 account の legacy menu)
+  // - カラム名は line_account_id(rich-menus 固有、他 9 ルートの account_id とは命名違い)
   let query = supabase
     .from("line_rich_menus")
     .select("*")
     .order("created_at", { ascending: false });
-  if (scenarioId) {
-    // scenario 代表 menu(line_account_id 不問。代表 menu は line_account_id NULL で作成されるが、
-    // 旧 hybrid データも scenario_id でヒット可能にする)
-    query = query.eq("scenario_id", scenarioId);
+  if (scenarioId && !accountId) {
+    const resolved = await resolveAccountIdsFromScenario(scenarioId);
+    if (resolved.account_ids.length === 0) {
+      query = query.eq("scenario_id", scenarioId);
+    } else {
+      const idsList = resolved.account_ids.map((id) => `"${id}"`).join(",");
+      query = query.or(
+        `scenario_id.eq.${scenarioId},and(scenario_id.is.null,line_account_id.in.(${idsList}))`,
+      );
+    }
   } else if (accountId) {
-    // 後方互換: account 単位の旧 menu(scenario_id NULL の場合も含む)
+    // 後方互換: account 単位の旧 menu
     query = query.eq("line_account_id", accountId);
   }
 
