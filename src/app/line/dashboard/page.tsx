@@ -1,10 +1,7 @@
 "use client";
 
-import { useEffect, useState, useRef, useCallback, Suspense } from "react";
-import { useRouter, useSearchParams, usePathname } from "next/navigation";
-
-// 段階7-D1: UUID 形式 validation(invalid scenario / project クエリ対処、判断 D1-5 / D1-7)
-const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+import { useEffect, useState, useRef, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase-browser";
 import {
   DeliveryCondition,
@@ -437,12 +434,8 @@ function LiffRelayCard({ projectCode }: { projectCode: string }) {
 // ============================================================
 // メイン
 // ============================================================
-// 段階7-D1: useSearchParams 利用のため Suspense 境界が必要(Next.js 公式仕様)
-// 末尾の DashboardPage(default export)が Suspense wrap、本体は DashboardPageInner に rename。
-function DashboardPageInner() {
+export default function LineDashboard() {
   const router = useRouter();
-  const searchParams = useSearchParams();
-  const pathname = usePathname();
 
   // 案件情報
   const [project, setProject] = useState<{ id: string; name: string; color: string; code: string | null } | null>(null);
@@ -454,37 +447,16 @@ function DashboardPageInner() {
   const [closerUsers, setCloserUsers] = useState<Array<{ id: string; name: string | null; closer_name: string | null }>>([]);
 
   // 案件チェック + ユーザー情報取得
-  // 段階7-D1: URL → state 同期(判断 D1-2 / D1-3 / D1-5)
-  // - URL に ?project=<UUID> あれば、sessionStorage の project.id と一致する場合のみ採用
-  // - URL の project が sessionStorage と不一致 or invalid UUID → projects 画面リダイレクト
-  // - URL に project クエリなし → 既存 sessionStorage 復元(後方互換、判断 D1-6)
   useEffect(() => {
     const stored = sessionStorage.getItem("line_project");
-    const urlProject = searchParams.get("project");
-
     if (!stored) {
       router.push("/line/projects");
       return;
     }
-    let parsed: { id: string; name: string; color: string; code: string | null } | null = null;
     try {
-      parsed = JSON.parse(stored);
-    } catch {
-      router.push("/line/projects");
-      return;
-    }
-    // URL に project クエリがあれば検証
-    if (urlProject !== null) {
-      if (!UUID_REGEX.test(urlProject) || urlProject !== parsed?.id) {
-        // invalid UUID or sessionStorage の project と不一致 → projects 画面リダイレクト
-        router.push("/line/projects");
-        return;
-      }
-    }
-    if (parsed) {
-      setProject(parsed);
+      setProject(JSON.parse(stored));
       setAuthChecked(true);
-    } else {
+    } catch {
       router.push("/line/projects");
       return;
     }
@@ -1987,45 +1959,12 @@ function DashboardPageInner() {
   // - 復元成立時は mainView="scenario-detail" + 配下主 account を selectedAccount に同期
   //   (accounts ロード前ならスキップ、ユーザー操作時に解決される。許容)
   // - accountSubView も併せて復元(chat 表示中リロード → chat に復帰)
-  // 段階7-D1 commit 1(判断 D1-1 / D1-3 / D1-5 / D1-6):
-  // - URL `?scenario=<UUID|unset>` 優先(URL > sessionStorage > null)
-  // - URL の `scenario=unset` → NULL_SCENARIO_KEY(「シナリオ未設定」バケツ)
-  // - URL の `scenario=<UUID>` が invalid(UUID 形式違反 or 該当 scenario が project 外)
-  //   → silently NULL に倒す(state 設定せず終了、URL クリーン化は commit 2 の state→URL useEffect)
-  // - URL に scenario クエリなし → 既存 sessionStorage 復元(後方互換)
   const restoreCompletedRef = useRef(false);
   useEffect(() => {
     if (typeof window === "undefined") return;
     if (scenarios.length === 0) return;
     if (restoreCompletedRef.current) return;
 
-    const urlScenario = searchParams.get("scenario");
-    if (urlScenario !== null) {
-      // 段階7-D1: URL 優先パス
-      if (urlScenario === "unset") {
-        setSelectedScenarioId(NULL_SCENARIO_KEY);
-        setMainView("scenario-detail");
-        const main = resolveMainAccountForScenario(accounts, NULL_SCENARIO_KEY);
-        if (main) setSelectedAccount(accounts.find((a) => a.id === main.id) ?? null);
-      } else if (UUID_REGEX.test(urlScenario)) {
-        const found = scenarios.find((s) => s.id === urlScenario);
-        const valid = found && (!project?.id || found.project_id === project.id);
-        if (valid) {
-          setSelectedScenarioId(urlScenario);
-          setMainView("scenario-detail");
-          const main = resolveMainAccountForScenario(accounts, urlScenario);
-          if (main) setSelectedAccount(accounts.find((a) => a.id === main.id) ?? null);
-        }
-        // invalid scenario(project 外 等) → silently NULL に倒す(state 不変、URL クリーンは commit 2)
-      }
-      // invalid 形式(UUID でも unset でもない placeholder 等) → silently NULL 維持
-      const storedSub = sessionStorage.getItem("line_account_sub_view");
-      if (storedSub) setAccountSubView(storedSub as AccountSubView);
-      restoreCompletedRef.current = true;
-      return;
-    }
-
-    // 段階7-D1:URL に scenario クエリなし → 既存 sessionStorage 復元(後方互換)
     const stored = sessionStorage.getItem("line_scenario_id");
     if (stored) {
       if (stored === NULL_SCENARIO_KEY) {
@@ -2049,7 +1988,7 @@ function DashboardPageInner() {
       if (storedSub) setAccountSubView(storedSub as AccountSubView);
     }
     restoreCompletedRef.current = true;
-  }, [scenarios, project?.id, accounts, searchParams]);
+  }, [scenarios, project?.id, accounts]);
 
   // 段階6a: selectedScenarioId 変更を sessionStorage に永続化。null は削除。
   // 復元完了前(restoreCompletedRef=false)は触らない(初回 mount で sessionStorage を消すバグ防止)。
@@ -2071,95 +2010,6 @@ function DashboardPageInner() {
       sessionStorage.setItem("line_account_sub_view", accountSubView);
     }
   }, [accountSubView, mainView]);
-
-  // 段階7-D1 commit 2: state → URL 同期(判断 D1-3 / D1-4)
-  // - selectedScenarioId / project?.id 変更 → router.replace で URL クエリ反映
-  // - 「シナリオ未設定」(NULL_SCENARIO_KEY)→ scenario=unset(D1-1)
-  // - selectedScenarioId === null → URL から scenario クエリ削除
-  // - ping-pong ループ防止:現 URL と target が一致なら router.replace 呼ばない
-  // - restoreCompletedRef で初回復元前は触らない(初回マウント時 URL → state の方を優先)
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    if (!restoreCompletedRef.current) return;
-
-    const params = new URLSearchParams(searchParams.toString());
-    let changed = false;
-
-    // scenario
-    const currentUrlScenario = params.get("scenario");
-    const targetScenario =
-      selectedScenarioId === null
-        ? null
-        : selectedScenarioId === NULL_SCENARIO_KEY
-          ? "unset"
-          : selectedScenarioId;
-    if (targetScenario === null && currentUrlScenario !== null) {
-      params.delete("scenario");
-      changed = true;
-    } else if (targetScenario !== null && currentUrlScenario !== targetScenario) {
-      params.set("scenario", targetScenario);
-      changed = true;
-    }
-
-    // project
-    const currentUrlProject = params.get("project");
-    const targetProject = project?.id ?? null;
-    if (targetProject === null && currentUrlProject !== null) {
-      params.delete("project");
-      changed = true;
-    } else if (targetProject !== null && currentUrlProject !== targetProject) {
-      params.set("project", targetProject);
-      changed = true;
-    }
-
-    if (changed) {
-      const queryString = params.toString();
-      router.replace(queryString ? `${pathname}?${queryString}` : pathname);
-    }
-  }, [selectedScenarioId, project?.id, pathname, router, searchParams]);
-
-  // 段階7-D1 commit 2: URL 変更検知 → state 同期(ブラウザ戻る/進む対応)
-  // - 初回復元(restoreCompletedRef ガード付き useEffect)以降に URL が変わった場合
-  //   (戻る/進む / 別 tab 同期 / 直接 URL 入力)、state を URL に合わせる
-  // - ping-pong 防止:URL の値 === 現 state なら何もしない
-  // - state → URL useEffect とは独立、双方向同期が成立
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    if (!restoreCompletedRef.current) return;
-    if (scenarios.length === 0) return;
-
-    const urlScenario = searchParams.get("scenario");
-
-    // ping-pong 防止:URL と state が同じなら何もしない
-    const currentScenarioInUrlForm =
-      selectedScenarioId === null
-        ? null
-        : selectedScenarioId === NULL_SCENARIO_KEY
-          ? "unset"
-          : selectedScenarioId;
-    if (urlScenario === currentScenarioInUrlForm) return;
-
-    // URL → state 同期
-    if (urlScenario === null) {
-      setSelectedScenarioId(null);
-    } else if (urlScenario === "unset") {
-      setSelectedScenarioId(NULL_SCENARIO_KEY);
-      setMainView("scenario-detail");
-      const main = resolveMainAccountForScenario(accounts, NULL_SCENARIO_KEY);
-      if (main) setSelectedAccount(accounts.find((a) => a.id === main.id) ?? null);
-    } else if (UUID_REGEX.test(urlScenario)) {
-      const found = scenarios.find((s) => s.id === urlScenario);
-      const valid = found && (!project?.id || found.project_id === project.id);
-      if (valid) {
-        setSelectedScenarioId(urlScenario);
-        setMainView("scenario-detail");
-        const main = resolveMainAccountForScenario(accounts, urlScenario);
-        if (main) setSelectedAccount(accounts.find((a) => a.id === main.id) ?? null);
-      }
-      // invalid scenario(project 外)→ state 不変、URL クリーンは state→URL useEffect が拾う
-    }
-    // invalid 形式(UUID でも unset でもない placeholder 等) → state 不変
-  }, [searchParams, scenarios, project?.id, accounts, selectedScenarioId]);
 
   useEffect(() => {
     if (selectedAccount) {
@@ -10321,16 +10171,5 @@ function DashboardPageInner() {
       {/* 通知音用audio要素 */}
       <audio ref={audioRef} src="/sounds/notification.wav" preload="auto" />
     </div>
-  );
-}
-
-// 段階7-D1: Suspense wrap export(D1-10 案 b)
-// useSearchParams は Next.js 公式仕様で Suspense 境界必須(production build 失敗回避)。
-// fallback は null(初回マウント中のチラつき許容、判断 D1-10)。
-export default function DashboardPage() {
-  return (
-    <Suspense fallback={null}>
-      <DashboardPageInner />
-    </Suspense>
   );
 }

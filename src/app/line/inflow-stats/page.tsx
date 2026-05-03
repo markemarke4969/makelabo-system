@@ -1,11 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, Suspense } from "react";
-import { useRouter, useSearchParams, usePathname } from "next/navigation";
-
-// 段階7-D1: UUID 形式 validation(invalid project クエリ対処、判断 D1-5/D1-7)
-// dashboard.tsx と同パターン(共通化は本 PR scope 外、申し送り検討項目)
-const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 
 interface Project {
   id: string;
@@ -37,12 +33,8 @@ const RANGE_OPTIONS = [
   { value: 90, label: "90日間" },
 ];
 
-// 段階7-D1: useSearchParams 利用のため Suspense 境界が必要(Next.js 公式仕様)
-// 末尾の InflowStatsPage(default export)が Suspense wrap、本体は InflowStatsPageInner に rename。
-function InflowStatsPageInner() {
+export default function InflowStatsPage() {
   const router = useRouter();
-  const searchParams = useSearchParams();
-  const pathname = usePathname();
   const [project, setProject] = useState<Project | null>(null);
   const [days, setDays] = useState(30);
   const [routes, setRoutes] = useState<RouteStat[]>([]);
@@ -50,106 +42,20 @@ function InflowStatsPageInner() {
   const [registeredDaily, setRegisteredDaily] = useState<DailyStat[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const restoreCompletedRef = useRef(false);
 
   // sessionStorage から案件を取得
-  // 段階7-D1 commit 3:URL 優先(判断 D1-3 / D1-7、dashboard と同パターン)
-  // - URL `?project=<UUID>`(または既存形式 `?project_id=<UUID>` も後方互換で受付)
-  // - invalid UUID(中括弧 placeholder 等)→ projects 画面リダイレクト(7-C1 §7-3 真因解消)
-  // - URL の project が sessionStorage の project.id と不一致 → projects リダイレクト
-  // - URL クエリなし → 既存 sessionStorage 復元(後方互換、D1-6)
   useEffect(() => {
-    if (restoreCompletedRef.current) return;
-    const stored = sessionStorage.getItem("line_project");
-    const urlProject = searchParams.get("project") ?? searchParams.get("project_id");
-
-    if (!stored) {
-      router.push("/line/projects");
-      return;
-    }
-    let parsed: Project | null = null;
-    try {
-      parsed = JSON.parse(stored);
-    } catch {
-      router.push("/line/projects");
-      return;
-    }
-    if (urlProject !== null) {
-      // URL に project クエリあり、UUID 形式 + sessionStorage 一致を validation
-      if (!UUID_REGEX.test(urlProject) || urlProject !== parsed?.id) {
-        router.push("/line/projects");
-        return;
-      }
-    }
-    if (parsed) {
-      setProject(parsed);
-      restoreCompletedRef.current = true;
-    } else {
-      router.push("/line/projects");
-    }
-  }, [router, searchParams]);
-
-  // 段階7-D1 commit 3: state → URL 同期(将来 inflow-stats 内で project 切替を持つ場合に備える足場)
-  // - project?.id 変更 → router.replace で URL クエリ反映
-  // - ping-pong 防止:現 URL と target が一致なら router.replace 呼ばない
-  // - restoreCompletedRef ガード(初回復元前は触らない)
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    if (!restoreCompletedRef.current) return;
-    const params = new URLSearchParams(searchParams.toString());
-    let changed = false;
-    const currentUrlProject = params.get("project") ?? params.get("project_id");
-    const targetProject = project?.id ?? null;
-    if (targetProject === null && currentUrlProject !== null) {
-      params.delete("project");
-      params.delete("project_id");
-      changed = true;
-    } else if (targetProject !== null && currentUrlProject !== targetProject) {
-      // 新仕様 `project` キーで書き戻し、旧 `project_id` は削除して統一
-      params.delete("project_id");
-      params.set("project", targetProject);
-      changed = true;
-    }
-    if (changed) {
-      const queryString = params.toString();
-      router.replace(queryString ? `${pathname}?${queryString}` : pathname);
-    }
-  }, [project?.id, pathname, router, searchParams]);
-
-  // 段階7-D1 commit 3: URL 変更検知 → state 同期(ブラウザ戻る/進む対応)
-  // - ping-pong 防止:URL の project === 現 project?.id なら return
-  // - 現状 inflow-stats は project 切替 UI を持たないが、将来や URL 直接操作で URL が変わった時に sessionStorage 検証して整合
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    if (!restoreCompletedRef.current) return;
-    const urlProject = searchParams.get("project") ?? searchParams.get("project_id");
-    if (urlProject === (project?.id ?? null)) return;
-    if (urlProject === null) {
-      // URL から project クエリが消えた(state は維持、URL 同期は state→URL useEffect が次回再書き)
-      return;
-    }
-    // URL に新たな project クエリが現れた(別 project の URL を直接開いた等)
-    if (!UUID_REGEX.test(urlProject)) {
-      router.push("/line/projects");
-      return;
-    }
     const stored = sessionStorage.getItem("line_project");
     if (!stored) {
       router.push("/line/projects");
       return;
     }
     try {
-      const parsed: Project = JSON.parse(stored);
-      if (parsed.id !== urlProject) {
-        // sessionStorage と不一致 → projects リダイレクト(別 project URL の直接開きへの整合)
-        router.push("/line/projects");
-        return;
-      }
-      setProject(parsed);
+      setProject(JSON.parse(stored));
     } catch {
       router.push("/line/projects");
     }
-  }, [searchParams, project?.id, router]);
+  }, [router]);
 
   const fetchStats = useCallback(async () => {
     if (!project?.id) return;
@@ -474,14 +380,5 @@ function StatCard({ label, value, unit }: { label: string; value: string; unit: 
         <span className="text-xs text-white/40">{unit}</span>
       </div>
     </div>
-  );
-}
-
-// 段階7-D1: Suspense wrap export(D1-10 案 b、dashboard と同パターン)
-export default function InflowStatsPage() {
-  return (
-    <Suspense fallback={null}>
-      <InflowStatsPageInner />
-    </Suspense>
   );
 }
