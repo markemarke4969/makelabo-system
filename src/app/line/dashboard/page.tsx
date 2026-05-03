@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useRef, useCallback, Suspense } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams, usePathname } from "next/navigation";
 
 // 段階7-D1: UUID 形式 validation(invalid scenario / project クエリ対処、判断 D1-5 / D1-7)
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -442,6 +442,7 @@ function LiffRelayCard({ projectCode }: { projectCode: string }) {
 function DashboardPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const pathname = usePathname();
 
   // 案件情報
   const [project, setProject] = useState<{ id: string; name: string; color: string; code: string | null } | null>(null);
@@ -2070,6 +2071,95 @@ function DashboardPageInner() {
       sessionStorage.setItem("line_account_sub_view", accountSubView);
     }
   }, [accountSubView, mainView]);
+
+  // 段階7-D1 commit 2: state → URL 同期(判断 D1-3 / D1-4)
+  // - selectedScenarioId / project?.id 変更 → router.replace で URL クエリ反映
+  // - 「シナリオ未設定」(NULL_SCENARIO_KEY)→ scenario=unset(D1-1)
+  // - selectedScenarioId === null → URL から scenario クエリ削除
+  // - ping-pong ループ防止:現 URL と target が一致なら router.replace 呼ばない
+  // - restoreCompletedRef で初回復元前は触らない(初回マウント時 URL → state の方を優先)
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!restoreCompletedRef.current) return;
+
+    const params = new URLSearchParams(searchParams.toString());
+    let changed = false;
+
+    // scenario
+    const currentUrlScenario = params.get("scenario");
+    const targetScenario =
+      selectedScenarioId === null
+        ? null
+        : selectedScenarioId === NULL_SCENARIO_KEY
+          ? "unset"
+          : selectedScenarioId;
+    if (targetScenario === null && currentUrlScenario !== null) {
+      params.delete("scenario");
+      changed = true;
+    } else if (targetScenario !== null && currentUrlScenario !== targetScenario) {
+      params.set("scenario", targetScenario);
+      changed = true;
+    }
+
+    // project
+    const currentUrlProject = params.get("project");
+    const targetProject = project?.id ?? null;
+    if (targetProject === null && currentUrlProject !== null) {
+      params.delete("project");
+      changed = true;
+    } else if (targetProject !== null && currentUrlProject !== targetProject) {
+      params.set("project", targetProject);
+      changed = true;
+    }
+
+    if (changed) {
+      const queryString = params.toString();
+      router.replace(queryString ? `${pathname}?${queryString}` : pathname);
+    }
+  }, [selectedScenarioId, project?.id, pathname, router, searchParams]);
+
+  // 段階7-D1 commit 2: URL 変更検知 → state 同期(ブラウザ戻る/進む対応)
+  // - 初回復元(restoreCompletedRef ガード付き useEffect)以降に URL が変わった場合
+  //   (戻る/進む / 別 tab 同期 / 直接 URL 入力)、state を URL に合わせる
+  // - ping-pong 防止:URL の値 === 現 state なら何もしない
+  // - state → URL useEffect とは独立、双方向同期が成立
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!restoreCompletedRef.current) return;
+    if (scenarios.length === 0) return;
+
+    const urlScenario = searchParams.get("scenario");
+
+    // ping-pong 防止:URL と state が同じなら何もしない
+    const currentScenarioInUrlForm =
+      selectedScenarioId === null
+        ? null
+        : selectedScenarioId === NULL_SCENARIO_KEY
+          ? "unset"
+          : selectedScenarioId;
+    if (urlScenario === currentScenarioInUrlForm) return;
+
+    // URL → state 同期
+    if (urlScenario === null) {
+      setSelectedScenarioId(null);
+    } else if (urlScenario === "unset") {
+      setSelectedScenarioId(NULL_SCENARIO_KEY);
+      setMainView("scenario-detail");
+      const main = resolveMainAccountForScenario(accounts, NULL_SCENARIO_KEY);
+      if (main) setSelectedAccount(accounts.find((a) => a.id === main.id) ?? null);
+    } else if (UUID_REGEX.test(urlScenario)) {
+      const found = scenarios.find((s) => s.id === urlScenario);
+      const valid = found && (!project?.id || found.project_id === project.id);
+      if (valid) {
+        setSelectedScenarioId(urlScenario);
+        setMainView("scenario-detail");
+        const main = resolveMainAccountForScenario(accounts, urlScenario);
+        if (main) setSelectedAccount(accounts.find((a) => a.id === main.id) ?? null);
+      }
+      // invalid scenario(project 外)→ state 不変、URL クリーンは state→URL useEffect が拾う
+    }
+    // invalid 形式(UUID でも unset でもない placeholder 等) → state 不変
+  }, [searchParams, scenarios, project?.id, accounts, selectedScenarioId]);
 
   useEffect(() => {
     if (selectedAccount) {
