@@ -477,11 +477,20 @@ async function deployToScenarioAccounts(
         },
   );
 
-  // 6. retry 時は既存 details の該当 account のみ上書き
+  // 6. retry 時は既存 details の該当 account を上書き + 既存に無い新規 entry を append
+  // 段階7-B3 hotfix:旧ロジックは existingDetails.map のみで反復し、newDetails にあって
+  // existingDetails に無い account を silently drop していた → ban-switch 経由の新昇格 main
+  // (commit 1 で union 認可により deploy 自体は実行されるが結果が details に記録されない)
+  // を修正する。
   let mergedDetails: DeployDetail[];
   if (retryAccountIds && retryAccountIds.length > 0) {
     const newMap = new Map(newDetails.map((d) => [d.account_id, d]));
-    mergedDetails = existingDetails.map((d) => newMap.get(d.account_id) ?? d);
+    const existingIds = new Set(existingDetails.map((d) => d.account_id));
+    // 既存 entry は新結果で置換、無い場合は元のまま
+    const replaced = existingDetails.map((d) => newMap.get(d.account_id) ?? d);
+    // 既存に無い新規 entry を append(段階7-B3 ban-switch 経由の新昇格 account 等)
+    const appended = newDetails.filter((d) => !existingIds.has(d.account_id));
+    mergedDetails = [...replaced, ...appended];
   } else {
     mergedDetails = newDetails;
   }
