@@ -680,7 +680,8 @@ export default function LineDashboard() {
   const [showRegFormModal, setShowRegFormModal] = useState(false);
 
   // レポート
-  interface MonthlyReport { id: string; report_month: string; report_data: { month: string; delivery: { total: number }; new_followers: { total: number; by_inflow: Array<{ name: string; count: number }>; daily?: Array<{ date: string; total: number; routes: Array<{ name: string; count: number }> }> }; closer_stats: Record<string, { total: number; seiyaku: number; shicchu: number }>; label_stats: Array<{ name: string; count: number }> }; status: string; sent_at: string | null; created_at: string }
+  // 段階7-C2: scenario_id 追加(GET SELECT 句 8 keys 化対応、判断 C2-3)
+  interface MonthlyReport { id: string; scenario_id: string | null; report_month: string; report_data: { month: string; delivery: { total: number }; new_followers: { total: number; by_inflow: Array<{ name: string; count: number }>; daily?: Array<{ date: string; total: number; routes: Array<{ name: string; count: number }> }> }; closer_stats: Record<string, { total: number; seiyaku: number; shicchu: number }>; label_stats: Array<{ name: string; count: number }> }; status: string; sent_at: string | null; created_at: string }
   const [reports, setReports] = useState<MonthlyReport[]>([]);
   const [reportGenerating, setReportGenerating] = useState(false);
   const [regFormForm, setRegFormForm] = useState({ name: "", description: "", fields: [{ field_label: "メールアドレス", field_type: "email" as string, options: [] as Array<{ label: string; value: string }>, is_required: true, placeholder: "example@email.com", save_to_field_id: "" }] });
@@ -1023,13 +1024,21 @@ export default function LineDashboard() {
     } catch { /* */ }
   }, []);
 
+  // 段階7-C2: scenario 単位移行対応(commit 2、判断 C2-1/C2-2)
+  // - useScenario=true: scenario_id クエリ送信(API 側は無視するが、7-D1 URL param 化に備える)
+  // - 全件返るレスポンスをクライアント側で scenario_id でフィルタする(レポート画面表示部)
+  // - キャッシュ回避クエリ &_t=Date.now() は両経路で維持(7-C1 fetchInflowRoutes と同パターン)
   const fetchReports = useCallback(async () => {
     if (!project?.id) return;
+    const useScenario = selectedScenarioId && selectedScenarioId !== NULL_SCENARIO_KEY;
     try {
-      const res = await fetch(`/api/line/reports?project_id=${project.id}`);
+      const url = useScenario
+        ? `/api/line/reports?project_id=${project.id}&scenario_id=${selectedScenarioId}&_t=${Date.now()}`
+        : `/api/line/reports?project_id=${project.id}&_t=${Date.now()}`;
+      const res = await fetch(url);
       if (res.ok) setReports(await res.json());
     } catch { /* */ }
-  }, [project?.id]);
+  }, [project?.id, selectedScenarioId]);
 
   const fetchRegForms = useCallback(async () => {
     // 段階6c2: scenario 選択時は scenario_id 直渡し(配下 IN 句集約)。
@@ -8309,7 +8318,15 @@ export default function LineDashboard() {
         {/* ============================================================ */}
         {/* アカウント詳細: レポート */}
         {/* ============================================================ */}
-        {mainView === "scenario-detail" && accountSubView === "reports" && (
+        {/* 段階7-C2 commit 2(判断 C2-2):scenario 選択中は該当 scenario レポートのみ、
+            「シナリオ未設定」(NULL_SCENARIO_KEY)選択中は scenario_id NULL row のみ表示。
+            フィルタはクライアント側で実施(API は project_id 全件返す、判断 C2-1)。 */}
+        {mainView === "scenario-detail" && accountSubView === "reports" && (() => {
+          const useScenarioReports = selectedScenarioId && selectedScenarioId !== NULL_SCENARIO_KEY;
+          const filteredReports = useScenarioReports
+            ? reports.filter((r) => r.scenario_id === selectedScenarioId)
+            : reports.filter((r) => !r.scenario_id);
+          return (
           <>
             <header className="bg-white border-b border-gray-200 px-4 md:px-6 py-3 flex items-center justify-between flex-shrink-0">
               <h1 className="text-base font-bold text-gray-800">レポート</h1>
@@ -8318,10 +8335,12 @@ export default function LineDashboard() {
                   if (!project?.id) return;
                   setReportGenerating(true);
                   try {
+                    const body: Record<string, unknown> = { project_id: project.id };
+                    if (useScenarioReports) body.scenario_id = selectedScenarioId;
                     const res = await fetch("/api/line/reports", {
                       method: "POST",
                       headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({ project_id: project.id }),
+                      body: JSON.stringify(body),
                     });
                     if (res.ok) {
                       alert("レポート生成完了");
@@ -8340,14 +8359,14 @@ export default function LineDashboard() {
               </button>
             </header>
             <main className="flex-1 overflow-y-auto p-4 md:p-6">
-              {reports.length === 0 ? (
+              {filteredReports.length === 0 ? (
                 <div className="bg-white rounded-lg border border-gray-200 p-16 text-center text-gray-400">
                   <p className="text-lg mb-2">レポートがありません</p>
                   <p className="text-sm">毎月1日に自動生成されます。手動で生成することもできます。</p>
                 </div>
               ) : (
                 <div className="space-y-4 max-w-5xl">
-                  {reports.map((r) => (
+                  {filteredReports.map((r) => (
                     <div key={r.id} className="bg-white rounded-lg border border-gray-200 overflow-hidden">
                       <div className="px-5 py-3 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
                         <div className="flex items-center gap-2">
@@ -8443,7 +8462,8 @@ export default function LineDashboard() {
               )}
             </main>
           </>
-        )}
+          );
+        })()}
 
         {/* ============================================================ */}
         {/* アカウント詳細: 掘り起こし配信 */}
