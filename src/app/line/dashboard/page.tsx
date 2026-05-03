@@ -6418,14 +6418,20 @@ export default function LineDashboard() {
                         </p>
                       </div>
                     ) : (
-                      <div className="flex items-end gap-4">
+                      // 段階7-B1: legacy 経路の checkbox 文言を候補 B(警告強め)に改善。
+                      // 段階6 で is_default チェック忘れによる「メニューエリアごと表示されない」事故が
+                      // 発生したため、is_default は【必須】+ 赤字で再発防止。
+                      <div className="flex flex-col gap-2">
                         <label className="flex items-center gap-1.5 cursor-pointer">
                           <input type="checkbox" checked={richMenuForm.selected} onChange={(e) => setRichMenuForm({ ...richMenuForm, selected: e.target.checked })} className="accent-[#06C755]" />
-                          <span className="text-sm">初期表示する</span>
+                          <span className="text-sm">友達追加時にメニューを開いた状態にする</span>
                         </label>
-                        <label className="flex items-center gap-1.5 cursor-pointer">
-                          <input type="checkbox" checked={richMenuForm.is_default} onChange={(e) => setRichMenuForm({ ...richMenuForm, is_default: e.target.checked })} className="accent-[#06C755]" />
-                          <span className="text-sm">デフォルトに設定</span>
+                        <label className="flex items-start gap-1.5 cursor-pointer">
+                          <input type="checkbox" checked={richMenuForm.is_default} onChange={(e) => setRichMenuForm({ ...richMenuForm, is_default: e.target.checked })} className="accent-[#06C755] mt-0.5" />
+                          <span className="text-sm leading-snug">
+                            友達のトーク画面にメニューを表示する
+                            <span className="ml-1 text-red-600 font-bold">【必須】チェックなしだと表示されません</span>
+                          </span>
                         </label>
                       </div>
                     )}
