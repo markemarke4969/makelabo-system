@@ -1,19 +1,66 @@
 import { NextRequest } from "next/server";
 import { supabase, supabaseAdmin } from "@/lib/supabase";
+import { resolveAccountIdsFromScenario } from "@/lib/scenario-resolve";
 
 export async function GET(request: NextRequest) {
   const projectId = request.nextUrl.searchParams.get("project_id");
   const accountId = request.nextUrl.searchParams.get("account_id"); // 後方互換
+  const scenarioId = request.nextUrl.searchParams.get("scenario_id");
 
-  // 流入経路本体を取得（embed は Supabase の FK認識が不安定なため使わない）
+  // クエリ何も指定がない場合は 400(既存仕様維持。projectId/accountId/scenarioId のいずれか必須)
+  if (!projectId && !accountId && !scenarioId) {
+    return Response.json(
+      { error: "project_id, account_id, or scenario_id is required" },
+      { status: 400 },
+    );
+  }
+
+  // 段階7-C1: 案 Y(過渡期ハイブリッド)直 hit 化
+  // - scenario_id 直 hit(段階5-step02 で列追加済、部分インデックス活用)
+  // - OR 句で「scenario_id NULL かつ配下 account_id IN 句」も拾う(過渡期、scenario_id バックフィル前の既存 row 後方互換)
+  // - 段階8 で scenario_id バックフィル完了後、OR 句後半部分を除去する cleanup PR で技術負債解消
+  // - 孤児ルート(scenario_id NULL かつ account_id NULL)は本パターンでは拾えない(判断 A=(b) 過渡期許容)
+  // 参考実装:src/app/api/line/labels/route.ts L14-56(段階7-A2 PR #24 / merge 1b75f91)
+  // 流入経路本体を取得(embed は Supabase の FK認識が不安定なため使わない)
   let q = supabase
     .from("line_inflow_routes")
     .select("*")
     .order("created_at", { ascending: false });
-  if (projectId) q = q.eq("project_id", projectId);
-  else if (accountId) q = q.eq("account_id", accountId);
+  if (accountId) {
+    // accountId 優先(scenarioId が同時指定されても accountId 単独として扱う、判断 D)
+    q = q.eq("account_id", accountId);
+  } else if (scenarioId) {
+    const resolved = await resolveAccountIdsFromScenario(scenarioId);
+    if (resolved.account_ids.length === 0) {
+      // 配下 account 0 件 → scenario 直 hit のみ
+      q = q.eq("scenario_id", scenarioId);
+    } else {
+      const idsList = resolved.account_ids.map((id) => `"${id}"`).join(",");
+      q = q.or(
+        `scenario_id.eq.${scenarioId},and(scenario_id.is.null,account_id.in.(${idsList}))`,
+      );
+    }
+  } else if (projectId) {
+    q = q.eq("project_id", projectId);
+  }
 
-  const { data, error } = await q;
+  let { data, error } = await q;
+
+  // 段階5-step02 未適用環境 fallback(本番では発火しない想定):scenario_id 列なしエラー → IN 句集約に切替
+  if (error && scenarioId && !accountId && /scenario_id/i.test(error.message)) {
+    const resolved = await resolveAccountIdsFromScenario(scenarioId);
+    if (resolved.account_ids.length === 0) {
+      return Response.json([]);
+    }
+    const fb = await supabase
+      .from("line_inflow_routes")
+      .select("*")
+      .in("account_id", resolved.account_ids)
+      .order("created_at", { ascending: false });
+    data = fb.data;
+    error = fb.error;
+  }
+
   if (error) {
     return Response.json({ error: error.message }, { status: 500 });
   }
