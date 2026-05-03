@@ -4,6 +4,9 @@ import { resolveAccountIdsFromScenario } from "@/lib/scenario-resolve";
 
 export const dynamic = "force-dynamic";
 
+// 段階7-D1: UUID 形式 validation(7-C1 §7-3 placeholder 問題対処、判断 D1-7)
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 // GET /api/line/inflow-stats?account_id=...&days=30
 //   または ?project_id=... / ?scenario_id=...
 // Response:
@@ -29,6 +32,18 @@ export async function GET(request: NextRequest) {
       { error: "project_id, account_id, or scenario_id is required" },
       { status: 400 },
     );
+  }
+
+  // 段階7-D1: UUID 形式 validation(7-C1 §7-3 placeholder 問題対処、判断 D1-7)
+  // 中括弧 placeholder("{...}") 等の invalid 値を Supabase クエリに渡す前に弾く
+  if (projectId && !UUID_REGEX.test(projectId)) {
+    return Response.json({ error: "Invalid project_id format" }, { status: 400 });
+  }
+  if (accountId && !UUID_REGEX.test(accountId)) {
+    return Response.json({ error: "Invalid account_id format" }, { status: 400 });
+  }
+  if (scenarioId && !UUID_REGEX.test(scenarioId)) {
+    return Response.json({ error: "Invalid scenario_id format" }, { status: 400 });
   }
 
   // 1. 流入経路一覧を取得(scope 解決 = scenario_id / account_id / project_id のいずれか)
