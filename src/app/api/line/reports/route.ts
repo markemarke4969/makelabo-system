@@ -202,17 +202,47 @@ export async function POST(request: NextRequest) {
 
   const csvContent = csvLines.join("\n");
 
-  // DB保存
-  await supabase.from("line_monthly_reports").upsert(
-    {
-      project_id,
-      report_month: targetMonth,
-      report_data: reportData,
-      csv_content: csvContent,
-      status: "generated",
-    },
-    { onConflict: "project_id,report_month" },
-  );
+  // 段階7-Zh hotfix: 部分 UNIQUE INDEX 互換性確保
+  // 段階7-Z で旧 UNIQUE (project_id, report_month) が部分 UNIQUE 2 本立てに置換されたため、
+  // supabase-js の onConflict では部分 UNIQUE INDEX を推論できない(PostgREST の既知制約)。
+  // 暫定対処として SELECT → UPDATE or INSERT パターンに書き換え。
+  // scenario_id は本ハンドラでは未受付のため NULL 固定(7-C2 で scenario_id 受付対応予定)。
+  // race condition は月次 cron が月1回起動 + dashboard 手動押下で並列ほぼ発生せず受容。
+  const { data: existing, error: selectError } = await supabase
+    .from("line_monthly_reports")
+    .select("id")
+    .eq("project_id", project_id)
+    .eq("report_month", targetMonth)
+    .is("scenario_id", null)
+    .maybeSingle();
+
+  if (selectError) {
+    return Response.json({ error: selectError.message }, { status: 500 });
+  }
+
+  if (existing) {
+    const { error: updateError } = await supabase
+      .from("line_monthly_reports")
+      .update({ report_data: reportData, csv_content: csvContent, status: "generated" })
+      .eq("id", existing.id);
+    if (updateError) {
+      return Response.json({ error: updateError.message }, { status: 500 });
+    }
+  } else {
+    const { error: insertError } = await supabase
+      .from("line_monthly_reports")
+      .insert({
+        project_id,
+        report_month: targetMonth,
+        report_data: reportData,
+        csv_content: csvContent,
+        status: "generated",
+        scenario_id: null,
+      });
+    if (insertError) {
+      return Response.json({ error: insertError.message }, { status: 500 });
+    }
+  }
 
   return Response.json({ ok: true, report: reportData });
 }
