@@ -22,7 +22,8 @@ export const maxDuration = 60;
  * 旧パス(account 単位):既存 247 行のロジックをそのまま維持(後方互換)。
  * 新パス(scenario 単位):
  *   1. resolveAccountIdsFromScenario(scenario_id, { roles: ["main", "distribute"] })
- *   2. retry_account_ids あれば existing.includes フィルタ
+ *   2. retry_account_ids あれば「既存 details ∪ scenario 配下」の union で認可フィルタ
+ *      (段階7-B3:ban-switch 経由の自動 deploy 対応で「scenario 配下」を許可ソースに追加)
  *   3. prepareImage(menu.image_url, size_type) を 1 回だけ実施(各 channel への重複アップロードは LINE 仕様)
  *   4. Promise.allSettled で配下並列 deploy
  *   5. deploy_status JSONB を構築 → DB 保存
@@ -145,7 +146,10 @@ interface DeployDetail {
   account_id: string;
   account_name: string | null;
   status: "success" | "failed";
-  stage: number; // 0=token / 1=create / 2=upload / 3=success
+  // stage = 終端ステップ番号(0=token / 1=create / 2=upload / 3=setDefault または全完了)
+  // 段階7-B3:stage=3 + status=failed → setDefault 失敗(従来は握りつぶされ status=success だった)
+  // stage=3 + status=success → 全完了(従来挙動、legacy record 互換)
+  stage: number;
   line_rich_menu_id?: string;
   deployed_at?: string;
   error?: string;
@@ -235,14 +239,39 @@ async function deployToOneAccount(
     };
   }
 
-  // 5. デフォルト設定(失敗は無視、status は success)
+  // 5. デフォルト設定
   // 段階6c1b 修正: scenario 代表 menu(menu.scenario_id NOT NULL)は配下 follower 共通の代表という設計思想 = 常に default 扱い。
   // legacy(account 単位)は menu.is_default=true の時のみ default(後方互換維持、複数 menu 切替運用が残せるように)。
+  // 段階7-B3:従来は .catch 握りつぶしで失敗を隠蔽していたが、deploy_status に正しく失敗を記録するよう
+  // 変更(BAN 対応の信頼性確保)。L242 の if 条件(段階6c1b 追補の強制実行ロジック)は不変。
   if (menu.is_default || menu.scenario_id) {
-    await fetch(`https://api.line.me/v2/bot/user/all/richmenu/${richMenuId}`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}` },
-    }).catch((e) => console.error("set default failed:", e));
+    try {
+      const setDefaultRes = await fetch(`https://api.line.me/v2/bot/user/all/richmenu/${richMenuId}`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!setDefaultRes.ok) {
+        const errBody = await setDefaultRes.text().catch(() => "");
+        return {
+          account_id: accountId,
+          account_name: accountName,
+          status: "failed",
+          stage: 3,
+          line_rich_menu_id: richMenuId,
+          error: `setDefault 失敗: ${errBody.slice(0, 200)}`,
+          http_status: setDefaultRes.status,
+        };
+      }
+    } catch (e) {
+      return {
+        account_id: accountId,
+        account_name: accountName,
+        status: "failed",
+        stage: 3,
+        line_rich_menu_id: richMenuId,
+        error: `setDefault 例外: ${(e as Error).message}`,
+      };
+    }
   }
 
   return {
@@ -382,16 +411,24 @@ async function deployToScenarioAccounts(
     });
   }
 
-  // 2. retry_account_ids 適用(ゆるい認可:既存 details に存在するもののみ)
+  // 2. retry_account_ids 適用(ゆるい認可:既存 details または scenario 配下 main/distribute account のみ)
+  // 段階7-B3:認可を「既存 details ∪ resolved.account_ids」の union に拡張。
+  // - 旧:既存 details にある account のみ retry 許可
+  // - 新:既存 details にある OR 現在 scenario 配下の main/distribute account なら retry 許可
+  // 拡張理由:ban-switch で standby が新 main 昇格した直後、新 main は existingDetails に未掲載
+  // だが resolved.account_ids には含まれる(role main+distribute フィルタ通過済) → 7-B3 の自動
+  // deploy フロー(retry_account_ids: [新 main id])を機能させるために必要。
+  // 認可性維持:任意 account への deploy は引き続き不可(scenario 配下に限定)。
   const existingDetails = ((menu.deploy_status as { details?: DeployDetail[] } | null)?.details ?? []) as DeployDetail[];
   let targets = resolved.account_ids;
   if (retryAccountIds && retryAccountIds.length > 0) {
     const existingIds = existingDetails.map((d) => d.account_id);
-    targets = retryAccountIds.filter((aid) => existingIds.includes(aid));
+    const allowedIds = new Set<string>([...existingIds, ...resolved.account_ids]);
+    targets = retryAccountIds.filter((aid) => allowedIds.has(aid));
     if (targets.length === 0) {
       return Response.json({
         ok: false,
-        error: "retry_account_ids に該当する既存 deploy 結果がありません",
+        error: "retry_account_ids に該当する既存 deploy 結果または scenario 配下 account がありません",
         deploy_status: menu.deploy_status ?? null,
       });
     }

@@ -1,6 +1,11 @@
 import { NextRequest } from "next/server";
 import { supabase } from "@/lib/supabase";
 
+// 段階7-B3:ban-switch 経由の自動 deploy(最大 50 秒)+ active account 全件ループに伴う
+// 同時 BAN 多発時の cron timeout 回避のため、Vercel 関数の実行時間を拡張。
+// 旧:Vercel デフォルト 10 秒 / 新:60 秒(ban-switch / deploy/route.ts と同等)
+export const maxDuration = 60;
+
 // Cron認証チェック（Vercel Cron / 外部サービス両対応）
 function verifyCron(request: NextRequest): boolean {
   const secret = process.env.CRON_SECRET;
