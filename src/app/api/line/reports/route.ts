@@ -1,16 +1,20 @@
 import { NextRequest } from "next/server";
 import { supabase } from "@/lib/supabase";
+import { resolveAccountIdsFromScenario } from "@/lib/scenario-resolve";
 
 export const maxDuration = 300;
 
 // レポート一覧取得
+// 段階7-C2: GET SELECT 句に scenario_id 追加(8 keys 化、後方互換維持)
+//   - クライアント側で scenario_id によるフィルタ可能
+//   - GET 自体は project_id 全件返す(判断 C2-1、API シグネチャ不変、フィルタは dashboard 側)
 export async function GET(request: NextRequest) {
   const projectId = request.nextUrl.searchParams.get("project_id");
   if (!projectId) return Response.json({ error: "project_id required" }, { status: 400 });
 
   const { data, error } = await supabase
     .from("line_monthly_reports")
-    .select("id, project_id, report_month, report_data, status, sent_at, created_at")
+    .select("id, project_id, scenario_id, report_month, report_data, status, sent_at, created_at")
     .eq("project_id", projectId)
     .order("report_month", { ascending: false })
     .limit(24);
@@ -20,9 +24,14 @@ export async function GET(request: NextRequest) {
 }
 
 // レポート生成
+// 段階7-C2: scenario_id 受付追加(任意、判断 4)
+//   - scenario_id あり:scenario 配下の account_ids(roles=main+distribute)で集計
+//   - scenario_id なし:project 全 account で集計(後方互換)
+//   - 保存先 row は (project_id, scenario_id, report_month) で一意化(部分 UNIQUE 2 整合)
 export async function POST(request: NextRequest) {
   const body = await request.json();
-  const { project_id, month } = body;
+  const { project_id, month, scenario_id } = body;
+  const scenarioId: string | null = (typeof scenario_id === "string" && scenario_id.length > 0) ? scenario_id : null;
 
   if (!project_id) return Response.json({ error: "project_id required" }, { status: 400 });
 
@@ -34,12 +43,23 @@ export async function POST(request: NextRequest) {
   const monthEnd = new Date(year, mon, 1).toISOString();
 
   // 案件に紐づくアカウントを取得
-  const { data: accounts } = await supabase
-    .from("line_accounts")
-    .select("id, account_name")
-    .eq("project_id", project_id);
+  // 段階7-C2: scenario_id 指定時は scenario 配下 account(main+distribute)に絞る
+  //   - resolveAccountIdsFromScenario(scenarioId, { roles: ["main", "distribute"] }) を使用(7-C1 と同パターン)
+  //   - 集計フェーズ(line_messages / line_followers / line_follower_labels)は account_ids IN 句なので連動して絞られる
+  let accountIds: string[];
+  if (scenarioId) {
+    const resolved = await resolveAccountIdsFromScenario(scenarioId, {
+      roles: ["main", "distribute"],
+    });
+    accountIds = resolved.account_ids;
+  } else {
+    const { data: accounts } = await supabase
+      .from("line_accounts")
+      .select("id, account_name")
+      .eq("project_id", project_id);
+    accountIds = (accounts ?? []).map((a) => a.id as string);
+  }
 
-  const accountIds = (accounts ?? []).map((a) => a.id as string);
   if (accountIds.length === 0) {
     return Response.json({ error: "no accounts" }, { status: 400 });
   }
@@ -202,19 +222,25 @@ export async function POST(request: NextRequest) {
 
   const csvContent = csvLines.join("\n");
 
-  // 段階7-Zh hotfix: 部分 UNIQUE INDEX 互換性確保
+  // 段階7-Zh hotfix + 7-C2: 部分 UNIQUE INDEX 互換性確保(scenario_id NULL / NOT NULL 両対応)
   // 段階7-Z で旧 UNIQUE (project_id, report_month) が部分 UNIQUE 2 本立てに置換されたため、
   // supabase-js の onConflict では部分 UNIQUE INDEX を推論できない(PostgREST の既知制約)。
-  // 暫定対処として SELECT → UPDATE or INSERT パターンに書き換え。
-  // scenario_id は本ハンドラでは未受付のため NULL 固定(7-C2 で scenario_id 受付対応予定)。
-  // race condition は月次 cron が月1回起動 + dashboard 手動押下で並列ほぼ発生せず受容。
-  const { data: existing, error: selectError } = await supabase
+  // 暫定対処として SELECT → UPDATE or INSERT パターン採用(7-Zh hotfix で確立)。
+  // 段階7-C2 で scenario_id NULL / NOT NULL の両分岐に対応:
+  //   - scenario_id NULL  → WHERE project_id + report_month + scenario_id IS NULL(部分 UNIQUE 1 整合)
+  //   - scenario_id NOT NULL → WHERE project_id + scenario_id + report_month(部分 UNIQUE 2 整合)
+  // race condition は月次 cron 月1回 + dashboard 手動押下で並列ほぼ発生せず受容。
+  let existingQuery = supabase
     .from("line_monthly_reports")
     .select("id")
     .eq("project_id", project_id)
-    .eq("report_month", targetMonth)
-    .is("scenario_id", null)
-    .maybeSingle();
+    .eq("report_month", targetMonth);
+  if (scenarioId) {
+    existingQuery = existingQuery.eq("scenario_id", scenarioId);
+  } else {
+    existingQuery = existingQuery.is("scenario_id", null);
+  }
+  const { data: existing, error: selectError } = await existingQuery.maybeSingle();
 
   if (selectError) {
     return Response.json({ error: selectError.message }, { status: 500 });
@@ -233,11 +259,11 @@ export async function POST(request: NextRequest) {
       .from("line_monthly_reports")
       .insert({
         project_id,
+        scenario_id: scenarioId,
         report_month: targetMonth,
         report_data: reportData,
         csv_content: csvContent,
         status: "generated",
-        scenario_id: null,
       });
     if (insertError) {
       return Response.json({ error: insertError.message }, { status: 500 });
