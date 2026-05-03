@@ -22,7 +22,8 @@ export const maxDuration = 60;
  * 旧パス(account 単位):既存 247 行のロジックをそのまま維持(後方互換)。
  * 新パス(scenario 単位):
  *   1. resolveAccountIdsFromScenario(scenario_id, { roles: ["main", "distribute"] })
- *   2. retry_account_ids あれば existing.includes フィルタ
+ *   2. retry_account_ids あれば「既存 details ∪ scenario 配下」の union で認可フィルタ
+ *      (段階7-B3:ban-switch 経由の自動 deploy 対応で「scenario 配下」を許可ソースに追加)
  *   3. prepareImage(menu.image_url, size_type) を 1 回だけ実施(各 channel への重複アップロードは LINE 仕様)
  *   4. Promise.allSettled で配下並列 deploy
  *   5. deploy_status JSONB を構築 → DB 保存
@@ -382,16 +383,24 @@ async function deployToScenarioAccounts(
     });
   }
 
-  // 2. retry_account_ids 適用(ゆるい認可:既存 details に存在するもののみ)
+  // 2. retry_account_ids 適用(ゆるい認可:既存 details または scenario 配下 main/distribute account のみ)
+  // 段階7-B3:認可を「既存 details ∪ resolved.account_ids」の union に拡張。
+  // - 旧:既存 details にある account のみ retry 許可
+  // - 新:既存 details にある OR 現在 scenario 配下の main/distribute account なら retry 許可
+  // 拡張理由:ban-switch で standby が新 main 昇格した直後、新 main は existingDetails に未掲載
+  // だが resolved.account_ids には含まれる(role main+distribute フィルタ通過済) → 7-B3 の自動
+  // deploy フロー(retry_account_ids: [新 main id])を機能させるために必要。
+  // 認可性維持:任意 account への deploy は引き続き不可(scenario 配下に限定)。
   const existingDetails = ((menu.deploy_status as { details?: DeployDetail[] } | null)?.details ?? []) as DeployDetail[];
   let targets = resolved.account_ids;
   if (retryAccountIds && retryAccountIds.length > 0) {
     const existingIds = existingDetails.map((d) => d.account_id);
-    targets = retryAccountIds.filter((aid) => existingIds.includes(aid));
+    const allowedIds = new Set<string>([...existingIds, ...resolved.account_ids]);
+    targets = retryAccountIds.filter((aid) => allowedIds.has(aid));
     if (targets.length === 0) {
       return Response.json({
         ok: false,
-        error: "retry_account_ids に該当する既存 deploy 結果がありません",
+        error: "retry_account_ids に該当する既存 deploy 結果または scenario 配下 account がありません",
         deploy_status: menu.deploy_status ?? null,
       });
     }
