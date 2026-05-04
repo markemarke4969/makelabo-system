@@ -3,7 +3,7 @@ import { supabase } from "@/lib/supabase";
 import { buildLineMessage, pushLineMessages } from "@/lib/line";
 import { evalCondition, DeliveryCondition, FollowerLite } from "@/lib/delivery-conditions";
 import { buildReplacerContext, defaultContext } from "@/lib/line-replacer";
-import { resolveScenarioFromAccount } from "@/lib/scenario-resolve";
+import { resolveScenarioFromAccount, resolveScenarioAccountsWithTokens } from "@/lib/scenario-resolve";
 import { resolveAccountIdsFromScenario } from "@/lib/scenario-resolve";
 
 export const maxDuration = 300;
@@ -134,7 +134,7 @@ export async function PUT(request: NextRequest) {
   if (!id) return Response.json({ error: "id required" }, { status: 400 });
 
   if (action === "send") {
-    // 配信を取得
+    // 配信を取得(段階8-2-E-4: scenario_id も SELECT)
     const { data: broadcast } = await supabase
       .from("line_reengagement_broadcasts")
       .select("*")
@@ -153,20 +153,37 @@ export async function PUT(request: NextRequest) {
 
     if (!msgs || msgs.length === 0) return Response.json({ error: "no messages" }, { status: 400 });
 
-    // アカウント情報取得
-    const { data: account } = await supabase
-      .from("line_accounts")
-      .select("id, channel_access_token")
-      .eq("id", broadcast.account_id)
-      .single();
+    // 段階8-2-E-4 方針 B:scenario 配下統合(main + standby、is_active=true、token あり)
+    let scenarioAccountIds: string[] = [];
+    let tokenMap = new Map<string, string>();
+    const broadcastScenarioId = (broadcast.scenario_id as string | null) ?? null;
+    if (broadcastScenarioId) {
+      const resolved = await resolveScenarioAccountsWithTokens(broadcastScenarioId);
+      scenarioAccountIds = resolved.accountIds;
+      tokenMap = resolved.tokenMap;
+    }
+    // 後方互換 fallback:scenario 解決不能 → broadcast.account_id 単独
+    if (scenarioAccountIds.length === 0) {
+      const { data: fb } = await supabase
+        .from("line_accounts")
+        .select("id, channel_access_token")
+        .eq("id", broadcast.account_id)
+        .maybeSingle<{ id: string; channel_access_token: string | null }>();
+      if (fb && fb.channel_access_token) {
+        scenarioAccountIds = [fb.id];
+        tokenMap.set(fb.id, fb.channel_access_token);
+      }
+    }
+    if (scenarioAccountIds.length === 0) {
+      // 段階8-2-E-4 方針 A ①:account_or_token_missing → status='sent' にしない、エラー応答
+      return Response.json({ error: "no access token" }, { status: 400 });
+    }
 
-    if (!account?.channel_access_token) return Response.json({ error: "no access token" }, { status: 400 });
-
-    // フォロワー取得
+    // フォロワー取得(段階8-2-E-4 方針 B:scenario 配下統合 IN 句)
     const { data: allFollowers } = await supabase
       .from("line_followers")
-      .select("id, line_user_id, display_name, followed_at, inflow_route_id, status")
-      .eq("line_account_id", broadcast.account_id)
+      .select("id, line_user_id, display_name, followed_at, inflow_route_id, status, line_account_id")
+      .in("line_account_id", scenarioAccountIds)
       .eq("status", "following");
 
     // ラベル取得
@@ -199,9 +216,18 @@ export async function PUT(request: NextRequest) {
       return evalCondition(condition, lite);
     });
 
-    // 送信実行
+    // 段階8-2-E-4 方針 A ③:no_followers → status='sent' にしない、エラー応答
+    // 後から friend が追加されたら次回 cron 発火で送信されるべき。
+    if (targetFollowers.length === 0) {
+      return Response.json({ error: "no followers" }, { status: 400 });
+    }
+
+    // 送信実行(段階8-2-E-4 方針 B:follower の line_account_id ごとに token 切替)
     let sentCount = 0;
     for (const follower of targetFollowers) {
+      const followerAccountId = follower.line_account_id as string;
+      const followerToken = tokenMap.get(followerAccountId);
+      if (!followerToken) continue; // token なしの follower はスキップ
       const displayName = (follower.display_name as string) ?? "ゲスト";
       const ctx = { ...defaultContext, displayName };
 
@@ -211,7 +237,7 @@ export async function PUT(request: NextRequest) {
         if (!lineMsg) continue;
 
         try {
-          await pushLineMessages(account.channel_access_token as string, follower.line_user_id as string, [lineMsg]);
+          await pushLineMessages(followerToken, follower.line_user_id as string, [lineMsg]);
         } catch { /* */ }
       }
       sentCount++;
