@@ -168,7 +168,7 @@ interface InflowGroup {
 // scenario-detail = 旧 account-detail を継承した「機能画面そのもの」(中間ビューではない)。
 type MainView = "scenarios" | "scenario-detail" | "settings";
 // シナリオ詳細内のサブビュー(旧 account-detail のサブビューをそのまま継承、18 種)
-type AccountSubView = "followers" | "chat" | "step" | "schedule" | "sent" | "friend-page" | "labels" | "templates" | "inflow" | "actions" | "custom-fields" | "reminders" | "newsletter" | "reengagement" | "surveys" | "reg-forms" | "reports" | "rich-menu";
+type AccountSubView = "followers" | "chat" | "step" | "schedule" | "sent" | "friend-page" | "labels" | "templates" | "inflow" | "actions" | "custom-fields" | "reminders" | "newsletter" | "reengagement" | "surveys" | "reg-forms" | "rich-menu";
 
 // アクションルール
 type ActionTriggerType = "follow" | "label_added" | "message_received" | "sequence_completed";
@@ -679,11 +679,6 @@ export default function LineDashboard() {
   const [regForms, setRegForms] = useState<RegFormDef[]>([]);
   const [showRegFormModal, setShowRegFormModal] = useState(false);
 
-  // レポート
-  // 段階7-C2: scenario_id 追加(GET SELECT 句 8 keys 化対応、判断 C2-3)
-  interface MonthlyReport { id: string; scenario_id: string | null; report_month: string; report_data: { month: string; delivery: { total: number }; new_followers: { total: number; by_inflow: Array<{ name: string; count: number }>; daily?: Array<{ date: string; total: number; routes: Array<{ name: string; count: number }> }> }; closer_stats: Record<string, { total: number; seiyaku: number; shicchu: number }>; label_stats: Array<{ name: string; count: number }> }; status: string; sent_at: string | null; created_at: string }
-  const [reports, setReports] = useState<MonthlyReport[]>([]);
-  const [reportGenerating, setReportGenerating] = useState(false);
   const [regFormForm, setRegFormForm] = useState({ name: "", description: "", fields: [{ field_label: "メールアドレス", field_type: "email" as string, options: [] as Array<{ label: string; value: string }>, is_required: true, placeholder: "example@email.com", save_to_field_id: "" }] });
 
   // Feature 6: Mobile responsive
@@ -1023,22 +1018,6 @@ export default function LineDashboard() {
       }
     } catch { /* */ }
   }, []);
-
-  // 段階7-C2: scenario 単位移行対応(commit 2、判断 C2-1/C2-2)
-  // - useScenario=true: scenario_id クエリ送信(API 側は無視するが、7-D1 URL param 化に備える)
-  // - 全件返るレスポンスをクライアント側で scenario_id でフィルタする(レポート画面表示部)
-  // - キャッシュ回避クエリ &_t=Date.now() は両経路で維持(7-C1 fetchInflowRoutes と同パターン)
-  const fetchReports = useCallback(async () => {
-    if (!project?.id) return;
-    const useScenario = selectedScenarioId && selectedScenarioId !== NULL_SCENARIO_KEY;
-    try {
-      const url = useScenario
-        ? `/api/line/reports?project_id=${project.id}&scenario_id=${selectedScenarioId}&_t=${Date.now()}`
-        : `/api/line/reports?project_id=${project.id}&_t=${Date.now()}`;
-      const res = await fetch(url);
-      if (res.ok) setReports(await res.json());
-    } catch { /* */ }
-  }, [project?.id, selectedScenarioId]);
 
   const fetchRegForms = useCallback(async () => {
     // 段階6c2: scenario 選択時は scenario_id 直渡し(配下 IN 句集約)。
@@ -1925,8 +1904,7 @@ export default function LineDashboard() {
     fetchAllProjects();
     fetchCloserUsers();
     fetchSmsBalance();
-    fetchReports();
-  }, [fetchFollowers, fetchAccounts, fetchUnreadCounts, fetchAllProjects, fetchCloserUsers, fetchSmsBalance, fetchReports]);
+  }, [fetchFollowers, fetchAccounts, fetchUnreadCounts, fetchAllProjects, fetchCloserUsers, fetchSmsBalance]);
 
   // 段階5(案B)PR-1:scenarios を独立 fetch で取得(既存 fetchAllProjects に手を入れない方針)
   // /api/line/projects は各 project に scenarios 配列を埋め込んで返す(段階5 hotfix 9ea0e4e で対応済)。
@@ -3864,7 +3842,6 @@ export default function LineDashboard() {
     { key: "reminders", label: "リマインダ配信", icon: Icons.schedule },
     { key: "newsletter", label: "メルマガ", icon: Icons.document },
     { key: "inflow", label: "流入経路", icon: Icons.friendAdd },
-    { key: "reports", label: "レポート", icon: Icons.download },
   ];
 
   // ============================================================
@@ -8314,156 +8291,6 @@ export default function LineDashboard() {
             </main>
           </>
         )}
-
-        {/* ============================================================ */}
-        {/* アカウント詳細: レポート */}
-        {/* ============================================================ */}
-        {/* 段階7-C2 commit 2(判断 C2-2):scenario 選択中は該当 scenario レポートのみ、
-            「シナリオ未設定」(NULL_SCENARIO_KEY)選択中は scenario_id NULL row のみ表示。
-            フィルタはクライアント側で実施(API は project_id 全件返す、判断 C2-1)。 */}
-        {mainView === "scenario-detail" && accountSubView === "reports" && (() => {
-          const useScenarioReports = selectedScenarioId && selectedScenarioId !== NULL_SCENARIO_KEY;
-          const filteredReports = useScenarioReports
-            ? reports.filter((r) => r.scenario_id === selectedScenarioId)
-            : reports.filter((r) => !r.scenario_id);
-          return (
-          <>
-            <header className="bg-white border-b border-gray-200 px-4 md:px-6 py-3 flex items-center justify-between flex-shrink-0">
-              <h1 className="text-base font-bold text-gray-800">レポート</h1>
-              <button
-                onClick={async () => {
-                  if (!project?.id) return;
-                  setReportGenerating(true);
-                  try {
-                    const body: Record<string, unknown> = { project_id: project.id };
-                    if (useScenarioReports) body.scenario_id = selectedScenarioId;
-                    const res = await fetch("/api/line/reports", {
-                      method: "POST",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify(body),
-                    });
-                    if (res.ok) {
-                      alert("レポート生成完了");
-                      fetchReports();
-                    } else {
-                      const d = await res.json().catch(() => ({}));
-                      alert(d.error ?? "生成失敗");
-                    }
-                  } catch { alert("生成エラー"); }
-                  finally { setReportGenerating(false); }
-                }}
-                disabled={reportGenerating}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs font-medium rounded-md transition"
-              >
-                {reportGenerating ? "生成中..." : "先月のレポートを生成"}
-              </button>
-            </header>
-            <main className="flex-1 overflow-y-auto p-4 md:p-6">
-              {filteredReports.length === 0 ? (
-                <div className="bg-white rounded-lg border border-gray-200 p-16 text-center text-gray-400">
-                  <p className="text-lg mb-2">レポートがありません</p>
-                  <p className="text-sm">毎月1日に自動生成されます。手動で生成することもできます。</p>
-                </div>
-              ) : (
-                <div className="space-y-4 max-w-5xl">
-                  {filteredReports.map((r) => (
-                    <div key={r.id} className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-                      <div className="px-5 py-3 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <h3 className="text-sm font-bold text-gray-800">{r.report_month} 月次レポート</h3>
-                          <span className={`px-2 py-0.5 text-[10px] rounded-full ${r.status === "sent" ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"}`}>
-                            {r.status === "sent" ? "送信済み" : "生成済み"}
-                          </span>
-                        </div>
-                        <span className="text-xs text-gray-400">{new Date(r.created_at).toLocaleString("ja-JP")}</span>
-                      </div>
-                      <div className="p-5 grid grid-cols-2 md:grid-cols-4 gap-4">
-                        <div className="bg-blue-50 rounded-lg p-3 text-center">
-                          <div className="text-2xl font-bold text-blue-700">{r.report_data.delivery.total}</div>
-                          <div className="text-xs text-blue-600">配信数</div>
-                        </div>
-                        <div className="bg-green-50 rounded-lg p-3 text-center">
-                          <div className="text-2xl font-bold text-green-700">{r.report_data.new_followers.total}</div>
-                          <div className="text-xs text-green-600">友達追加</div>
-                        </div>
-                        <div className="bg-purple-50 rounded-lg p-3 text-center">
-                          <div className="text-2xl font-bold text-purple-700">{Object.values(r.report_data.closer_stats).reduce((s, c) => s + c.seiyaku, 0)}</div>
-                          <div className="text-xs text-purple-600">成約数</div>
-                        </div>
-                        <div className="bg-gray-50 rounded-lg p-3 text-center">
-                          <div className="text-2xl font-bold text-gray-700">{Object.values(r.report_data.closer_stats).reduce((s, c) => s + c.shicchu, 0)}</div>
-                          <div className="text-xs text-gray-600">失注数</div>
-                        </div>
-                      </div>
-                      {/* 流入経路ランキング */}
-                      {r.report_data.new_followers.by_inflow.length > 0 && (
-                        <div className="px-5 pb-4">
-                          <h4 className="text-xs font-bold text-gray-600 mb-2">流入経路ランキング</h4>
-                          <div className="space-y-1">
-                            {r.report_data.new_followers.by_inflow.slice(0, 5).map((ir, idx) => (
-                              <div key={idx} className="flex items-center justify-between text-xs">
-                                <span className="text-gray-700">{idx + 1}. {ir.name}</span>
-                                <span className="font-medium text-gray-800">{ir.count}人</span>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                      {/* 日別 × 流入経路 */}
-                      {r.report_data.new_followers.daily && r.report_data.new_followers.daily.length > 0 && (
-                        <div className="px-5 pb-4">
-                          <h4 className="text-xs font-bold text-gray-600 mb-2">日別の流入経路</h4>
-                          <div className="border border-gray-200 rounded-md overflow-hidden">
-                            <table className="w-full text-xs">
-                              <thead>
-                                <tr className="bg-gray-50 text-gray-500 text-left border-b border-gray-200">
-                                  <th className="px-3 py-2 font-medium w-28">日付</th>
-                                  <th className="px-3 py-2 font-medium w-16 text-right">合計</th>
-                                  <th className="px-3 py-2 font-medium">内訳（流入経路）</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {r.report_data.new_followers.daily.map((d) => (
-                                  <tr key={d.date} className="border-b border-gray-100 last:border-b-0">
-                                    <td className="px-3 py-2 text-gray-700 font-mono">{d.date}</td>
-                                    <td className="px-3 py-2 text-right font-medium text-gray-800">{d.total}人</td>
-                                    <td className="px-3 py-2">
-                                      <div className="flex flex-wrap gap-1">
-                                        {d.routes.map((route, idx) => (
-                                          <span key={idx} className="px-1.5 py-0.5 bg-blue-50 text-blue-700 rounded text-[11px]">
-                                            {route.name}: {route.count}
-                                          </span>
-                                        ))}
-                                      </div>
-                                    </td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
-                        </div>
-                      )}
-                      {/* ラベル別 */}
-                      {r.report_data.label_stats.length > 0 && (
-                        <div className="px-5 pb-4">
-                          <h4 className="text-xs font-bold text-gray-600 mb-2">ラベル別フォロワー数</h4>
-                          <div className="flex flex-wrap gap-2">
-                            {r.report_data.label_stats.slice(0, 10).map((ls, idx) => (
-                              <span key={idx} className="px-2 py-1 text-xs bg-gray-100 text-gray-700 rounded">
-                                {ls.name}: {ls.count}
-                              </span>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </main>
-          </>
-          );
-        })()}
 
         {/* ============================================================ */}
         {/* アカウント詳細: 掘り起こし配信 */}
