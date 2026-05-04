@@ -969,16 +969,20 @@ export default function LineDashboard() {
     try {
       // 段階6a: scenario 選択時は scenario_id 直 hit(配下統合)。
       // selectedScenarioId が NULL_SCENARIO_KEY(未設定バケツ)or null 時は従来パス(account_id or project_id)。
+      // 段階8-2-D: NULL_SCENARIO_KEY 時は scenario_null=1 + project_id で「scenario_id IS NULL のみ」を直接フィルタ。
       const closerFlag =
         currentUser?.is_closer && !currentUser?.is_admin
           ? `&closer_visible_only=1&project_id=${project.id}`
           : "";
       const useScenario = selectedScenarioId && selectedScenarioId !== NULL_SCENARIO_KEY;
+      const useNullBucket = selectedScenarioId === NULL_SCENARIO_KEY;
       const url = useScenario
         ? `/api/line/followers?scenario_id=${selectedScenarioId}${closerFlag}`
-        : selectedAccount?.id
-          ? `/api/line/followers?account_id=${selectedAccount.id}${closerFlag}`
-          : `/api/line/followers?project_id=${project.id}${closerFlag ? "&closer_visible_only=1" : ""}`;
+        : useNullBucket && project?.id
+          ? `/api/line/followers?scenario_null=1&project_id=${project.id}${closerFlag}`
+          : selectedAccount?.id
+            ? `/api/line/followers?account_id=${selectedAccount.id}${closerFlag}`
+            : `/api/line/followers?project_id=${project.id}${closerFlag ? "&closer_visible_only=1" : ""}`;
       const res = await fetch(url);
       setFollowers(await res.json());
     } catch { /* */ } finally { setLoading(false); }
@@ -1129,22 +1133,26 @@ export default function LineDashboard() {
   // 参考実装:fetchLabels(L1195 周辺)などと同じ useScenario 判定パターン
   const fetchInflowRoutes = useCallback(async () => {
     const useScenario = selectedScenarioId && selectedScenarioId !== NULL_SCENARIO_KEY;
+    const useNullBucket = selectedScenarioId === NULL_SCENARIO_KEY;
     if (!useScenario && !project?.id) {
       setInflowRoutes([]);
       return;
     }
     try {
       // キャッシュを回避して確実に最新を取得
+      // 段階8-2-D: NULL_SCENARIO_KEY 時は scenario_null=1 + project_id で「scenario_id IS NULL のみ」を直接フィルタ。
       const url = useScenario
         ? `/api/line/inflow-routes?scenario_id=${selectedScenarioId}&_t=${Date.now()}`
-        : `/api/line/inflow-routes?project_id=${project!.id}&_t=${Date.now()}`;
+        : useNullBucket && project?.id
+          ? `/api/line/inflow-routes?scenario_null=1&project_id=${project.id}&_t=${Date.now()}`
+          : `/api/line/inflow-routes?project_id=${project!.id}&_t=${Date.now()}`;
       const res = await fetch(url, { cache: "no-store" });
       if (res.ok) {
         const json = (await res.json()) as InflowRoute[];
         console.log(
           "[fetchInflowRoutes] got",
           json.length,
-          useScenario ? "routes for scenario" : "routes for project",
+          useScenario ? "routes for scenario" : useNullBucket ? "routes for null bucket" : "routes for project",
           useScenario ? selectedScenarioId : project!.id,
         );
         setInflowRoutes(json);
