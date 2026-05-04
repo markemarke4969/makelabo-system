@@ -1493,7 +1493,11 @@ export default function LineDashboard() {
   };
 
   const saveActionRule = async () => {
-    if (!selectedAccount) return;
+    // 段階8-2-E-2: silent return 撲滅(層2 保険)。NULL バケツ等で selectedAccount=null になった場合に明示。
+    if (!selectedAccount) {
+      alert("シナリオまたはアカウントを選択してください");
+      return;
+    }
     if (!actionForm.name.trim()) { alert("ルール名を入力してください"); return; }
     try {
       if (editingActionRule) {
@@ -7014,9 +7018,12 @@ export default function LineDashboard() {
             </header>
             <main className="flex-1 overflow-y-auto p-4 md:p-6">
               <div className="mb-4">
+                {/* 段階8-2-E-2: NULL バケツ選択中は disabled 化 + ツールチップ(層1 予防) */}
                 <button
                   onClick={openNewActionRule}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded-md transition"
+                  disabled={selectedScenarioId === NULL_SCENARIO_KEY}
+                  title={selectedScenarioId === NULL_SCENARIO_KEY ? "シナリオを選択してください" : undefined}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-medium rounded-md transition"
                 >
                   {Icons.plus}
                   新規追加
@@ -7841,12 +7848,15 @@ export default function LineDashboard() {
             </header>
             <main className="flex-1 overflow-y-auto p-4 md:p-6">
               <div className="mb-4">
+                {/* 段階8-2-E-2: NULL バケツ選択中は disabled 化 + ツールチップ(層1 予防) */}
                 <button
                   onClick={() => {
                     setReminderForm({ name: "", base_date_field: "custom", messages: [{ offset_days: -1, offset_time: "09:00", body: "" }] });
                     setShowReminderModal(true);
                   }}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded-md transition"
+                  disabled={selectedScenarioId === NULL_SCENARIO_KEY}
+                  title={selectedScenarioId === NULL_SCENARIO_KEY ? "シナリオを選択してください" : undefined}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-medium rounded-md transition"
                 >
                   {Icons.plus} 新規追加
                 </button>
@@ -7893,7 +7903,12 @@ export default function LineDashboard() {
                       <button onClick={() => setShowReminderModal(false)} className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg">キャンセル</button>
                       <button
                         onClick={async () => {
-                          if (!reminderForm.name.trim() || !selectedAccount) return;
+                          if (!reminderForm.name.trim()) return;
+                          // 段階8-2-E-2: silent return 撲滅(層2 保険)
+                          if (!selectedAccount) {
+                            alert("シナリオまたはアカウントを選択してください");
+                            return;
+                          }
                           await fetch("/api/line/reminders", {
                             method: "POST",
                             headers: { "Content-Type": "application/json" },
@@ -7970,12 +7985,15 @@ export default function LineDashboard() {
             </header>
             <main className="flex-1 overflow-y-auto p-4 md:p-6">
               <div className="mb-4">
+                {/* 段階8-2-E-2: NULL バケツ選択中は disabled 化 + ツールチップ(層1 予防) */}
                 <button
                   onClick={() => {
                     setSurveyForm({ name: "", description: "", questions: [{ question_text: "", question_type: "text", options: [], is_required: true, save_to_field_id: "" }] });
                     setShowSurveyModal(true);
                   }}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded-md transition"
+                  disabled={selectedScenarioId === NULL_SCENARIO_KEY}
+                  title={selectedScenarioId === NULL_SCENARIO_KEY ? "シナリオを選択してください" : undefined}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-medium rounded-md transition"
                 >
                   {Icons.plus}
                   新規作成
@@ -8115,7 +8133,11 @@ export default function LineDashboard() {
                       <button
                         onClick={async () => {
                           if (!surveyForm.name.trim()) { alert("アンケート名を入力してください"); return; }
-                          if (!selectedAccount) return;
+                          // 段階8-2-E-2: silent return 撲滅(層2 保険)
+                          if (!selectedAccount) {
+                            alert("シナリオまたはアカウントを選択してください");
+                            return;
+                          }
                           const res = await fetch("/api/line/surveys", {
                             method: "POST",
                             headers: { "Content-Type": "application/json" },
@@ -8525,9 +8547,12 @@ export default function LineDashboard() {
           <>
             <header className="bg-white border-b border-gray-200 px-4 md:px-6 py-3 flex items-center justify-between flex-shrink-0">
               <h1 className="text-base font-bold text-gray-800">メルマガ管理</h1>
+              {/* 段階8-2-E-2: NULL バケツ選択中は disabled 化 + ツールチップ(層1 予防) */}
               <button
                 onClick={() => { setNewsletterForm({ name: "", subject: "", body_text: "" }); setShowNewsletterModal(true); }}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded-md transition"
+                disabled={selectedScenarioId === NULL_SCENARIO_KEY}
+                title={selectedScenarioId === NULL_SCENARIO_KEY ? "シナリオを選択してください" : undefined}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-medium rounded-md transition"
               >
                 {Icons.plus} 新規メルマガ
               </button>
@@ -8559,7 +8584,12 @@ export default function LineDashboard() {
                       <button onClick={() => setShowNewsletterModal(false)} className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg">キャンセル</button>
                       <button
                         onClick={async () => {
-                          if (!newsletterForm.name.trim() || !selectedAccount) return;
+                          if (!newsletterForm.name.trim()) return;
+                          // 段階8-2-E-2: silent return 撲滅(層2 保険)
+                          if (!selectedAccount) {
+                            alert("シナリオまたはアカウントを選択してください");
+                            return;
+                          }
                           await fetch("/api/line/newsletter", {
                             method: "POST",
                             headers: { "Content-Type": "application/json" },
