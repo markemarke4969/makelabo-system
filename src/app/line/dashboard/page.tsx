@@ -593,7 +593,8 @@ export default function LineDashboard() {
   interface ReengagementBroadcast { id: string; name: string; status: string; target_condition: DeliveryCondition | null; sent_at: string | null; sent_count: number; created_at: string; messages: Array<{ id: string; msg_type: string; payload: Record<string, unknown>; body: string | null }> }
   const [reengagements, setReengagements] = useState<ReengagementBroadcast[]>([]);
   const [showReengagementModal, setShowReengagementModal] = useState(false);
-  const [reengagementForm, setReengagementForm] = useState<{ name: string; condition: "all" | "filtered"; targetCondition: DeliveryCondition; messages: BroadcastMessage[] }>({ name: "", condition: "all", targetCondition: emptyDeliveryCondition, messages: [] });
+  // 段階8-2-E-3-2: timingMode("immediate"=即時送信 / "scheduled"=日時指定)+ scheduledAt(datetime-local 文字列)を追加
+  const [reengagementForm, setReengagementForm] = useState<{ name: string; condition: "all" | "filtered"; targetCondition: DeliveryCondition; messages: BroadcastMessage[]; timingMode: "immediate" | "scheduled"; scheduledAt: string }>({ name: "", condition: "all", targetCondition: emptyDeliveryCondition, messages: [], timingMode: "immediate", scheduledAt: "" });
   const [reengagementPreview, setReengagementPreview] = useState<Follower[] | null>(null);
   const [reengagementSending, setReengagementSending] = useState(false);
 
@@ -8329,7 +8330,7 @@ export default function LineDashboard() {
               <h1 className="text-base font-bold text-gray-800">掘り起こし配信</h1>
               <button
                 onClick={() => {
-                  setReengagementForm({ name: "", condition: "all", targetCondition: emptyDeliveryCondition, messages: [emptyMessage()] as BroadcastMessage[] });
+                  setReengagementForm({ name: "", condition: "all", targetCondition: emptyDeliveryCondition, messages: [emptyMessage()] as BroadcastMessage[], timingMode: "immediate", scheduledAt: "" });
                   setReengagementPreview(null);
                   setShowReengagementModal(true);
                 }}
@@ -8533,13 +8534,68 @@ export default function LineDashboard() {
                           className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm resize-none focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
                         />
                       </div>
+
+                      {/* 段階8-2-E-3-2: 送信タイミング(即時 or 日時指定) */}
+                      <div>
+                        <label className="text-xs text-gray-500 block mb-1 font-medium">送信タイミング</label>
+                        <div className="flex items-center gap-4 text-sm">
+                          <label className="flex items-center gap-1.5 cursor-pointer">
+                            <input
+                              type="radio"
+                              name="reengagement-timing"
+                              value="immediate"
+                              checked={reengagementForm.timingMode === "immediate"}
+                              onChange={() => setReengagementForm({ ...reengagementForm, timingMode: "immediate", scheduledAt: "" })}
+                              className="w-3.5 h-3.5"
+                            />
+                            <span className="text-gray-700">即時送信(作成後に送信ボタンで配信)</span>
+                          </label>
+                          <label className="flex items-center gap-1.5 cursor-pointer">
+                            <input
+                              type="radio"
+                              name="reengagement-timing"
+                              value="scheduled"
+                              checked={reengagementForm.timingMode === "scheduled"}
+                              onChange={() => setReengagementForm({ ...reengagementForm, timingMode: "scheduled" })}
+                              className="w-3.5 h-3.5"
+                            />
+                            <span className="text-gray-700">日時指定(指定時刻に自動送信)</span>
+                          </label>
+                        </div>
+                        {reengagementForm.timingMode === "scheduled" && (
+                          <input
+                            type="datetime-local"
+                            value={reengagementForm.scheduledAt}
+                            onChange={(e) => setReengagementForm({ ...reengagementForm, scheduledAt: e.target.value })}
+                            className="mt-2 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                          />
+                        )}
+                      </div>
                     </div>
                     <div className="flex justify-end gap-2 px-5 py-4 border-t border-gray-200">
                       <button onClick={() => setShowReengagementModal(false)} className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition">キャンセル</button>
                       <button
                         onClick={async () => {
                           if (!reengagementForm.name.trim()) { alert("配信名を入力してください"); return; }
-                          if (!selectedAccount) return;
+                          // 段階8-2-E-2 の silent return 撲滅と整合
+                          if (!selectedAccount) {
+                            alert("シナリオまたはアカウントを選択してください");
+                            return;
+                          }
+                          // 段階8-2-E-3-2: 日時指定時の入力検証 + ISO 文字列変換
+                          let scheduledAtIso: string | null = null;
+                          if (reengagementForm.timingMode === "scheduled") {
+                            if (!reengagementForm.scheduledAt) {
+                              alert("配信日時を指定してください");
+                              return;
+                            }
+                            const d = new Date(reengagementForm.scheduledAt);
+                            if (Number.isNaN(d.getTime())) {
+                              alert("配信日時の形式が不正です");
+                              return;
+                            }
+                            scheduledAtIso = d.toISOString();
+                          }
                           const cond = reengagementForm.condition === "filtered"
                             ? { ...reengagementForm.targetCondition, mode: "filtered" as const }
                             : { ...emptyDeliveryCondition, mode: "all" as const };
@@ -8556,6 +8612,7 @@ export default function LineDashboard() {
                               name: reengagementForm.name.trim(),
                               target_condition: cond,
                               messages: msgs,
+                              scheduled_at: scheduledAtIso,
                             }),
                           });
                           if (res.ok) {
