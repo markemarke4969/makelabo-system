@@ -95,6 +95,16 @@ export async function GET(request: NextRequest) {
     results.reminders = { error: (e as Error).message };
   }
 
+  // 6. 予約掘り起こし配信(段階8-2-E-3-2)
+  try {
+    const r = await fetch(new URL("/api/cron/line-reengagement-send", request.url), {
+      headers: forwardAuth(request),
+    });
+    results.reengagement = await safeJson(r);
+  } catch (e) {
+    results.reengagement = { error: (e as Error).message };
+  }
+
   return Response.json({ ok: true, results });
 }
 

@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS line_reengagement_broadcasts (
   account_id UUID NOT NULL REFERENCES line_accounts(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
   target_condition JSONB DEFAULT NULL,
-  status TEXT NOT NULL DEFAULT 'draft', -- draft, sent
+  status TEXT NOT NULL DEFAULT 'draft', -- draft / scheduled / sent / paused (段階8-2-E-3-2 で値拡張、CHECK 制約なし)
   sent_at TIMESTAMPTZ DEFAULT NULL,
   sent_count INT DEFAULT 0,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
