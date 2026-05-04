@@ -236,6 +236,10 @@ async function handleFollow(event: LineEvent, account: LineAccountRow) {
     followed_at: new Date().toISOString(),
     unfollowed_at: null,
     updated_at: new Date().toISOString(),
+    // 段階8-2-B-hotfix(C-1):新規 follower 追加時に account.scenario_id を継承。
+    // 列なし環境(段階5 Step 02 未適用)では account.scenario_id が undefined となり null 化される。
+    // 列なし時の upsert エラーは既存 fallback パターンの拡張対象だが、本番は Step 02 適用済のため発火しない。
+    scenario_id: account.scenario_id ?? null,
   };
   if (restoredFrom) {
     upsertBase.restored_from_account_id = restoredFrom.account_id;
