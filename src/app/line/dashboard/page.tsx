@@ -8346,68 +8346,106 @@ export default function LineDashboard() {
                   <p className="text-sm">「新規作成」から配信を作成してください</p>
                 </div>
               ) : (
-                <div className="space-y-3 max-w-4xl">
-                  {reengagements.map((b) => (
-                    <div key={b.id} className="bg-white rounded-lg border border-gray-200 p-4 flex items-center justify-between">
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <h3 className="text-sm font-bold text-gray-800">{b.name}</h3>
-                          <span className={`px-2 py-0.5 text-[10px] rounded-full ${b.status === "sent" ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"}`}>
-                            {b.status === "sent" ? "送信済み" : "下書き"}
-                          </span>
-                        </div>
-                        <div className="text-xs text-gray-400 mt-1">
-                          {b.sent_at ? `送信: ${new Date(b.sent_at).toLocaleString("ja-JP")} (${b.sent_count}人)` : `作成: ${new Date(b.created_at).toLocaleString("ja-JP")}`}
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        {b.status !== "sent" && (
-                          <button
-                            onClick={async () => {
-                              if (!confirm(`「${b.name}」を送信しますか？\n対象者に即座に配信されます。`)) return;
-                              setReengagementSending(true);
-                              try {
-                                const res = await fetch("/api/line/reengagement", {
-                                  method: "PUT",
-                                  headers: { "Content-Type": "application/json" },
-                                  body: JSON.stringify({ id: b.id, action: "send" }),
-                                });
-                                const data = await res.json();
-                                if (res.ok) {
-                                  alert(`送信完了: ${data.sent_count}人に配信しました`);
-                                  fetchReengagements();
-                                } else {
-                                  alert(`送信失敗: ${data.error}`);
-                                }
-                              } catch (e) {
-                                alert(`送信エラー: ${(e as Error).message}`);
-                              } finally {
-                                setReengagementSending(false);
-                              }
-                            }}
-                            disabled={reengagementSending}
-                            className="px-3 py-1.5 bg-[#06C755] hover:bg-[#05a648] text-white text-xs font-medium rounded-md transition disabled:opacity-50"
-                          >
-                            {reengagementSending ? "送信中..." : "送信"}
-                          </button>
-                        )}
-                        <button
-                          onClick={async () => {
-                            if (!confirm("削除しますか？")) return;
-                            await fetch("/api/line/reengagement", {
-                              method: "DELETE",
-                              headers: { "Content-Type": "application/json" },
-                              body: JSON.stringify({ id: b.id }),
-                            });
-                            fetchReengagements();
-                          }}
-                          className="px-3 py-1.5 bg-red-500 hover:bg-red-600 text-white text-xs font-medium rounded-md transition"
-                        >
-                          削除
-                        </button>
-                      </div>
-                    </div>
-                  ))}
+                /* 段階8-2-E-3-1: 予約配信(L5779-)と整合した Table 構造に書き換え。
+                   即時送信モデル維持(scheduled_at 列なし、送信日時は status='sent' 時の sent_at を表示)。
+                   予約送信化(scheduled_at 列追加 + cron 化)は E-3-2 として将来対応保留。 */
+                <div className="bg-white rounded-lg border border-gray-200 overflow-hidden max-w-6xl">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-gray-200 text-gray-500 text-left bg-gray-50">
+                        <th className="px-5 py-3 font-medium w-20">媒体</th>
+                        <th className="px-5 py-3 font-medium">管理名称</th>
+                        <th className="px-5 py-3 font-medium w-44">送信日時</th>
+                        <th className="px-5 py-3 font-medium w-32">配信条件</th>
+                        <th className="px-5 py-3 font-medium w-28">ステータス</th>
+                        <th className="px-5 py-3 font-medium w-44"></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {reengagements.map((b) => {
+                        const isSent = b.status === "sent";
+                        const sentAtText = isSent && b.sent_at
+                          ? new Date(b.sent_at).toLocaleString("ja-JP", {
+                              year: "numeric",
+                              month: "2-digit",
+                              day: "2-digit",
+                              hour: "2-digit",
+                              minute: "2-digit",
+                            })
+                          : "—";
+                        const tc = b.target_condition;
+                        const condText = !tc || tc.mode === "all" ? "全員" : "条件指定";
+                        return (
+                          <tr key={b.id} className="border-b border-gray-100 hover:bg-gray-50">
+                            <td className="px-5 py-3">
+                              <span className="px-2 py-0.5 text-xs rounded font-medium bg-[#06C755]/10 text-[#06C755]">LINE</span>
+                            </td>
+                            <td className="px-5 py-3 text-gray-800">{b.name}</td>
+                            <td className="px-5 py-3 text-gray-500">
+                              <div>{sentAtText}</div>
+                              {isSent && (
+                                <div className="text-[10px] text-gray-400">{b.sent_count ?? 0}人に配信</div>
+                              )}
+                            </td>
+                            <td className="px-5 py-3 text-gray-500">{condText}</td>
+                            <td className="px-5 py-3">
+                              <span className={`px-2 py-0.5 text-xs rounded-full font-medium ${isSent ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"}`}>
+                                {isSent ? "送信済み" : "未送信"}
+                              </span>
+                            </td>
+                            <td className="px-5 py-3">
+                              <div className="flex items-center justify-end gap-2">
+                                {!isSent && (
+                                  <button
+                                    onClick={async () => {
+                                      if (!confirm(`「${b.name}」を送信しますか？\n対象者に即座に配信されます。`)) return;
+                                      setReengagementSending(true);
+                                      try {
+                                        const res = await fetch("/api/line/reengagement", {
+                                          method: "PUT",
+                                          headers: { "Content-Type": "application/json" },
+                                          body: JSON.stringify({ id: b.id, action: "send" }),
+                                        });
+                                        const data = await res.json();
+                                        if (res.ok) {
+                                          alert(`送信完了: ${data.sent_count}人に配信しました`);
+                                          fetchReengagements();
+                                        } else {
+                                          alert(`送信失敗: ${data.error}`);
+                                        }
+                                      } catch (e) {
+                                        alert(`送信エラー: ${(e as Error).message}`);
+                                      } finally {
+                                        setReengagementSending(false);
+                                      }
+                                    }}
+                                    disabled={reengagementSending}
+                                    className="px-2.5 py-1 text-xs font-medium rounded-md bg-[#06C755] hover:bg-[#05a648] text-white transition disabled:opacity-50"
+                                  >
+                                    {reengagementSending ? "送信中..." : "送信"}
+                                  </button>
+                                )}
+                                <button
+                                  onClick={async () => {
+                                    if (!confirm("削除しますか？")) return;
+                                    await fetch("/api/line/reengagement", {
+                                      method: "DELETE",
+                                      headers: { "Content-Type": "application/json" },
+                                      body: JSON.stringify({ id: b.id }),
+                                    });
+                                    fetchReengagements();
+                                  }}
+                                  className="px-2 py-1 text-xs text-red-500 hover:bg-red-50 rounded-md transition"
+                                >
+                                  削除
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
                 </div>
               )}
 
