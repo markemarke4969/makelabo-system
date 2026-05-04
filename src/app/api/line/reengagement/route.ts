@@ -79,7 +79,7 @@ export async function GET(request: NextRequest) {
 // 掘り起こし配信の作成・保存
 export async function POST(request: NextRequest) {
   const body = await request.json();
-  const { account_id, name, target_condition, messages } = body;
+  const { account_id, name, target_condition, messages, scheduled_at } = body;
 
   if (!account_id || !name) {
     return Response.json({ error: "account_id and name required" }, { status: 400 });
@@ -88,6 +88,14 @@ export async function POST(request: NextRequest) {
   // 段階8-2-E-1: account_id から scenario_id を解決して INSERT に同梱(段階7-A1 負債清算)
   const { scenario_id: resolvedScenarioId } = await resolveScenarioFromAccount(account_id);
 
+  // 段階8-2-E-3-2: scheduled_at(オプション)受付。
+  // - scheduled_at あり → status='scheduled' で INSERT(cron が時刻到来後に拾う)
+  // - scheduled_at なし → status='draft'(現状の即時送信フロー維持)
+  const scheduledAtIso = typeof scheduled_at === "string" && scheduled_at.length > 0
+    ? scheduled_at
+    : null;
+  const initialStatus = scheduledAtIso ? "scheduled" : "draft";
+
   const { data: broadcast, error } = await supabase
     .from("line_reengagement_broadcasts")
     .insert({
@@ -95,7 +103,8 @@ export async function POST(request: NextRequest) {
       scenario_id: resolvedScenarioId,
       name,
       target_condition: target_condition ?? null,
-      status: "draft",
+      status: initialStatus,
+      scheduled_at: scheduledAtIso,
     })
     .select("id")
     .single();
@@ -220,6 +229,30 @@ export async function PUT(request: NextRequest) {
       .eq("id", id);
 
     return Response.json({ ok: true, sent_count: sentCount });
+  }
+
+  // 段階8-2-E-3-2: 予約送信の一時停止(status: scheduled → paused)
+  // cron が拾わなくなる。scheduled_at 値は維持(再開時に同じ時刻で復帰)。
+  if (action === "pause") {
+    const { error: updErr } = await supabase
+      .from("line_reengagement_broadcasts")
+      .update({ status: "paused", updated_at: new Date().toISOString() })
+      .eq("id", id)
+      .eq("status", "scheduled");
+    if (updErr) return Response.json({ error: updErr.message }, { status: 500 });
+    return Response.json({ ok: true });
+  }
+
+  // 段階8-2-E-3-2: 予約送信の再開(status: paused → scheduled)
+  // 元の scheduled_at を維持したまま復帰、cron が拾うようになる。
+  if (action === "resume") {
+    const { error: updErr } = await supabase
+      .from("line_reengagement_broadcasts")
+      .update({ status: "scheduled", updated_at: new Date().toISOString() })
+      .eq("id", id)
+      .eq("status", "paused");
+    if (updErr) return Response.json({ error: updErr.message }, { status: 500 });
+    return Response.json({ ok: true });
   }
 
   return Response.json({ error: "invalid action" }, { status: 400 });
