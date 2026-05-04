@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { supabase } from "@/lib/supabase";
-import { resolveAccountIdsFromScenario } from "@/lib/scenario-resolve";
+import { resolveAccountIdsFromScenario, resolveScenarioFromAccount } from "@/lib/scenario-resolve";
 
 // ------------------------------------------------------------
 // GET /api/line/labels?account_id=<uuid> または ?scenario_id=<uuid>
@@ -117,10 +117,14 @@ export async function POST(request: NextRequest) {
     return Response.json({ error: "account_id and name are required" }, { status: 400 });
   }
 
+  // 段階8-2-E-1: account_id から scenario_id を解決して INSERT に同梱(段階7-A1 負債清算)
+  const { scenario_id: resolvedScenarioId } = await resolveScenarioFromAccount(body.account_id);
+
   const { data, error } = await supabase
     .from("line_labels")
     .insert({
       account_id: body.account_id,
+      scenario_id: resolvedScenarioId,
       name: body.name,
       color: body.color ?? "#3B82F6",
       sort_order: body.sort_order ?? 0,

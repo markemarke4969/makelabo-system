@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { supabase } from "@/lib/supabase";
-import { resolveAccountIdsFromScenario } from "@/lib/scenario-resolve";
+import { resolveAccountIdsFromScenario, resolveScenarioFromAccount } from "@/lib/scenario-resolve";
 
 // 段階6b2: scenario_id クエリ追加(scenario 配下統合表示)。
 // line_reminders には scenario_id 列なし(段階7 で schema 移行検討)→ scenario→account_ids 解決の
@@ -63,10 +63,14 @@ export async function POST(request: NextRequest) {
     return Response.json({ error: "account_id and name are required" }, { status: 400 });
   }
 
+  // 段階8-2-E-1: account_id から scenario_id を解決して INSERT に同梱(段階7-A1 負債清算)
+  const { scenario_id: resolvedScenarioId } = await resolveScenarioFromAccount(body.account_id);
+
   const { data, error } = await supabase
     .from("line_reminders")
     .insert({
       account_id: body.account_id,
+      scenario_id: resolvedScenarioId,
       name: body.name,
       base_date_field: body.base_date_field || "custom",
       status: "active",

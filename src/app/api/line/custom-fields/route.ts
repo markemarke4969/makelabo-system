@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { supabase } from "@/lib/supabase";
-import { resolveAccountIdsFromScenario } from "@/lib/scenario-resolve";
+import { resolveAccountIdsFromScenario, resolveScenarioFromAccount } from "@/lib/scenario-resolve";
 
 // 段階6c2: scenario_id クエリ追加(配下 account_ids 解決 → IN 句集約)。
 // follower_id パスは個別 follower の値取得、scenario 概念無関係 → 拡張対象外。
@@ -81,10 +81,14 @@ export async function POST(request: NextRequest) {
     return Response.json({ error: "account_id, field_key, field_label are required" }, { status: 400 });
   }
 
+  // 段階8-2-E-1: account_id から scenario_id を解決して INSERT に同梱(段階7-A1 負債清算)
+  const { scenario_id: resolvedScenarioId } = await resolveScenarioFromAccount(body.account_id);
+
   const { data, error } = await supabase
     .from("line_custom_fields")
     .insert({
       account_id: body.account_id,
+      scenario_id: resolvedScenarioId,
       field_key: body.field_key,
       field_label: body.field_label,
       field_type: body.field_type || "text",

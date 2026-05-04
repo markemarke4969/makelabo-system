@@ -1,31 +1,10 @@
 import { NextRequest } from "next/server";
 import { supabase } from "@/lib/supabase";
+import { resolveScenarioFromAccount } from "@/lib/scenario-resolve";
 
-/**
- * 段階5 Step 11:account_id → scenario_id 解決ヘルパー。
- * line_accounts から scenario_id を引く。アカウント不在 / scenario_id 列なし / scenario_id NULL の場合は null を返す。
- * 列なしエラー(Step 02 未適用)は呼び出し側で account_id fallback に切り替えるためのシグナルとして利用。
- */
-async function resolveScenarioFromAccount(
-  accountId: string,
-): Promise<{ scenario_id: string | null; columnMissing: boolean }> {
-  const r = await supabase
-    .from("line_accounts")
-    .select("scenario_id")
-    .eq("id", accountId)
-    .maybeSingle();
-  if (r.error) {
-    if (/scenario_id/i.test(r.error.message)) {
-      return { scenario_id: null, columnMissing: true };
-    }
-    // 他のエラーは呼び出し側で握りつぶし、account_id fallback へ
-    return { scenario_id: null, columnMissing: false };
-  }
-  return {
-    scenario_id: ((r.data?.scenario_id as string | null) ?? null),
-    columnMissing: false,
-  };
-}
+// 段階8-2-E-1: 段階5 Step 11 でローカル定義していた resolveScenarioFromAccount は
+// @/lib/scenario-resolve に同等関数が既にエクスポート済(段階6 で共通化)。
+// 9 テーブル INSERT 修正(段階7-A1 負債清算)に伴いここでは import に統一。
 
 export async function GET(request: NextRequest) {
   const accountId = request.nextUrl.searchParams.get("account_id");

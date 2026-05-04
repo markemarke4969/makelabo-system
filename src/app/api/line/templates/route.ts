@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { supabase } from "@/lib/supabase";
-import { resolveAccountIdsFromScenario } from "@/lib/scenario-resolve";
+import { resolveAccountIdsFromScenario, resolveScenarioFromAccount } from "@/lib/scenario-resolve";
 
 // 段階6c2: scenario_id クエリ追加(配下 account_ids 解決 → IN 句集約)。
 
@@ -65,8 +65,12 @@ export async function POST(request: NextRequest) {
 
   // 段階5(案B):line_accounts.group_name 廃止に伴い、line_templates 側の group_name 参照も削除
   // line_templates.group_name 列自体は別タスクで判断(列が残っていても害はない)
+  // 段階8-2-E-1: account_id から scenario_id を解決して INSERT に同梱(段階7-A1 負債清算)
+  const { scenario_id: resolvedScenarioId } = await resolveScenarioFromAccount(body.account_id);
+
   const tplInsert: Record<string, unknown> = {
     account_id: body.account_id,
+    scenario_id: resolvedScenarioId,
     name: body.name,
   };
 
