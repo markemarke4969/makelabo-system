@@ -3,6 +3,7 @@ import { supabase } from "@/lib/supabase";
 import { buildLineMessage, pushLineMessages } from "@/lib/line";
 import { evalCondition, DeliveryCondition, FollowerLite } from "@/lib/delivery-conditions";
 import { buildReplacerContext, defaultContext } from "@/lib/line-replacer";
+import { resolveScenarioFromAccount } from "@/lib/scenario-resolve";
 import { resolveAccountIdsFromScenario } from "@/lib/scenario-resolve";
 
 export const maxDuration = 300;
@@ -84,10 +85,14 @@ export async function POST(request: NextRequest) {
     return Response.json({ error: "account_id and name required" }, { status: 400 });
   }
 
+  // 段階8-2-E-1: account_id から scenario_id を解決して INSERT に同梱(段階7-A1 負債清算)
+  const { scenario_id: resolvedScenarioId } = await resolveScenarioFromAccount(account_id);
+
   const { data: broadcast, error } = await supabase
     .from("line_reengagement_broadcasts")
     .insert({
       account_id,
+      scenario_id: resolvedScenarioId,
       name,
       target_condition: target_condition ?? null,
       status: "draft",
