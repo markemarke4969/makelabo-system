@@ -590,7 +590,8 @@ export default function LineDashboard() {
   const [syncLogs, setSyncLogs] = useState<Array<{ id: string; synced_at: string; total_rows: number; updated_count: number; created_count: number; skipped_count: number; error_count: number; duration_ms: number }>>([]);
 
   // 掘り起こし配信
-  interface ReengagementBroadcast { id: string; name: string; status: string; target_condition: DeliveryCondition | null; sent_at: string | null; sent_count: number; created_at: string; messages: Array<{ id: string; msg_type: string; payload: Record<string, unknown>; body: string | null }> }
+  // 段階8-2-E-3-2: scheduled_at(予約送信用、status='scheduled' / 'paused' 時のみ NOT NULL)を追加
+  interface ReengagementBroadcast { id: string; name: string; status: string; target_condition: DeliveryCondition | null; sent_at: string | null; sent_count: number; scheduled_at: string | null; created_at: string; messages: Array<{ id: string; msg_type: string; payload: Record<string, unknown>; body: string | null }> }
   const [reengagements, setReengagements] = useState<ReengagementBroadcast[]>([]);
   const [showReengagementModal, setShowReengagementModal] = useState(false);
   // 段階8-2-E-3-2: timingMode("immediate"=即時送信 / "scheduled"=日時指定)+ scheduledAt(datetime-local 文字列)を追加
@@ -8364,18 +8365,34 @@ export default function LineDashboard() {
                     </thead>
                     <tbody>
                       {reengagements.map((b) => {
+                        // 段階8-2-E-3-2: status 4 値対応(draft / scheduled / sent / paused)
                         const isSent = b.status === "sent";
-                        const sentAtText = isSent && b.sent_at
-                          ? new Date(b.sent_at).toLocaleString("ja-JP", {
-                              year: "numeric",
-                              month: "2-digit",
-                              day: "2-digit",
-                              hour: "2-digit",
-                              minute: "2-digit",
-                            })
-                          : "—";
+                        const isScheduled = b.status === "scheduled";
+                        const isPaused = b.status === "paused";
+                        const isDraft = !isSent && !isScheduled && !isPaused;
+                        // 送信日時表示:
+                        //   sent → sent_at(送信完了時刻)
+                        //   scheduled / paused → scheduled_at(配信予定時刻)
+                        //   draft → '—'
+                        const dtFormat = (s: string) => new Date(s).toLocaleString("ja-JP", {
+                          year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit",
+                        });
+                        const dateText = isSent && b.sent_at
+                          ? dtFormat(b.sent_at)
+                          : (isScheduled || isPaused) && b.scheduled_at
+                            ? dtFormat(b.scheduled_at)
+                            : "—";
                         const tc = b.target_condition;
                         const condText = !tc || tc.mode === "all" ? "全員" : "条件指定";
+                        // ステータス表示ラベル + バッジ色
+                        const statusLabel = isSent ? "送信済み" : isScheduled ? "予約中" : isPaused ? "一時停止" : "未送信";
+                        const statusClass = isSent
+                          ? "bg-green-100 text-green-700"
+                          : isScheduled
+                            ? "bg-blue-100 text-blue-700"
+                            : isPaused
+                              ? "bg-yellow-100 text-yellow-700"
+                              : "bg-gray-100 text-gray-500";
                         return (
                           <tr key={b.id} className="border-b border-gray-100 hover:bg-gray-50">
                             <td className="px-5 py-3">
@@ -8383,19 +8400,20 @@ export default function LineDashboard() {
                             </td>
                             <td className="px-5 py-3 text-gray-800">{b.name}</td>
                             <td className="px-5 py-3 text-gray-500">
-                              <div>{sentAtText}</div>
+                              <div>{dateText}</div>
                               {isSent && (
                                 <div className="text-[10px] text-gray-400">{b.sent_count ?? 0}人に配信</div>
                               )}
                             </td>
                             <td className="px-5 py-3 text-gray-500">{condText}</td>
                             <td className="px-5 py-3">
-                              <span className={`px-2 py-0.5 text-xs rounded-full font-medium ${isSent ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"}`}>
-                                {isSent ? "送信済み" : "未送信"}
+                              <span className={`px-2 py-0.5 text-xs rounded-full font-medium ${statusClass}`}>
+                                {statusLabel}
                               </span>
                             </td>
                             <td className="px-5 py-3">
                               <div className="flex items-center justify-end gap-2">
+                                {/* draft / scheduled / paused は即時送信ボタン表示(sent のみ非表示) */}
                                 {!isSent && (
                                   <button
                                     onClick={async () => {
@@ -8423,7 +8441,34 @@ export default function LineDashboard() {
                                     disabled={reengagementSending}
                                     className="px-2.5 py-1 text-xs font-medium rounded-md bg-[#06C755] hover:bg-[#05a648] text-white transition disabled:opacity-50"
                                   >
-                                    {reengagementSending ? "送信中..." : "送信"}
+                                    {reengagementSending ? "送信中..." : isDraft ? "送信" : "即時送信"}
+                                  </button>
+                                )}
+                                {/* scheduled → 一時停止 / paused → 再開 */}
+                                {(isScheduled || isPaused) && (
+                                  <button
+                                    onClick={async () => {
+                                      const action = isScheduled ? "pause" : "resume";
+                                      const verb = isScheduled ? "一時停止" : "再開";
+                                      const res = await fetch("/api/line/reengagement", {
+                                        method: "PUT",
+                                        headers: { "Content-Type": "application/json" },
+                                        body: JSON.stringify({ id: b.id, action }),
+                                      });
+                                      if (res.ok) {
+                                        fetchReengagements();
+                                      } else {
+                                        const data = await res.json().catch(() => ({}));
+                                        alert(`${verb}失敗: ${data.error ?? res.status}`);
+                                      }
+                                    }}
+                                    className={`px-2.5 py-1 text-xs font-medium rounded-md transition ${
+                                      isScheduled
+                                        ? "bg-yellow-100 text-yellow-700 hover:bg-yellow-200"
+                                        : "bg-green-100 text-green-700 hover:bg-green-200"
+                                    }`}
+                                  >
+                                    {isScheduled ? "一時停止" : "再開"}
                                   </button>
                                 )}
                                 <button
