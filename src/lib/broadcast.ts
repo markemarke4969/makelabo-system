@@ -8,6 +8,7 @@ import {
 import { fireTrigger } from "@/lib/action-rules";
 import { buildReplacerContext, buildBranchEvalContext, defaultContext } from "@/lib/line-replacer";
 import { rewriteUrlsInMessage, persistTokens, type ClickContext } from "@/lib/click-tracking";
+import { resolveScenarioAccountsWithTokens } from "@/lib/scenario-resolve";
 
 // 並列送信のチャンクサイズ（LINE API レート対策）
 const PUSH_CONCURRENCY = 20;
@@ -43,6 +44,8 @@ interface FollowerRow {
   line_user_id: string;
   display_name: string | null;
   followed_at: string;
+  // 段階8-2-E-4: scenario 配下統合配信で「どの account に属する follower か」を判定する用
+  line_account_id: string;
   inflow_route_id?: string | null;
 }
 
@@ -58,51 +61,76 @@ export async function markBroadcastSent(sequenceId: string) {
  * - 対象フォロワー抽出 → 並列 push → line_messages / line_broadcast_logs に記録 → sent_at を更新
  * 既に sent_at が埋まっている場合でも再送はしない想定なので、呼び出し側で未送信チェックをする。
  *
- * 段階5 案B:
- *   - seq.scenario_id があれば、その scenario の main(role='main' AND is_active=true)から配信
- *   - scenario 経由で main が取れなければ、従来通り seq.account_id 経由のアカウントから配信(後方互換)
+ * 段階8-2-E-4 改修(方針 A + B):
+ *   - 方針 B:scenario 配下統合配信(main + standby、is_active=true)
+ *     → resolveScenarioAccountsWithTokens で accountIds + tokenMap を取得
+ *     → line_followers IN(accountIds) で全 follower を取得
+ *     → follower.line_account_id ごとに tokenMap から token を引いて pushLineMessages
+ *     → line_messages 記録時の line_account_id は follower.line_account_id(送信実態と整合、D-3)
+ *   - 方針 A:skip 経路の markBroadcastSent 呼び分け
+ *     - account_or_token_missing → markBroadcastSent しない、status='inactive' に変更
+ *     - no_messages → markBroadcastSent OK(意図的 skip、再 SELECT 防止)
+ *     - no_followers → markBroadcastSent しない(後から friend 追加で届くべき)
+ *
+ * 後方互換 fallback:
+ *   - seq.scenario_id なし or 解決不能 → seq.account_id で従来単一 account 配信
  */
+async function markSequenceInactive(sequenceId: string, reason: string): Promise<void> {
+  // 段階8-2-E-4: 配信不能 sequence を 'inactive' に変更し、cron の SELECT 対象から外す。
+  // 運用者が dashboard で対象を発見・修正できるよう sent_at は更新しない(再送可能に保つ)。
+  await supabase
+    .from("line_step_sequences")
+    .update({ status: "inactive", updated_at: new Date().toISOString() })
+    .eq("id", sequenceId);
+  console.warn(`[broadcast] sequence=${sequenceId} marked inactive: ${reason}`);
+}
+
 export async function processBroadcastSequence(seq: BroadcastSequenceRow): Promise<{
   sent: number;
   failed: number;
   skipped_reason?: string;
 }> {
-  let account: AccountRow | null = null;
-
-  // 1) 段階5 案B:scenario_id があれば scenario 配下の main を優先
+  // 1) 段階8-2-E-4 方針 B:scenario 配下統合(main + standby、is_active=true、token あり)
+  let scenarioAccountIds: string[] = [];
+  let tokenMap = new Map<string, string>();
+  let scenarioProjectId: string | null = null;
   if (seq.scenario_id) {
-    const r = await supabase
-      .from("line_accounts")
-      .select("id, channel_access_token, project_id")
-      .eq("scenario_id", seq.scenario_id)
-      .eq("role", "main")
-      .eq("is_active", true)
-      .limit(1)
-      .maybeSingle<AccountRow>();
-    if (r.error) {
-      // scenario_id 列が無い(Step 02 未適用)など → 後方互換 fallback
-      if (!/scenario_id/i.test(r.error.message)) {
-        // scenario 経由のアクセスエラーは握りつぶし、account_id fallback へ
-      }
-    } else if (r.data) {
-      account = r.data;
+    const resolved = await resolveScenarioAccountsWithTokens(seq.scenario_id);
+    scenarioAccountIds = resolved.accountIds;
+    tokenMap = resolved.tokenMap;
+    // scenario 配下の代表 project_id を取得(click-tracking ctx 用、main の project_id を採用)
+    if (scenarioAccountIds.length > 0) {
+      const r = await supabase
+        .from("line_accounts")
+        .select("project_id")
+        .eq("scenario_id", seq.scenario_id)
+        .eq("role", "main")
+        .eq("is_active", true)
+        .limit(1)
+        .maybeSingle<{ project_id: string | null }>();
+      scenarioProjectId = r.data?.project_id ?? null;
     }
   }
 
-  // 2) 後方互換 fallback:scenario 経由で取れなければ seq.account_id で従来取得
-  // 段階5 Step 11:account_id 列削除後は seq.account_id が undefined/null となるため、
-  // この fallback はスキップして account=null のまま続行する(下の skipped_reason で安全終了)。
-  if (!account && seq.account_id) {
+  // 2) 後方互換 fallback:scenario 解決不能 → seq.account_id で従来単一 account 配信
+  let fallbackAccount: AccountRow | null = null;
+  if (scenarioAccountIds.length === 0 && seq.account_id) {
     const { data: fb } = await supabase
       .from("line_accounts")
       .select("id, channel_access_token, project_id")
       .eq("id", seq.account_id)
       .maybeSingle<AccountRow>();
-    account = fb ?? null;
+    if (fb && fb.channel_access_token) {
+      fallbackAccount = fb;
+      scenarioAccountIds = [fb.id];
+      tokenMap.set(fb.id, fb.channel_access_token);
+      scenarioProjectId = fb.project_id ?? null;
+    }
   }
 
-  if (!account || !account.channel_access_token) {
-    await markBroadcastSent(seq.id);
+  // 段階8-2-E-4 方針 A ①:account_or_token_missing → markBroadcastSent しない、status='inactive' に変更
+  if (scenarioAccountIds.length === 0) {
+    await markSequenceInactive(seq.id, "account_or_token_missing");
     return { sent: 0, failed: 0, skipped_reason: "account_or_token_missing" };
   }
 
@@ -113,24 +141,25 @@ export async function processBroadcastSequence(seq: BroadcastSequenceRow): Promi
     .order("step_order", { ascending: true });
 
   const stepMessages = (msgs ?? []) as StepMessageRow[];
+  // 段階8-2-E-4 方針 A ②:no_messages → markBroadcastSent OK(意図的 skip、再 SELECT 防止)
   if (stepMessages.length === 0) {
     await markBroadcastSent(seq.id);
     return { sent: 0, failed: 0, skipped_reason: "no_messages" };
   }
 
-  // フォロワー取得（status='following' のみ）+ target_condition でフィルタ
+  // フォロワー取得(status='following' + 段階8-2-E-4 方針 B:scenario 配下統合 IN 句)+ target_condition フィルタ
   let followersRaw: Array<Record<string, unknown>> = [];
   {
     const r = await supabase
       .from("line_followers")
-      .select("id, line_user_id, display_name, followed_at, inflow_route_id")
-      .eq("line_account_id", account.id)
+      .select("id, line_user_id, display_name, followed_at, inflow_route_id, line_account_id")
+      .in("line_account_id", scenarioAccountIds)
       .eq("status", "following");
     if (r.error && /inflow_route_id/.test(r.error.message)) {
       const fb = await supabase
         .from("line_followers")
-        .select("id, line_user_id, display_name, followed_at")
-        .eq("line_account_id", account.id)
+        .select("id, line_user_id, display_name, followed_at, line_account_id")
+        .in("line_account_id", scenarioAccountIds)
         .eq("status", "following");
       followersRaw = (fb.data ?? []) as Array<Record<string, unknown>>;
     } else {
@@ -138,11 +167,15 @@ export async function processBroadcastSequence(seq: BroadcastSequenceRow): Promi
     }
   }
 
+  // fallbackAccount は単一 account fallback path 用、後段の click-tracking 等で使用する変数として温存
+  void fallbackAccount;
+
   let recipients: FollowerRow[] = followersRaw.map((row) => ({
     id: (row.id as string) ?? "",
     line_user_id: row.line_user_id as string,
     display_name: (row.display_name as string | null) ?? null,
     followed_at: (row.followed_at as string) ?? "",
+    line_account_id: row.line_account_id as string,
     inflow_route_id: (row.inflow_route_id as string | null) ?? null,
   }));
 
@@ -160,8 +193,10 @@ export async function processBroadcastSequence(seq: BroadcastSequenceRow): Promi
     );
     recipients = recipients.filter((r) => matched.has(r.id));
   }
+  // 段階8-2-E-4 方針 A ③:no_followers → markBroadcastSent しない
+  // 後から friend が追加されたら次の cron 発火で送信されるべき。
+  // status は 'active' のまま、sent_at も NULL のまま維持。
   if (recipients.length === 0) {
-    await markBroadcastSent(seq.id);
     return { sent: 0, failed: 0, skipped_reason: "no_followers" };
   }
 
@@ -219,7 +254,7 @@ export async function processBroadcastSequence(seq: BroadcastSequenceRow): Promi
             step_message_id: "", // メッセージごとに上書き(下のループで個別設定)
             step_enrollment_id: null, // 予約配信は enrollment なし
             scenario_id: seq.scenario_id ?? null,
-            project_id: account.project_id ?? null,
+            project_id: scenarioProjectId,
             follower_id: f.id,
             line_user_id: f.line_user_id,
           };
@@ -247,8 +282,15 @@ export async function processBroadcastSequence(seq: BroadcastSequenceRow): Promi
           sendMessages = lineMessages;
         }
 
+        // 段階8-2-E-4 方針 B:follower の line_account_id ごとに対応 token を引いて push
+        // tokenMap に該当 account の token がない場合は no_token エラーを返す(scenario 配下の
+        // 他 account で送信は継続)
+        const followerToken = tokenMap.get(f.line_account_id);
+        if (!followerToken) {
+          return { ok: false as const, status: 0, error: "no_token", follower: f, builtPairs };
+        }
         const res = await pushLineMessages(
-          account.channel_access_token!,
+          followerToken,
           f.line_user_id,
           sendMessages,
         );
@@ -279,16 +321,17 @@ export async function processBroadcastSequence(seq: BroadcastSequenceRow): Promi
     for (const r of results) {
       if (r.ok) {
         sent++;
+        // 段階8-2-E-4 D-3:account_id は follower.line_account_id(送信実態と整合)で記録
         logRows.push({
           sequence_id: seq.id,
-          account_id: account.id,
+          account_id: r.follower.line_account_id,
           line_user_id: r.follower.line_user_id,
           status: "success",
           error_message: null,
         });
         const nowIso = new Date().toISOString();
         const msgRows = r.builtPairs.map(({ built, source }) => ({
-          line_account_id: account.id,
+          line_account_id: r.follower.line_account_id,
           line_user_id: r.follower.line_user_id,
           direction: "outgoing" as const,
           message_type: (built.type as string) || "text",
@@ -299,7 +342,7 @@ export async function processBroadcastSequence(seq: BroadcastSequenceRow): Promi
           await supabase.from("line_messages").insert(msgRows);
         }
         await fireTrigger("sequence_completed", {
-          account_id: account.id,
+          account_id: r.follower.line_account_id,
           line_user_id: r.follower.line_user_id,
           follower_id: r.follower.id,
           sequence_id: seq.id,
@@ -308,7 +351,7 @@ export async function processBroadcastSequence(seq: BroadcastSequenceRow): Promi
         failed++;
         logRows.push({
           sequence_id: seq.id,
-          account_id: account.id,
+          account_id: r.follower.line_account_id,
           line_user_id: r.follower.line_user_id,
           status: "failed",
           error_message: `${r.status}: ${r.error}`.slice(0, 500),
