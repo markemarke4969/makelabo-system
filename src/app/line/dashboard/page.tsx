@@ -1910,24 +1910,22 @@ export default function LineDashboard() {
   // /api/line/projects は各 project に scenarios 配列を埋め込んで返す(段階5 hotfix 9ea0e4e で対応済)。
   // テーブル不在(Step 01 未適用)の環境では各 project.scenarios=[] が返るので空配列で継続される。
   // 失敗時は空配列のまま(既存 UI への影響ゼロ)。
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch("/api/line/projects");
-        if (!res.ok) return;
-        const data = (await res.json()) as Array<{ scenarios?: Scenario[] }>;
-        if (cancelled) return;
-        const flat = (Array.isArray(data) ? data : []).flatMap((p) => p.scenarios ?? []);
-        setScenarios(flat);
-      } catch {
-        /* 失敗時は空配列のまま */
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
+  // 段階8-2-C: useCallback に切り出して再 fetch を可能化(機能変更ゼロ、純粋 refactor)。
+  const fetchScenarios = useCallback(async () => {
+    try {
+      const res = await fetch("/api/line/projects");
+      if (!res.ok) return;
+      const data = (await res.json()) as Array<{ scenarios?: Scenario[] }>;
+      const flat = (Array.isArray(data) ? data : []).flatMap((p) => p.scenarios ?? []);
+      setScenarios(flat);
+    } catch {
+      /* 失敗時は空配列のまま */
+    }
   }, []);
+
+  useEffect(() => {
+    fetchScenarios();
+  }, [fetchScenarios]);
 
   // 段階6a: sessionStorage から selectedScenarioId / mainView / accountSubView を復元。
   // restoreCompletedRef で 1 回限定 + 復元完了まで永続化 useEffect を抑制(初回 mount で

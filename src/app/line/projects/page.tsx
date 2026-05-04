@@ -27,6 +27,19 @@ interface ScenarioForm {
   sort_order: number;
 }
 
+// 段階8-2-C: scenario 削除モーダルで表示する依存件数。
+// /api/line/scenarios/dependents の GET レスポンス形式と一致。
+interface ScenarioDependents {
+  followers: number;
+  accounts: number;
+  inflow_routes: number;
+  step_sequences: number;
+  rich_menus: number;
+  labels: number;
+  action_rules: number;
+  others: number;
+}
+
 interface Project {
   id: string;
   name: string;
@@ -99,6 +112,13 @@ export default function LineProjects() {
 
   // 段階5 案B:編集中の案件に紐付く scenarios のフォーム値(scenarios が無い環境では空配列)
   const [scenariosForm, setScenariosForm] = useState<ScenarioForm[]>([]);
+
+  // 段階8-2-C: scenario 削除モーダル
+  const [deleteScenarioTarget, setDeleteScenarioTarget] = useState<ScenarioForm | null>(null);
+  const [deleteScenarioDependents, setDeleteScenarioDependents] = useState<ScenarioDependents | null>(null);
+  const [deleteScenarioInputName, setDeleteScenarioInputName] = useState("");
+  const [deleteScenarioBusy, setDeleteScenarioBusy] = useState(false);
+  const [deleteScenarioError, setDeleteScenarioError] = useState<string | null>(null);
 
   // スマホ用ハンバーガーメニュー
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -290,6 +310,61 @@ export default function LineProjects() {
     } else {
       const data = await res.json().catch(() => ({}));
       alert(`削除失敗: ${data.error ?? res.status}`);
+    }
+  };
+
+  // 段階8-2-C: scenario 削除モーダルを開いて依存件数を取得
+  const openDeleteScenarioModal = async (sc: ScenarioForm) => {
+    setDeleteScenarioTarget(sc);
+    setDeleteScenarioInputName("");
+    setDeleteScenarioError(null);
+    setDeleteScenarioDependents(null);
+    try {
+      const res = await fetch(`/api/line/scenarios/dependents?id=${encodeURIComponent(sc.id)}`);
+      if (res.ok) {
+        setDeleteScenarioDependents(await res.json());
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setDeleteScenarioError(`依存件数取得失敗: ${data.error ?? res.status}`);
+      }
+    } catch (e) {
+      setDeleteScenarioError(`依存件数取得エラー: ${(e as Error).message}`);
+    }
+  };
+
+  const closeDeleteScenarioModal = () => {
+    setDeleteScenarioTarget(null);
+    setDeleteScenarioDependents(null);
+    setDeleteScenarioInputName("");
+    setDeleteScenarioError(null);
+  };
+
+  const confirmDeleteScenario = async () => {
+    if (!deleteScenarioTarget) return;
+    if (deleteScenarioInputName !== deleteScenarioTarget.name) return;
+    setDeleteScenarioBusy(true);
+    setDeleteScenarioError(null);
+    try {
+      const res = await fetch("/api/line/scenarios", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: deleteScenarioTarget.id }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setDeleteScenarioError(`削除失敗: ${data.error ?? res.status}`);
+        return;
+      }
+      // ローカル scenariosForm から該当 scenario を除去(編集中モーダルの整合)
+      setScenariosForm((prev) => prev.filter((s) => s.id !== deleteScenarioTarget.id));
+      // projects 全体を再取得(scenarios 配列の最新化)
+      await fetchProjects();
+      closeDeleteScenarioModal();
+      alert("削除完了");
+    } catch (e) {
+      setDeleteScenarioError(`削除エラー: ${(e as Error).message}`);
+    } finally {
+      setDeleteScenarioBusy(false);
     }
   };
 
@@ -696,6 +771,16 @@ export default function LineProjects() {
                             className="w-32 border border-gray-200 rounded px-2 py-1 text-xs bg-white font-mono"
                             placeholder="code"
                           />
+                          {/* 段階8-2-C: scenario 削除ボタン(管理モード時のみ表示、project 削除と同パターン) */}
+                          {manageMode && (
+                            <button
+                              type="button"
+                              onClick={() => openDeleteScenarioModal(sc)}
+                              className="px-2 py-1 text-[10px] bg-red-500/80 hover:bg-red-500 text-white rounded whitespace-nowrap"
+                            >
+                              削除
+                            </button>
+                          )}
                         </div>
                         <div className="flex items-center gap-3 text-[11px]">
                           <label className="flex items-center gap-1 cursor-pointer">
@@ -790,6 +875,72 @@ export default function LineProjects() {
                 className="px-5 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition"
               >
                 {projectSaving ? "保存中..." : editingProjectId ? "更新" : "作成"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 段階8-2-C: scenario 削除確認モーダル */}
+      {deleteScenarioTarget && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60] p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md">
+            <div className="px-5 py-4 border-b border-gray-200">
+              <h3 className="text-base font-bold text-gray-800">
+                シナリオ「{deleteScenarioTarget.name}」を削除
+              </h3>
+            </div>
+            <div className="px-5 py-4 space-y-3">
+              <p className="text-xs text-gray-600">以下のデータが影響を受けます:</p>
+              {deleteScenarioDependents ? (
+                <ul className="text-xs space-y-1 text-gray-700">
+                  <li>・友達: <strong>{deleteScenarioDependents.followers}</strong> 件 <span className="text-gray-400">(紐付けのみ消失)</span></li>
+                  <li>・アカウント: <strong>{deleteScenarioDependents.accounts}</strong> 件 <span className="text-gray-400">(紐付けのみ消失)</span></li>
+                  <li>・流入経路: <strong>{deleteScenarioDependents.inflow_routes}</strong> 件 <span className="text-gray-400">(紐付けのみ消失)</span></li>
+                  <li>・ステップ配信: <strong>{deleteScenarioDependents.step_sequences}</strong> 件 <span className="text-red-600">(削除)</span></li>
+                  <li>・リッチメニュー: <strong>{deleteScenarioDependents.rich_menus}</strong> 件 <span className="text-red-600">(削除)</span></li>
+                  <li>・ラベル: <strong>{deleteScenarioDependents.labels}</strong> 件 <span className="text-red-600">(削除)</span></li>
+                  <li>・アクションルール: <strong>{deleteScenarioDependents.action_rules}</strong> 件 <span className="text-red-600">(削除)</span></li>
+                  <li>・その他: <strong>{deleteScenarioDependents.others}</strong> 件 <span className="text-gray-400">(配信定義 / 設定資産等)</span></li>
+                </ul>
+              ) : (
+                <div className="text-xs text-gray-400">読み込み中...</div>
+              )}
+              <div className="space-y-1 pt-2">
+                <label className="text-xs text-gray-600 block">
+                  確認のため、シナリオ名「<span className="font-mono font-medium text-gray-800">{deleteScenarioTarget.name}</span>」を入力:
+                </label>
+                <input
+                  type="text"
+                  value={deleteScenarioInputName}
+                  onChange={(e) => setDeleteScenarioInputName(e.target.value)}
+                  placeholder={deleteScenarioTarget.name}
+                  className="w-full border border-gray-200 rounded px-2 py-1.5 text-xs bg-white focus:border-red-400 focus:outline-none focus:ring-1 focus:ring-red-400"
+                  autoFocus
+                />
+              </div>
+              {deleteScenarioError && (
+                <div className="px-3 py-2 rounded-md text-xs bg-red-50 text-red-700 border border-red-200">
+                  {deleteScenarioError}
+                </div>
+              )}
+            </div>
+            <div className="flex justify-end gap-2 px-5 py-4 border-t border-gray-200">
+              <button
+                onClick={closeDeleteScenarioModal}
+                className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition"
+              >
+                キャンセル
+              </button>
+              <button
+                onClick={confirmDeleteScenario}
+                disabled={
+                  deleteScenarioBusy ||
+                  deleteScenarioInputName !== deleteScenarioTarget.name
+                }
+                className="px-4 py-2 bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition"
+              >
+                {deleteScenarioBusy ? "削除中..." : "削除"}
               </button>
             </div>
           </div>
