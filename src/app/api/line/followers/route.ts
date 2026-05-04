@@ -23,6 +23,10 @@ export async function GET(request: NextRequest) {
   const accountId = request.nextUrl.searchParams.get("account_id");
   const projectId = request.nextUrl.searchParams.get("project_id");
   const scenarioId = request.nextUrl.searchParams.get("scenario_id");
+  // 段階8-2-D: 「シナリオ未設定」バケツ用の boolean フラグ。
+  // scenario_id 指定時は scenario_id 優先(排他、D-4 案 i)。
+  // account_id / project_id と並列指定時はスコープと AND で組合せ(scenario_id IS NULL を追加フィルタ)。
+  const scenarioNull = request.nextUrl.searchParams.get("scenario_null") === "1";
   // クローザーログイン時: closer_visible=true のグループのアカウントのみに限定
   const closerVisibleOnly = request.nextUrl.searchParams.get("closer_visible_only") === "1";
 
@@ -122,6 +126,11 @@ export async function GET(request: NextRequest) {
       q = q.eq("line_account_id", accountId);
     } else if (accountIdsFromProject) {
       q = q.in("line_account_id", accountIdsFromProject);
+    }
+    // 段階8-2-D: scenario_null=1 はスコープ(account/project)と AND で組合せ。
+    // scenario_id 直 hit との同時指定時は scenario_id 優先(D-4 排他)で scenario_null 無効。
+    if (scenarioNull && !(useScenarioDirectHit && scenarioId)) {
+      q = q.is("scenario_id", null);
     }
     if (withTestFilter) q = q.eq("is_test", true);
     return q;
