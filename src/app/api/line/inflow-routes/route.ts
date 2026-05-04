@@ -6,6 +6,10 @@ export async function GET(request: NextRequest) {
   const projectId = request.nextUrl.searchParams.get("project_id");
   const accountId = request.nextUrl.searchParams.get("account_id"); // 後方互換
   const scenarioId = request.nextUrl.searchParams.get("scenario_id");
+  // 段階8-2-D: 「シナリオ未設定」バケツ用の boolean フラグ。
+  // scenario_id 指定時は scenario_id 優先(排他、D-4 案 i)。
+  // account_id / project_id と並列指定時はスコープと AND で組合せ(scenario_id IS NULL を追加フィルタ)。
+  const scenarioNull = request.nextUrl.searchParams.get("scenario_null") === "1";
 
   // クエリ何も指定がない場合は 400(既存仕様維持。projectId/accountId/scenarioId のいずれか必須)
   if (!projectId && !accountId && !scenarioId) {
@@ -42,6 +46,12 @@ export async function GET(request: NextRequest) {
     }
   } else if (projectId) {
     q = q.eq("project_id", projectId);
+  }
+
+  // 段階8-2-D: scenario_null=1 はスコープ(account/project)と AND で組合せ。
+  // scenario_id 指定時は scenario_id 優先(D-4 排他)で scenario_null 無効。
+  if (scenarioNull && !scenarioId) {
+    q = q.is("scenario_id", null);
   }
 
   let { data, error } = await q;
