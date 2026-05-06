@@ -855,6 +855,32 @@ export default function LineDashboard() {
   // アカウント編集フォーム / 一括登録 wizard / アカウント一覧テーブル / バケツ集約で参照する。
   const [scenarios, setScenarios] = useState<Scenario[]>([]);
 
+  // 段階8-2-F:シナリオ新規作成モーダル(/line/dashboard 側)
+  // 段階5案Bで「dashboard には置かない」と決まっていたが、石井さん 2026-05-06 判断で方針変更。
+  // 案件管理ページ(/line/projects)とシナリオ一覧画面の両方から作成可能にする。
+  const [showCreateScenario, setShowCreateScenario] = useState(false);
+  const [createScenarioForm, setCreateScenarioForm] = useState<{
+    project_id: string;
+    code: string;
+    name: string;
+    distribute_enabled: boolean;
+    distribute_count: number;
+    reserve_count: number;
+    ban_sync_enabled: boolean;
+    closer_visible: boolean;
+  }>({
+    project_id: "",
+    code: "",
+    name: "",
+    distribute_enabled: false,
+    distribute_count: 1,
+    reserve_count: 0,
+    ban_sync_enabled: false,
+    closer_visible: false,
+  });
+  const [createScenarioSaving, setCreateScenarioSaving] = useState(false);
+  const [createScenarioMsg, setCreateScenarioMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
   const [showStepCreator, setShowStepCreator] = useState(false);
   const [stepCreatorForm, setStepCreatorForm] = useState<BroadcastForm>(emptyBroadcast);
   // 編集中のシーケンスID（nullなら新規作成）
@@ -1940,6 +1966,86 @@ export default function LineDashboard() {
   useEffect(() => {
     fetchScenarios();
   }, [fetchScenarios]);
+
+  // 段階8-2-F:シナリオ新規作成モーダル
+  const openCreateScenarioModal = useCallback(() => {
+    // 表示中の project に紐づくシナリオの最大 sort_order + 1 を初期値に
+    const targetProjectId = project?.id ?? "";
+    const projectScenariosSort = scenarios
+      .filter((s) => s.project_id === targetProjectId)
+      .map((s) => s.sort_order ?? 0);
+    const nextSort = projectScenariosSort.length === 0 ? 0 : Math.max(...projectScenariosSort) + 1;
+    setCreateScenarioForm({
+      project_id: targetProjectId,
+      code: "",
+      name: "",
+      distribute_enabled: false,
+      distribute_count: 1,
+      reserve_count: 0,
+      ban_sync_enabled: false,
+      closer_visible: false,
+    });
+    setCreateScenarioMsg(null);
+    setShowCreateScenario(true);
+    // sort_order は form 内の hidden field 扱いで送信時に補完(下記 submitCreateScenario)
+    void nextSort;
+  }, [project?.id, scenarios]);
+
+  const submitCreateScenario = useCallback(async () => {
+    const { project_id, code, name } = createScenarioForm;
+    if (!project_id) {
+      setCreateScenarioMsg({ ok: false, text: "案件を選択してください" });
+      return;
+    }
+    if (!code.trim()) {
+      setCreateScenarioMsg({ ok: false, text: "シナリオコードを入力してください" });
+      return;
+    }
+    if (!/^[a-zA-Z0-9_-]+$/.test(code.trim())) {
+      setCreateScenarioMsg({ ok: false, text: "code は半角英数・ハイフン・アンダースコアのみ使用できます" });
+      return;
+    }
+    if (!name.trim()) {
+      setCreateScenarioMsg({ ok: false, text: "シナリオ名を入力してください" });
+      return;
+    }
+    setCreateScenarioSaving(true);
+    setCreateScenarioMsg(null);
+    try {
+      // sort_order は同一 project の scenarios 最大 +1
+      const projectScenariosSort = scenarios
+        .filter((s) => s.project_id === project_id)
+        .map((s) => s.sort_order ?? 0);
+      const nextSort = projectScenariosSort.length === 0 ? 0 : Math.max(...projectScenariosSort) + 1;
+
+      const res = await fetch("/api/line/scenarios", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          project_id,
+          code: code.trim(),
+          name: name.trim(),
+          distribute_enabled: createScenarioForm.distribute_enabled,
+          distribute_count: createScenarioForm.distribute_count,
+          reserve_count: createScenarioForm.reserve_count,
+          ban_sync_enabled: createScenarioForm.ban_sync_enabled,
+          closer_visible: createScenarioForm.closer_visible,
+          sort_order: nextSort,
+        }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setCreateScenarioMsg({ ok: false, text: data.error ?? `作成失敗 (HTTP ${res.status})` });
+        return;
+      }
+      await fetchScenarios();
+      setShowCreateScenario(false);
+    } catch (e) {
+      setCreateScenarioMsg({ ok: false, text: (e as Error).message });
+    } finally {
+      setCreateScenarioSaving(false);
+    }
+  }, [createScenarioForm, scenarios, fetchScenarios]);
 
   // 段階6a: sessionStorage から selectedScenarioId / mainView / accountSubView を復元。
   // restoreCompletedRef で 1 回限定 + 復元完了まで永続化 useEffect を抑制(初回 mount で
@@ -4039,7 +4145,15 @@ export default function LineDashboard() {
           <>
             <header className="bg-white border-b border-gray-200 px-4 md:px-6 py-3 flex items-center justify-between flex-shrink-0">
               <h1 className="text-base font-bold text-gray-800">シナリオ一覧</h1>
-              <span className="text-[11px] text-gray-400">アカウント追加・編集は「アカウント管理」タブから</span>
+              <div className="flex items-center gap-3">
+                <span className="text-[11px] text-gray-400 hidden md:inline">アカウント追加・編集は「アカウント管理」タブから</span>
+                <button
+                  onClick={openCreateScenarioModal}
+                  className="px-3 py-1.5 text-xs bg-[#06C755] hover:bg-[#05a648] text-white rounded-md transition font-medium"
+                >
+                  ＋ 新規シナリオ作成
+                </button>
+              </div>
             </header>
 
             <main className="flex-1 overflow-y-auto p-4 md:p-6">
@@ -4478,9 +4592,15 @@ export default function LineDashboard() {
                 const unsetCount = accounts.filter((a) => !a.scenario_id).length;
                 if (projectScenarios.length === 0 && accounts.length === 0) {
                   return (
-                    <div className="bg-white rounded-lg border border-gray-200 p-16 text-center text-gray-400">
-                      <p className="text-lg mb-2">シナリオが登録されていません</p>
-                      <p className="text-sm">案件管理ページからシナリオを追加してください。</p>
+                    <div className="bg-white rounded-lg border border-gray-200 p-16 text-center">
+                      <p className="text-lg mb-2 text-gray-500">シナリオが登録されていません</p>
+                      <p className="text-sm text-gray-400 mb-6">右上の「＋ 新規シナリオ作成」または案件管理ページから追加してください。</p>
+                      <button
+                        onClick={openCreateScenarioModal}
+                        className="px-4 py-2 bg-[#06C755] hover:bg-[#05a648] text-white text-sm font-medium rounded-md"
+                      >
+                        ＋ 新規シナリオ作成
+                      </button>
                     </div>
                   );
                 }
@@ -4525,6 +4645,148 @@ export default function LineDashboard() {
                   </div>
                 );
               })()}
+
+              {/* ============================================================ */}
+              {/* 段階8-2-F:シナリオ新規作成モーダル */}
+              {/* ============================================================ */}
+              {showCreateScenario && (
+                <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+                  <div className="bg-white rounded-xl shadow-xl w-full max-w-md max-h-[90vh] overflow-y-auto">
+                    <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
+                      <h3 className="font-bold text-gray-800">新規シナリオ作成</h3>
+                      <button
+                        onClick={() => setShowCreateScenario(false)}
+                        className="text-gray-400 hover:text-gray-600"
+                      >
+                        {Icons.close}
+                      </button>
+                    </div>
+                    <div className="p-5 space-y-3">
+                      <div>
+                        <label className="text-xs text-gray-500 block mb-1 font-medium">
+                          案件 <span className="text-red-500">*</span>
+                        </label>
+                        <select
+                          value={createScenarioForm.project_id}
+                          onChange={(e) => setCreateScenarioForm({ ...createScenarioForm, project_id: e.target.value })}
+                          className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                        >
+                          <option value="">-- 案件を選択 --</option>
+                          {allProjects.map((p) => (
+                            <option key={p.id} value={p.id}>{p.name}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-xs text-gray-500 block mb-1 font-medium">
+                          シナリオコード <span className="text-red-500">*</span>
+                        </label>
+                        <input
+                          type="text"
+                          value={createScenarioForm.code}
+                          onChange={(e) => setCreateScenarioForm({ ...createScenarioForm, code: e.target.value.replace(/[^a-zA-Z0-9_-]/g, "") })}
+                          placeholder="例: umatoku"
+                          className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                        />
+                        <p className="text-[10px] text-gray-400 mt-1">半角英数・ハイフン・アンダースコアのみ。同一案件で重複不可</p>
+                      </div>
+                      <div>
+                        <label className="text-xs text-gray-500 block mb-1 font-medium">
+                          シナリオ名 <span className="text-red-500">*</span>
+                        </label>
+                        <input
+                          type="text"
+                          value={createScenarioForm.name}
+                          onChange={(e) => setCreateScenarioForm({ ...createScenarioForm, name: e.target.value })}
+                          placeholder="例: ウマトク"
+                          className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                        />
+                      </div>
+                      <div className="border-t border-gray-200 pt-3 space-y-2">
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={createScenarioForm.ban_sync_enabled}
+                            onChange={(e) => setCreateScenarioForm({ ...createScenarioForm, ban_sync_enabled: e.target.checked })}
+                            className="accent-blue-600"
+                          />
+                          <span className="text-xs text-gray-700">BAN対策同期を有効にする</span>
+                        </label>
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={createScenarioForm.distribute_enabled}
+                            onChange={(e) => setCreateScenarioForm({ ...createScenarioForm, distribute_enabled: e.target.checked })}
+                            className="accent-purple-600"
+                          />
+                          <span className="text-xs text-gray-700">分散登録を有効にする</span>
+                        </label>
+                        {createScenarioForm.distribute_enabled && (
+                          <div className="grid grid-cols-2 gap-3 ml-6 mt-2">
+                            <div>
+                              <label className="text-[10px] text-gray-500 block mb-1">分散本数</label>
+                              <select
+                                value={createScenarioForm.distribute_count}
+                                onChange={(e) => setCreateScenarioForm({ ...createScenarioForm, distribute_count: Number(e.target.value) })}
+                                className="w-full border border-gray-200 rounded px-2 py-1 text-xs bg-white"
+                              >
+                                {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => (
+                                  <option key={n} value={n}>{n} 本</option>
+                                ))}
+                              </select>
+                            </div>
+                            <div>
+                              <label className="text-[10px] text-gray-500 block mb-1">予備本数</label>
+                              <select
+                                value={createScenarioForm.reserve_count}
+                                onChange={(e) => setCreateScenarioForm({ ...createScenarioForm, reserve_count: Number(e.target.value) })}
+                                className="w-full border border-gray-200 rounded px-2 py-1 text-xs bg-white"
+                              >
+                                {[0, 1, 2, 3, 4, 5].map((n) => (
+                                  <option key={n} value={n}>{n} 本</option>
+                                ))}
+                              </select>
+                            </div>
+                          </div>
+                        )}
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={createScenarioForm.closer_visible}
+                            onChange={(e) => setCreateScenarioForm({ ...createScenarioForm, closer_visible: e.target.checked })}
+                            className="accent-green-600"
+                          />
+                          <span className="text-xs text-gray-700">クローザー可視(closer_visible)</span>
+                        </label>
+                      </div>
+                      {createScenarioMsg && (
+                        <div className={`px-3 py-2 rounded-md text-xs ${
+                          createScenarioMsg.ok
+                            ? "bg-green-50 text-green-700 border border-green-200"
+                            : "bg-red-50 text-red-700 border border-red-200"
+                        }`}>
+                          {createScenarioMsg.text}
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex justify-end gap-2 px-5 py-4 border-t border-gray-200">
+                      <button
+                        onClick={() => setShowCreateScenario(false)}
+                        className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg"
+                      >
+                        キャンセル
+                      </button>
+                      <button
+                        onClick={submitCreateScenario}
+                        disabled={createScenarioSaving || !createScenarioForm.project_id || !createScenarioForm.code.trim() || !createScenarioForm.name.trim()}
+                        className="px-5 py-2 bg-[#06C755] hover:bg-[#05a648] disabled:opacity-50 text-white text-sm font-medium rounded-lg"
+                      >
+                        {createScenarioSaving ? "作成中..." : "作成"}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
             </main>
           </>
         )}
