@@ -119,38 +119,16 @@ export async function POST(request: NextRequest) {
     insertBody.reserve_count = Number(reserve_count);
   }
 
-  let { data, error } = await supabase
+  const { data, error } = await supabase
     .from("line_projects")
     .insert(insertBody)
     .select("*")
     .single();
 
-  // distribute_* カラム未作成環境への fallback
-  if (error && /distribute_enabled|distribute_count|reserve_count/.test(error.message)) {
-    const retry = { ...insertBody };
-    delete retry.distribute_enabled;
-    delete retry.distribute_count;
-    delete retry.reserve_count;
-    ({ data, error } = await supabase
-      .from("line_projects")
-      .insert(retry)
-      .select("*")
-      .single());
-  }
-
-  // ban_sync_enabled カラム未作成環境への fallback
-  if (error && /ban_sync_enabled/.test(error.message)) {
-    const retry = { ...insertBody };
-    delete retry.ban_sync_enabled;
-    delete retry.distribute_enabled;
-    delete retry.distribute_count;
-    delete retry.reserve_count;
-    ({ data, error } = await supabase
-      .from("line_projects")
-      .insert(retry)
-      .select("*")
-      .single());
-  }
+  // 段階8-2-F:distribute_* / ban_sync_enabled の silent fallback を撤廃。
+  // PUT 側と同様、これら 4 カラムは段階5-step05-finalize で line_projects から DROP 済み。
+  // フロントは段階8-2-F で project レベルでは送らない実装に変更したが、
+  // 念のため insertBody への代入は残し、誤って送られた場合は DB エラー(undefined column)で正面化する。
 
   if (error) {
     console.error("[projects POST] error:", error);
@@ -211,24 +189,9 @@ export async function PUT(request: NextRequest) {
     ({ error } = await supabase.from("line_projects").update(rest).eq("id", id));
   }
 
-  // distribute_* カラム未作成環境への fallback(Step 13 適用後を含む)
-  if (error && /distribute_enabled|distribute_count|reserve_count/.test(error.message)) {
-    const retry = { ...updates };
-    delete retry.distribute_enabled;
-    delete retry.distribute_count;
-    delete retry.reserve_count;
-    ({ error } = await supabase.from("line_projects").update(retry).eq("id", id));
-  }
-
-  // ban_sync_enabled カラム未作成環境への fallback(Step 13 適用後を含む)
-  if (error && /ban_sync_enabled/.test(error.message)) {
-    const retry = { ...updates };
-    delete retry.ban_sync_enabled;
-    delete retry.distribute_enabled;
-    delete retry.distribute_count;
-    delete retry.reserve_count;
-    ({ error } = await supabase.from("line_projects").update(retry).eq("id", id));
-  }
+  // 段階8-2-F:distribute_* / ban_sync_enabled の silent fallback を撤廃。
+  // これら 4 カラムは段階5-step05-finalize で line_projects から DROP 済み(line_scenarios へ移管)。
+  // フロントが project レベルで送ってきた場合はエラーを正面化させ、可視化原則に従う。
 
   if (error) {
     const pgCode = (error as { code?: string }).code;
