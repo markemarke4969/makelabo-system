@@ -514,7 +514,8 @@ export default function LineDashboard() {
     testing: boolean;
     testResult: { ok: boolean; text: string } | null;
     saving: boolean;
-    saveResult: { ok: boolean; text: string } | null;
+    // 段階8-2-H: duplicate=true は API 409 (UNIQUE 違反) を表す。行背景を黄色で視覚化する。
+    saveResult: { ok: boolean; text: string; duplicate?: boolean } | null;
   }
   const emptyBulkRow = (): BulkRow => ({
     account_name: "",
@@ -4374,9 +4375,18 @@ export default function LineDashboard() {
                         });
                       } else {
                         failureIndexes.push(index);
+                        // 段階8-2-H: 409 (UNIQUE 違反) は重複として明示表示し、行を黄色で視覚化する。
+                        const isDuplicate = res.status === 409 && data?.error === "duplicate";
+                        const text = isDuplicate
+                          ? `重複(既に登録済):${data?.detail ?? "同一シナリオ内に同じ channel_id / basic_id が存在"}`
+                          : (data?.error ?? `HTTP ${res.status}`);
                         setBulkRows((prev) => {
                           const next = [...prev];
-                          next[index] = { ...next[index], saving: false, saveResult: { ok: false, text: data.error ?? `HTTP ${res.status}` } };
+                          next[index] = {
+                            ...next[index],
+                            saving: false,
+                            saveResult: { ok: false, text, duplicate: isDuplicate },
+                          };
                           return next;
                         });
                       }
@@ -4490,9 +4500,11 @@ export default function LineDashboard() {
                               const filled = isRowFilled(row);
                               const rowBg = row.saveResult?.ok
                                 ? "bg-green-50"
-                                : row.saveResult && !row.saveResult.ok
-                                  ? "bg-red-50"
-                                  : "bg-white hover:bg-blue-50/30";
+                                : row.saveResult?.duplicate
+                                  ? "bg-yellow-50"
+                                  : row.saveResult && !row.saveResult.ok
+                                    ? "bg-red-50"
+                                    : "bg-white hover:bg-blue-50/30";
                               return (
                                 <tr key={i} className={`border-b border-gray-200 ${rowBg}`}>
                                   <td className="px-2 py-1.5 border-r border-gray-200 text-center text-gray-400">{i + 1}</td>
