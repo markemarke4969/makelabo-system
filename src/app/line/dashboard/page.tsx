@@ -533,6 +533,15 @@ export default function LineDashboard() {
   const [bulkProjectId, setBulkProjectId] = useState<string>("");
   const [bulkRows, setBulkRows] = useState<BulkRow[]>([]);
   const [bulkRunning, setBulkRunning] = useState(false);
+  // 一括登録の silent state バグ対策(2026-05-09):
+  //   bulkProgress … 逐次ループ中の進捗(N/M)を表示
+  //   bulkCompleteBanner … 完了通知バナー(success / partial / error の3パターン、3秒で自動消去)
+  //   bulkBannerTimerRef … バナー自動消去用 timeout の ref(モーダル再開時にクリーンアップ)
+  const [bulkProgress, setBulkProgress] = useState<{ done: number; total: number } | null>(null);
+  const [bulkCompleteBanner, setBulkCompleteBanner] = useState<
+    { type: "success" | "partial" | "error"; text: string } | null
+  >(null);
+  const bulkBannerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>({});
   const [needsAction, setNeedsAction] = useState<Set<string>>(new Set());
   const [soundEnabled, setSoundEnabled] = useState(true);
@@ -4239,7 +4248,16 @@ export default function LineDashboard() {
               {/* アカウント一括登録（スプレッドシート形式） */}
               {/* ============================================================ */}
               {showWizard && (() => {
-                const closeWizard = () => { setShowWizard(false); setBulkRows([]); };
+                const closeWizard = () => {
+                  if (bulkBannerTimerRef.current) {
+                    clearTimeout(bulkBannerTimerRef.current);
+                    bulkBannerTimerRef.current = null;
+                  }
+                  setShowWizard(false);
+                  setBulkRows([]);
+                  setBulkProgress(null);
+                  setBulkCompleteBanner(null);
+                };
 
                 const updateRow = (i: number, patch: Partial<BulkRow>) => {
                   setBulkRows((prev) => {
@@ -4290,19 +4308,39 @@ export default function LineDashboard() {
                 };
 
                 const runBulkRegister = async () => {
+                  // 念のためのガード(silent fail にしないため log は残す):
+                  //   ボタンの disabled で実質防げているが、何らかの経路で同時呼び出しされた場合に
+                  //   2026-05-09 の AI副業診断重複登録(10→20件)のような事故を再発させないための明示的ガード。
+                  if (bulkRunning) {
+                    console.warn("[bulk-register] 既に実行中のためガード(二重押下/同時呼び出し検知)");
+                    return;
+                  }
                   if (!bulkProjectId) { alert("案件を選択してください"); return; }
                   const targets = bulkRows.map((r, i) => ({ row: r, index: i })).filter(({ row }) => isRowFilled(row));
                   if (targets.length === 0) {
-                    alert("入力された行がありません（チャネルID/シークレット/トークン/シナリオの全て入力が必要）");
+                    alert("入力された行がありません(チャネルID/シークレット/トークン/シナリオの全て入力が必要)");
                     return;
                   }
+
+                  // バナー残存中の再実行に備えて事前クリア
+                  if (bulkBannerTimerRef.current) {
+                    clearTimeout(bulkBannerTimerRef.current);
+                    bulkBannerTimerRef.current = null;
+                  }
+                  setBulkCompleteBanner(null);
                   setBulkRunning(true);
+                  setBulkProgress({ done: 0, total: targets.length });
                   // 全行の saveResult をクリア
                   setBulkRows((prev) => prev.map((r) => ({ ...r, saveResult: null, saving: false })));
 
+                  // 完了集計用(setBulkRows のクロージャ越しでは集計できないためローカルで保持)
+                  const successIndexes: number[] = [];
+                  const failureIndexes: number[] = [];
+
                   // 段階5(案B)PR-5:新規 scenario 作成は不可(scenarios の管理は projects/page.tsx に集約)。
                   // 旧仕様で行っていた /api/line/account-groups PUT(新規グループ自動作成)は本 PR で削除済。
-                  for (const { row, index } of targets) {
+                  for (let n = 0; n < targets.length; n++) {
+                    const { row, index } = targets[n];
                     setBulkRows((prev) => {
                       const next = [...prev];
                       next[index] = { ...next[index], saving: true, saveResult: null };
@@ -4328,12 +4366,14 @@ export default function LineDashboard() {
                       });
                       const data = await res.json();
                       if (res.ok) {
+                        successIndexes.push(index);
                         setBulkRows((prev) => {
                           const next = [...prev];
                           next[index] = { ...next[index], saving: false, saveResult: { ok: true, text: "登録成功" } };
                           return next;
                         });
                       } else {
+                        failureIndexes.push(index);
                         setBulkRows((prev) => {
                           const next = [...prev];
                           next[index] = { ...next[index], saving: false, saveResult: { ok: false, text: data.error ?? `HTTP ${res.status}` } };
@@ -4341,13 +4381,52 @@ export default function LineDashboard() {
                         });
                       }
                     } catch (e) {
+                      failureIndexes.push(index);
                       setBulkRows((prev) => {
                         const next = [...prev];
                         next[index] = { ...next[index], saving: false, saveResult: { ok: false, text: (e as Error).message } };
                         return next;
                       });
                     }
+                    setBulkProgress({ done: n + 1, total: targets.length });
                   }
+
+                  // 完了処理:3パターン分岐(全件成功 / 一部失敗 / 全件失敗)
+                  const successCount = successIndexes.length;
+                  const failureCount = failureIndexes.length;
+                  const total = targets.length;
+
+                  if (failureCount === 0) {
+                    // 全件成功 → 緑バナー + フォームリセット(空行1つ残す)
+                    setBulkCompleteBanner({
+                      type: "success",
+                      text: `${successCount}件のアカウントを登録しました`,
+                    });
+                    setBulkRows([emptyBulkRow()]);
+                  } else if (successCount > 0) {
+                    // 一部失敗 → 黄バナー + 失敗行のみ残す(成功行は除外、失敗行の saveResult を保持)
+                    setBulkCompleteBanner({
+                      type: "partial",
+                      text: `${total}件中 ${successCount}件成功 / ${failureCount}件失敗`,
+                    });
+                    setBulkRows((prev) => {
+                      const failureSet = new Set(failureIndexes);
+                      return prev.filter((_, i) => failureSet.has(i));
+                    });
+                  } else {
+                    // 全件失敗 → 赤バナー + 全行残す(各行のエラー理由は saveResult で表示済)
+                    setBulkCompleteBanner({
+                      type: "error",
+                      text: `${total}件すべて登録に失敗しました`,
+                    });
+                  }
+
+                  // 3秒後にバナー自動消去 + ボタン disabled 解除(進捗もリセット)
+                  bulkBannerTimerRef.current = setTimeout(() => {
+                    setBulkCompleteBanner(null);
+                    setBulkProgress(null);
+                    bulkBannerTimerRef.current = null;
+                  }, 3000);
 
                   setBulkRunning(false);
                   await fetchAccounts();
@@ -4551,6 +4630,27 @@ export default function LineDashboard() {
                         </table>
                       </div>
 
+                      {/* 完了通知バナー(silent state バグ対策・3秒で自動消去)
+                          全件成功 → 緑、一部失敗 → 黄、全件失敗 → 赤 */}
+                      {bulkCompleteBanner && (
+                        <div
+                          className={`px-5 py-2.5 border-t text-sm font-medium flex items-center gap-2 ${
+                            bulkCompleteBanner.type === "success"
+                              ? "bg-green-50 border-green-200 text-green-800"
+                              : bulkCompleteBanner.type === "partial"
+                                ? "bg-yellow-50 border-yellow-200 text-yellow-800"
+                                : "bg-red-50 border-red-200 text-red-800"
+                          }`}
+                          role="status"
+                          aria-live="polite"
+                        >
+                          <span>
+                            {bulkCompleteBanner.type === "success" ? "✅" : bulkCompleteBanner.type === "partial" ? "⚠️" : "❌"}
+                          </span>
+                          <span>{bulkCompleteBanner.text}</span>
+                        </div>
+                      )}
+
                       {/* フッター */}
                       <div className="px-5 py-3 border-t border-gray-200 bg-gray-50 flex items-center justify-between gap-2">
                         <div className="text-[11px] text-gray-500">
@@ -4562,16 +4662,19 @@ export default function LineDashboard() {
                           <button
                             onClick={closeWizard}
                             disabled={bulkRunning}
-                            className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-md"
+                            className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-md disabled:opacity-50 disabled:cursor-not-allowed"
                           >
                             閉じる
                           </button>
                           <button
                             onClick={runBulkRegister}
-                            disabled={bulkRunning || !bulkProjectId || filledCount === 0}
-                            className="px-5 py-2 bg-[#06C755] hover:bg-[#05a648] disabled:opacity-50 text-white text-sm font-medium rounded-md"
+                            // バナー表示中も disabled を維持(再押下による重複登録を確実に防ぐ)
+                            disabled={bulkRunning || bulkCompleteBanner !== null || !bulkProjectId || filledCount === 0}
+                            className="px-5 py-2 bg-[#06C755] hover:bg-[#05a648] disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium rounded-md"
                           >
-                            {bulkRunning ? "登録中..." : `一括登録 (${filledCount}件)`}
+                            {bulkRunning && bulkProgress
+                              ? `登録中... (${bulkProgress.done}/${bulkProgress.total})`
+                              : `一括登録 (${filledCount}件)`}
                           </button>
                         </div>
                       </div>
