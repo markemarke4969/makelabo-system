@@ -234,6 +234,19 @@ export async function POST(request: NextRequest) {
   }
 
   if (error) {
+    // 段階8-2-H: PostgreSQL UNIQUE 違反は 409 Conflict で可視化(silent fail 防止)。
+    // line_accounts_scenario_channel_unique / line_accounts_scenario_basic_unique で弾かれたケース。
+    // PostgrestError.code === '23505' が UNIQUE violation の SQLSTATE。
+    if ((error as { code?: string }).code === "23505") {
+      return Response.json(
+        {
+          error: "duplicate",
+          detail: "同一シナリオ内に既に同じ channel_id または basic_id のアカウントが存在します",
+          constraint: error.message,
+        },
+        { status: 409 },
+      );
+    }
     return Response.json({ error: error.message }, { status: 500 });
   }
 
