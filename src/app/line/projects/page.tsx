@@ -47,23 +47,17 @@ interface Project {
   color: string;
   sort_order: number;
   code: string | null;
-  ban_sync_enabled?: boolean;
-  distribute_enabled?: boolean;
-  distribute_count?: number;
-  reserve_count?: number;
   scenarios?: Scenario[]; // 段階5 案B:line_scenarios 利用可能時のみ含まれる
 }
 
+// 段階8-2-F:distribute_* / ban_sync_enabled は段階5-step05-finalize で line_projects から DROP 済み。
+// シナリオ単位(line_scenarios)で管理されるため、ProjectForm からも削除。
 interface ProjectForm {
   name: string;
   description: string;
   color: string;
   sort_order: number;
   code: string;
-  ban_sync_enabled: boolean;
-  distribute_enabled: boolean;
-  distribute_count: number;
-  reserve_count: number;
 }
 
 interface ProjectAccountSummary {
@@ -84,11 +78,29 @@ const emptyProjectForm: ProjectForm = {
   color: "#06C755",
   sort_order: 0,
   code: "",
-  ban_sync_enabled: false,
-  distribute_enabled: false,
-  distribute_count: 1,
-  reserve_count: 0,
 };
+
+const SCENARIO_CODE_PATTERN = /^[a-zA-Z0-9_-]+$/;
+const PROJECT_CODE_PATTERN = /^[a-zA-Z0-9_-]+$/;
+
+// 段階8-2-F:案件編集モーダルから新規シナリオを追加するときに scenariosForm に積む空行。
+// id を負の数値文字列(__new_<n>__)で識別し、saveProject 時に id 未付与の行を POST に振り分ける。
+function makeNewScenarioFormRow(nextSortOrder: number): ScenarioForm {
+  return {
+    id: `__new_${Date.now()}_${Math.random().toString(36).slice(2, 6)}__`,
+    code: "",
+    name: "",
+    distribute_enabled: false,
+    distribute_count: 1,
+    reserve_count: 0,
+    ban_sync_enabled: false,
+    sort_order: nextSortOrder,
+  };
+}
+
+function isNewScenarioRow(s: { id: string }) {
+  return s.id.startsWith("__new_");
+}
 
 export default function LineProjects() {
   const router = useRouter();
@@ -206,10 +218,6 @@ export default function LineProjects() {
       color: p.color,
       sort_order: p.sort_order,
       code: p.code ?? "",
-      ban_sync_enabled: !!p.ban_sync_enabled,
-      distribute_enabled: !!p.distribute_enabled,
-      distribute_count: p.distribute_count ?? 1,
-      reserve_count: p.reserve_count ?? 0,
     });
     // 段階5 案B:scenarios が API から返ってくれば編集フォームに展開、なければ空配列
     setScenariosForm(
@@ -249,14 +257,42 @@ export default function LineProjects() {
       setProjectMsg({ ok: false, text: "案件名を入力してください" });
       return;
     }
+    // 段階8-2-F:案件コードを必須化(中継URL /line/r/{案件コード}/{流入コード} の必須要素)
+    const trimmedProjectCode = projectForm.code.trim();
+    if (!trimmedProjectCode) {
+      setProjectMsg({ ok: false, text: "案件コードを入力してください" });
+      return;
+    }
+    if (!PROJECT_CODE_PATTERN.test(trimmedProjectCode)) {
+      setProjectMsg({ ok: false, text: "案件コードは半角英数・ハイフン・アンダースコアのみ使用できます" });
+      return;
+    }
+    // 段階8-2-F:新規シナリオ行のバリデーション(編集時のみ。新規 project 作成時は scenariosForm 空)
+    const newScenarioRows = scenariosForm.filter((s) => isNewScenarioRow(s));
+    for (const sc of newScenarioRows) {
+      if (!sc.code.trim()) {
+        setProjectMsg({ ok: false, text: "新規シナリオの code を入力してください" });
+        return;
+      }
+      if (!SCENARIO_CODE_PATTERN.test(sc.code.trim())) {
+        setProjectMsg({ ok: false, text: `シナリオコード「${sc.code}」は半角英数・ハイフン・アンダースコアのみ使用できます` });
+        return;
+      }
+      if (!sc.name.trim()) {
+        setProjectMsg({ ok: false, text: "新規シナリオの name を入力してください" });
+        return;
+      }
+    }
     setProjectSaving(true);
     setProjectMsg(null);
     try {
+      let projectIdForScenarioInsert: string | null = editingProjectId;
       if (editingProjectId) {
-        // 段階5 案B:scenariosForm が空でなければ scenarios 配列も送信
+        // 段階5 案B:既存 scenario 行のみ scenarios 配列で送信(新規行は別途 POST に分離)
+        const existingScenarios = scenariosForm.filter((s) => !isNewScenarioRow(s));
         const putBody: Record<string, unknown> = { id: editingProjectId, ...projectForm };
-        if (scenariosForm.length > 0) {
-          putBody.scenarios = scenariosForm.map((s) => ({
+        if (existingScenarios.length > 0) {
+          putBody.scenarios = existingScenarios.map((s) => ({
             id: s.id,
             code: s.code,
             name: s.name,
@@ -288,7 +324,36 @@ export default function LineProjects() {
           setProjectMsg({ ok: false, text: data.error ?? "作成失敗" });
           return;
         }
+        const created = (await res.json().catch(() => ({}))) as { project?: { id?: string } };
+        projectIdForScenarioInsert = created.project?.id ?? null;
       }
+
+      // 段階8-2-F:新規シナリオ行を順次 POST(エラーは即時表示、成功した分は再 fetch で反映)
+      if (projectIdForScenarioInsert && newScenarioRows.length > 0) {
+        for (const sc of newScenarioRows) {
+          const r = await fetch("/api/line/scenarios", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              project_id: projectIdForScenarioInsert,
+              code: sc.code.trim(),
+              name: sc.name.trim(),
+              distribute_enabled: sc.distribute_enabled,
+              distribute_count: sc.distribute_count,
+              reserve_count: sc.reserve_count,
+              ban_sync_enabled: sc.ban_sync_enabled,
+              sort_order: sc.sort_order,
+            }),
+          });
+          if (!r.ok) {
+            const data = await r.json().catch(() => ({}));
+            setProjectMsg({ ok: false, text: `シナリオ作成失敗(${sc.code}): ${data.error ?? r.status}` });
+            await fetchProjects();
+            return;
+          }
+        }
+      }
+
       await fetchProjects();
       setShowProjectModal(false);
     } catch (e) {
@@ -575,7 +640,7 @@ export default function LineProjects() {
               </div>
               <div>
                 <label className="text-xs text-gray-500 block mb-1 font-medium">
-                  案件コード
+                  案件コード <span className="text-red-500">*</span>
                 </label>
                 <input
                   type="text"
@@ -585,7 +650,7 @@ export default function LineProjects() {
                   className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
                 />
                 <p className="text-[10px] text-gray-400 mt-1">
-                  中継URL <code className="font-mono">/line/r/&#123;案件コード&#125;/&#123;流入コード&#125;</code> に使われます。半角英数・ハイフン・アンダースコアのみ
+                  中継URL <code className="font-mono">/line/r/&#123;案件コード&#125;/&#123;流入コード&#125;</code> に使われます。半角英数・ハイフン・アンダースコアのみ。必須
                 </p>
               </div>
               <div>
@@ -641,107 +706,43 @@ export default function LineProjects() {
               </div>
 
               {/* ============================================================ */}
-              {/* 段階5(案B)Step 13 対応:project レベルの設定欄は scenarios が空の時のみ表示 */}
-              {/* scenarios 配列が存在する場合(line_scenarios 適用後)は下方の「シナリオ設定」セクションで編集 */}
+              {/* 段階8-2-F:project レベルの distribute_* / ban_sync_enabled UI を完全削除。 */}
+              {/*   これらカラムは段階5-step05-finalize で line_projects から DROP 済み。 */}
+              {/*   設定はシナリオ単位(下のシナリオ設定セクション)で行う。 */}
               {/* ============================================================ */}
-              {scenariosForm.length === 0 && (
-              <div className="border-t border-gray-200 pt-4">
-                <label className="flex items-start gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={projectForm.ban_sync_enabled}
-                    onChange={(e) => setProjectForm({ ...projectForm, ban_sync_enabled: e.target.checked })}
-                    className="mt-0.5 accent-blue-600"
-                  />
-                  <div className="flex-1">
-                    <div className="text-xs font-medium text-gray-700">BAN対策同期を有効にする</div>
-                    <p className="text-[11px] text-gray-500 leading-relaxed mt-1">
-                      有効にすると、メインアカウントの設定（ラベル・シナリオ等）が予備アカウントに6時間おきに自動同期されます。
-                      BAN対策として使用する案件でのみ有効にしてください。
-                    </p>
-                  </div>
-                </label>
-              </div>
-              )}
-
-              {scenariosForm.length === 0 && (
-              <div className="border-t border-gray-200 pt-4">
-                <label className="flex items-start gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={projectForm.distribute_enabled}
-                    onChange={(e) => setProjectForm({ ...projectForm, distribute_enabled: e.target.checked })}
-                    className="mt-0.5 accent-purple-600"
-                  />
-                  <div className="flex-1">
-                    <div className="text-xs font-medium text-gray-700">分散登録を有効にする</div>
-                    <p className="text-[11px] text-gray-500 leading-relaxed mt-1">
-                      有効にすると、新規ユーザーは指定した本数のアカウントすべてに順次友達追加する必要があります。
-                      CVRが下がる可能性があるため、実装前にテストを推奨します。
-                    </p>
-                  </div>
-                </label>
-                {projectForm.distribute_enabled && (
-                  <div className="mt-3 ml-6 bg-purple-50 border border-purple-200 rounded-md p-3 space-y-3">
-                    <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <label className="text-[10px] text-gray-500 block mb-1 font-medium">分散本数(main + distribute)</label>
-                        <select
-                          value={projectForm.distribute_count}
-                          onChange={(e) => setProjectForm({ ...projectForm, distribute_count: Number(e.target.value) })}
-                          className="w-full border border-gray-200 rounded px-2 py-1 text-xs bg-white"
-                        >
-                          {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => (
-                            <option key={n} value={n}>{n} 本</option>
-                          ))}
-                        </select>
-                      </div>
-                      <div>
-                        <label className="text-[10px] text-gray-500 block mb-1 font-medium">予備本数(standby)</label>
-                        <select
-                          value={projectForm.reserve_count}
-                          onChange={(e) => setProjectForm({ ...projectForm, reserve_count: Number(e.target.value) })}
-                          className="w-full border border-gray-200 rounded px-2 py-1 text-xs bg-white"
-                        >
-                          {[0, 1, 2, 3, 4, 5].map((n) => (
-                            <option key={n} value={n}>{n} 本</option>
-                          ))}
-                        </select>
-                      </div>
-                    </div>
-                    <p className="text-[10px] text-gray-600">
-                      合計必要アカウント数: <span className="font-bold">{projectForm.distribute_count + projectForm.reserve_count} 本</span>
-                    </p>
-                    {accountSummary && (
-                      <div className="text-[10px] text-gray-600 bg-white rounded px-2 py-1.5 border border-purple-100">
-                        <div className="font-medium text-gray-700 mb-0.5">現在の登録済みアカウント:</div>
-                        <div>
-                          本番(main): <span className="font-mono">{accountSummary.main}</span> /
-                          分散(distribute): <span className="font-mono">{accountSummary.distribute}</span> /
-                          予備(standby): <span className="font-mono">{accountSummary.standby}</span>
-                          {accountSummary.other > 0 && (
-                            <> / その他: <span className="font-mono">{accountSummary.other}</span></>
-                          )}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-              )}
 
               {/* ============================================================ */}
-              {/* 段階5 案B:シナリオ設定セクション(scenarios が存在する場合のみ表示) */}
+              {/* シナリオ設定セクション(段階8-2-F:新規シナリオ追加可能化) */}
+              {/* 編集モード(editingProjectId あり)のみ表示。新規 project 作成時は */}
+              {/* project 行が無い段階で scenarios を作れないため非表示。 */}
               {/* ============================================================ */}
-              {scenariosForm.length > 0 && (
+              {editingProjectId && (
                 <div className="pt-3 border-t border-gray-200">
-                  <div className="text-xs font-medium text-gray-700 mb-2">
-                    シナリオ設定(段階5 案B)
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="text-xs font-medium text-gray-700">シナリオ設定</div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const nextSort =
+                          scenariosForm.length === 0
+                            ? 0
+                            : Math.max(...scenariosForm.map((s) => s.sort_order)) + 1;
+                        setScenariosForm([...scenariosForm, makeNewScenarioFormRow(nextSort)]);
+                      }}
+                      className="px-2 py-1 text-[11px] bg-[#06C755] hover:bg-[#05a648] text-white rounded font-medium"
+                    >
+                      ＋ 新規シナリオ追加
+                    </button>
                   </div>
                   <p className="text-[10px] text-gray-500 mb-3">
                     案件に紐付くシナリオごとに分散/同期設定を編集できます。<br />
                     sort_order=0 は LIFF URL の主シナリオ用に予約されています。
                   </p>
+                  {scenariosForm.length === 0 && (
+                    <div className="bg-yellow-50 border border-yellow-200 rounded-md p-3 mb-3 text-[11px] text-yellow-800">
+                      この案件にはシナリオが登録されていません。「＋ 新規シナリオ追加」から作成してください。
+                    </div>
+                  )}
                   <div className="space-y-3">
                     {scenariosForm.map((sc, idx) => (
                       <div key={sc.id} className="bg-gray-50 border border-gray-200 rounded-md p-3 space-y-2">
@@ -871,7 +872,7 @@ export default function LineProjects() {
               </button>
               <button
                 onClick={saveProject}
-                disabled={projectSaving || !projectForm.name.trim()}
+                disabled={projectSaving || !projectForm.name.trim() || !projectForm.code.trim()}
                 className="px-5 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition"
               >
                 {projectSaving ? "保存中..." : editingProjectId ? "更新" : "作成"}
