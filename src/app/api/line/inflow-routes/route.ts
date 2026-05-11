@@ -277,6 +277,13 @@ export async function PUT(request: NextRequest) {
   if (body.description !== undefined) updates.description = body.description;
   if (body.is_active !== undefined) updates.is_active = body.is_active;
   if (body.group_id !== undefined) updates.group_id = body.group_id || null;
+  // 段階8-2-I: scenario_id 変更を受け付ける(オプショナル)。
+  // 現状の dashboard UI には scenario 変更導線はないが、将来「経路の所属シナリオ変更」が
+  // 必要になった際にバックエンドの再修正を避けるため最小限の受付を追加。
+  // 空文字は無視(null 化は意図的にサポートしない:scenario_id 必須化方針と整合)。
+  if (typeof body.scenario_id === "string" && body.scenario_id.trim() !== "") {
+    updates.scenario_id = body.scenario_id.trim();
+  }
 
   const { error } = await supabase
     .from("line_inflow_routes")
