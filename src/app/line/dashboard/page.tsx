@@ -142,6 +142,9 @@ interface StepMessage {
 interface InflowRoute {
   id: string;
   account_id: string;
+  // 段階8-2-I: scenario 配下 row 識別用。DB の line_inflow_routes.scenario_id に対応。
+  // 楽観的更新時に追加した row を scenario フィルタにヒットさせるため UI 側でも保持する。
+  scenario_id?: string | null;
   name: string;
   code: string;
   url: string | null;
@@ -9253,7 +9256,13 @@ export default function LineDashboard() {
                 </button>
                 <button
                   onClick={() => { setInflowForm({ name: "", code: "", url: "", description: "", group_id: "" }); setEditingInflow(null); setShowInflowModal(true); }}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded-md transition"
+                  disabled={!selectedScenarioId || selectedScenarioId === NULL_SCENARIO_KEY}
+                  title={
+                    !selectedScenarioId || selectedScenarioId === NULL_SCENARIO_KEY
+                      ? "シナリオを選択してから経路を作成してください"
+                      : ""
+                  }
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-medium rounded-md transition"
                 >
                   {Icons.plus} 新規経路
                 </button>
@@ -9326,11 +9335,24 @@ export default function LineDashboard() {
                             });
                             return;
                           }
+                          // 段階8-2-I: 新規作成時のシナリオ選択チェック(silent fail 撲滅、可視化原則)
+                          // 編集(PUT)は scenario_id 変更を本 PR では UI から行わない方針のため、新規(POST)時のみガード。
+                          // NULL_SCENARIO_KEY(="シナリオ未設定" 仮想バケツ)も新規作成先として不可。
+                          const useScenarioForCreate =
+                            !editingInflow &&
+                            (!selectedScenarioId || selectedScenarioId === NULL_SCENARIO_KEY);
+                          if (useScenarioForCreate) {
+                            setInflowSaveMsg({
+                              ok: false,
+                              text: "シナリオが選択されていません。シナリオを選んでから経路を作成してください。",
+                            });
+                            return;
+                          }
                           setInflowSaving(true);
                           const method = editingInflow ? "PUT" : "POST";
                           const body = editingInflow
                             ? { id: editingInflow.id, ...inflowForm }
-                            : { project_id: project.id, ...inflowForm };
+                            : { project_id: project.id, scenario_id: selectedScenarioId, ...inflowForm };
                           try {
                             console.log("[inflow-save] start", { method, body, project_id: project.id });
                             const res = await fetch("/api/line/inflow-routes", {
@@ -9350,6 +9372,7 @@ export default function LineDashboard() {
                                 const newRoute: InflowRoute = {
                                   id: data.id,
                                   account_id: "",
+                                  scenario_id: selectedScenarioId, // 段階8-2-I: scenario 配下 row として表示
                                   name: inflowForm.name,
                                   code: inflowForm.code,
                                   url: inflowForm.url || null,
