@@ -140,6 +140,26 @@ export async function POST(request: NextRequest) {
     return Response.json({ error: "project_id または account_id が必須です" }, { status: 400 });
   }
 
+  // 段階8-2-I: scenario_id 必須化(silent fail 撲滅、可視化原則)
+  // 2026-05-11 に発覚した「新規流入経路が一覧に表示されない」バグの恒久対処。
+  // 原因:UI から scenario_id が渡されず INSERT 時に scenario_id NULL で保存され、
+  //       GET の scenario_id ベースフィルタ(段階7-C1 PR #28 で対応済の過渡期 OR 句)に
+  //       ヒットせず「0件」と表示されていた。
+  // 対応:scenario_id を必須化、空(undefined / null / 空文字)なら 400 で明示拒否。
+  //       既存運用ルール「シナリオ未選択状態では流入経路は作成できない」と整合。
+  // 例外:後方互換のため accountId 単独指定の旧経路(scenario 未対応の古い呼び出し)は
+  //       現時点では許容しない方針(scenario 単位移行の方向性と整合)。
+  const scenarioId: string | null =
+    typeof body.scenario_id === "string" && body.scenario_id.trim() !== ""
+      ? body.scenario_id.trim()
+      : null;
+  if (!scenarioId) {
+    return Response.json(
+      { error: "シナリオが選択されていません。シナリオを選んでから経路を作成してください。" },
+      { status: 400 },
+    );
+  }
+
   // project_id が指定されていれば project の存在確認
   let projectId: string | null = body.project_id ?? null;
   let accountId: string | null = body.account_id ?? null;
@@ -177,6 +197,7 @@ export async function POST(request: NextRequest) {
   const insertBody: Record<string, unknown> = {
     project_id: projectId,
     account_id: accountId, // 後方互換のため null 許容
+    scenario_id: scenarioId, // 段階8-2-I: 必須化済(上の 400 ガードで担保)
     name: body.name,
     code: body.code,
     url: body.url || null,
@@ -256,6 +277,13 @@ export async function PUT(request: NextRequest) {
   if (body.description !== undefined) updates.description = body.description;
   if (body.is_active !== undefined) updates.is_active = body.is_active;
   if (body.group_id !== undefined) updates.group_id = body.group_id || null;
+  // 段階8-2-I: scenario_id 変更を受け付ける(オプショナル)。
+  // 現状の dashboard UI には scenario 変更導線はないが、将来「経路の所属シナリオ変更」が
+  // 必要になった際にバックエンドの再修正を避けるため最小限の受付を追加。
+  // 空文字は無視(null 化は意図的にサポートしない:scenario_id 必須化方針と整合)。
+  if (typeof body.scenario_id === "string" && body.scenario_id.trim() !== "") {
+    updates.scenario_id = body.scenario_id.trim();
+  }
 
   const { error } = await supabase
     .from("line_inflow_routes")
