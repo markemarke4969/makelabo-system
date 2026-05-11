@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import {
   calculateMatching,
@@ -200,35 +200,6 @@ export default function MatchingResult() {
   // DB保存
   const [diagnosisId, setDiagnosisId] = useState<string | null>(null);
 
-  // 面談予約フォーム
-  const [showBooking, setShowBooking] = useState(false);
-  const [bookingDate, setBookingDate] = useState("");
-  const [bookingTime, setBookingTime] = useState("");
-  const [contactMethod, setContactMethod] = useState("phone");
-  const [bookingSubmitting, setBookingSubmitting] = useState(false);
-  const [bookingDone, setBookingDone] = useState(false);
-
-  const availableDates = useMemo(() => {
-    const dates: string[] = [];
-    const now = new Date();
-    for (let i = 1; i <= 14; i++) {
-      const d = new Date(now);
-      d.setDate(d.getDate() + i);
-      dates.push(d.toISOString().split("T")[0]);
-    }
-    return dates;
-  }, []);
-
-  const timeSlots = [
-    "10:00", "11:00", "13:00", "14:00", "15:00", "16:00", "17:00", "19:00", "20:00",
-  ];
-
-  const formatDate = (iso: string) => {
-    const d = new Date(iso + "T00:00:00");
-    const weekdays = ["日", "月", "火", "水", "木", "金", "土"];
-    return `${d.getMonth() + 1}/${d.getDate()}（${weekdays[d.getDay()]}）`;
-  };
-
   useEffect(() => {
     const stored = localStorage.getItem("matching_diagnosis");
     if (!stored) {
@@ -299,26 +270,9 @@ export default function MatchingResult() {
     return () => clearInterval(id);
   }, [aiLoading]);
 
-  const handleBooking = async () => {
-    if (!diagnosisId || !bookingDate || !bookingTime) return;
-    setBookingSubmitting(true);
-    try {
-      const resp = await fetch("/api/matching/consultations", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          diagnosisId,
-          preferredDate: bookingDate,
-          preferredTime: bookingTime,
-          contactMethod,
-        }),
-      });
-      if (resp.ok) setBookingDone(true);
-    } catch {
-      // エラーでも画面は維持
-    } finally {
-      setBookingSubmitting(false);
-    }
+  const handleLineCta = () => {
+    if (!diagnosisId) return;
+    window.location.href = `/matching/liff?diagnosis_id=${encodeURIComponent(diagnosisId)}`;
   };
 
   if (loading || !result) {
@@ -497,168 +451,43 @@ export default function MatchingResult() {
           </div>
         </div>
 
-        {/* 個別相談予約 */}
-        {!bookingDone ? (
-          <div
-            className="rounded-2xl p-6 mb-6 border"
-            style={{
-              background:
-                "linear-gradient(135deg, rgba(59,130,246,0.15), rgba(6,182,212,0.1))",
-              borderColor: "rgba(59,130,246,0.3)",
-              boxShadow: "0 0 40px rgba(59,130,246,0.15)",
-            }}
-          >
-            <div className="text-center mb-5">
-              <div className="text-3xl mb-3">💬</div>
-              <h3 className="text-xl font-bold text-white mb-2">
-                専門アドバイザーに相談
-              </h3>
-              <p className="text-gray-300 text-sm leading-relaxed">
-                診断データをもとに、あなたに合った
-                <br />
-                具体的な副業プランを個別にお伝えします。
-                <br />
-                <span className="text-blue-300 font-medium">
-                  無料・オンライン・60分
-                </span>
-              </p>
-            </div>
-
-            {!showBooking ? (
-              <>
-                <button
-                  onClick={() => setShowBooking(true)}
-                  disabled={!diagnosisId}
-                  className="w-full py-4 rounded-xl font-bold text-white text-base bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 transition-all shadow-lg shadow-blue-500/25 active:scale-[0.98] disabled:opacity-50"
-                >
-                  無料の個別相談を予約する
-                </button>
-                <p className="text-center text-xs text-gray-500 mt-3">
-                  ※ 強引な勧誘は一切ありません
-                </p>
-              </>
-            ) : (
-              <div className="space-y-4 animate-fade-in">
-                {/* 希望日 */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-300 mb-2">
-                    ご希望の日程
-                  </label>
-                  <div className="grid grid-cols-3 gap-2">
-                    {availableDates.map((date) => (
-                      <button
-                        key={date}
-                        onClick={() => setBookingDate(date)}
-                        className={`py-2.5 rounded-lg text-sm font-medium transition-all ${
-                          bookingDate === date
-                            ? "bg-blue-500 text-white"
-                            : "bg-white/5 border border-white/15 text-gray-300 hover:bg-white/10"
-                        }`}
-                      >
-                        {formatDate(date)}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {/* 希望時間 */}
-                {bookingDate && (
-                  <div>
-                    <label className="block text-sm font-medium text-gray-300 mb-2">
-                      ご希望の時間帯
-                    </label>
-                    <div className="grid grid-cols-3 gap-2">
-                      {timeSlots.map((time) => (
-                        <button
-                          key={time}
-                          onClick={() => setBookingTime(time)}
-                          className={`py-2.5 rounded-lg text-sm font-medium transition-all ${
-                            bookingTime === time
-                              ? "bg-blue-500 text-white"
-                              : "bg-white/5 border border-white/15 text-gray-300 hover:bg-white/10"
-                          }`}
-                        >
-                          {time}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {/* 相談方法 */}
-                {bookingTime && (
-                  <div>
-                    <label className="block text-sm font-medium text-gray-300 mb-2">
-                      ご希望の相談方法
-                    </label>
-                    <div className="grid grid-cols-3 gap-2">
-                      {[
-                        { value: "phone", label: "電話" },
-                        { value: "zoom", label: "Zoom" },
-                        { value: "line", label: "LINE通話" },
-                      ].map((m) => (
-                        <button
-                          key={m.value}
-                          onClick={() => setContactMethod(m.value)}
-                          className={`py-2.5 rounded-lg text-sm font-medium transition-all ${
-                            contactMethod === m.value
-                              ? "bg-blue-500 text-white"
-                              : "bg-white/5 border border-white/15 text-gray-300 hover:bg-white/10"
-                          }`}
-                        >
-                          {m.label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {/* 予約確定ボタン */}
-                {bookingDate && bookingTime && (
-                  <div className="pt-2">
-                    <p className="text-center text-sm text-gray-300 mb-3">
-                      <span className="text-blue-400 font-medium">
-                        {formatDate(bookingDate)} {bookingTime}〜
-                      </span>
-                      （{contactMethod === "phone" ? "電話" : contactMethod === "zoom" ? "Zoom" : "LINE通話"}）
-                    </p>
-                    <button
-                      onClick={handleBooking}
-                      disabled={bookingSubmitting}
-                      className="w-full py-4 rounded-xl font-bold text-white text-base bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 transition-all shadow-lg shadow-blue-500/25 active:scale-[0.98] disabled:opacity-70"
-                    >
-                      {bookingSubmitting ? (
-                        <span className="flex items-center justify-center gap-2">
-                          <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                          予約中...
-                        </span>
-                      ) : (
-                        "この日時で予約する"
-                      )}
-                    </button>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        ) : (
-          <div className="rounded-2xl bg-green-500/10 border border-green-500/20 p-6 mb-6 text-center animate-fade-in">
-            <div className="text-4xl mb-3">✅</div>
-            <h3 className="text-xl font-bold text-white mb-2">
-              予約が完了しました！
+        {/* LINE登録CTA */}
+        <div
+          className="rounded-2xl p-6 mb-6 border"
+          style={{
+            background:
+              "linear-gradient(135deg, rgba(6,199,85,0.18), rgba(6,199,85,0.08))",
+            borderColor: "rgba(6,199,85,0.35)",
+            boxShadow: "0 0 40px rgba(6,199,85,0.18)",
+          }}
+        >
+          <div className="text-center mb-5">
+            <h3 className="text-xl font-bold text-white mb-2 leading-snug">
+              ここまでは無料診断の結果
             </h3>
-            <p className="text-gray-300 text-sm leading-relaxed mb-2">
-              <span className="text-green-400 font-medium">
-                {formatDate(bookingDate)} {bookingTime}〜
-              </span>
-            </p>
-            <p className="text-gray-400 text-xs leading-relaxed">
-              担当アドバイザーから事前にご連絡いたします。
+            <p className="text-gray-300 text-sm leading-relaxed">
+              {userName ? `${userName}さん` : "あなた"}の「{type.characterName}」タイプ
+              {doubutsu && <>×{doubutsu.result.animal}</>}に合わせた
               <br />
-              お気軽にご質問やご要望をお伝えください。
+              <span className="text-white font-medium">
+                AI副業レポート
+              </span>
+              は専用LINEからお届けします。
             </p>
           </div>
-        )}
+
+          <button
+            onClick={handleLineCta}
+            disabled={!diagnosisId}
+            className="w-full py-4 rounded-xl font-bold text-white text-base bg-[#06C755] hover:bg-[#05B04C] transition-colors active:scale-[0.98] disabled:opacity-50 shadow-lg shadow-[#06C755]/25 flex items-center justify-center gap-2"
+          >
+            <span className="text-lg">💬</span>
+            <span>あなた専用のAI副業レポートをLINEで受け取る</span>
+          </button>
+          <p className="text-center text-xs text-gray-500 mt-3">
+            ※ LINE登録は無料です。不要になればいつでもブロックできます。
+          </p>
+        </div>
       </div>
     </div>
   );
