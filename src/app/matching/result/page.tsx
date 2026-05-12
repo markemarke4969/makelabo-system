@@ -253,6 +253,30 @@ export default function MatchingResult() {
     })
       .then((json) => {
         if (json) setAiDiagnosis(json);
+
+        // PR#2-A: 生成結果を matching_diagnoses.ai_* に永続化
+        // LINE 配信側(line/webhook)が lookup API 経由で読むため。
+        // UI 表示には影響させない(失敗時もユーザーには見えない fire-and-forget)。
+        const savedId: string | undefined = data.savedId;
+        if (!savedId) return;
+        const payload = json
+          ? {
+              strengthSection: json.strengthSection,
+              animalSection: json.animalSection,
+              riskSection: json.riskSection,
+              status: "ready" as const,
+            }
+          : { status: "failed" as const };
+        void fetch(
+          `/api/matching/diagnoses/${encodeURIComponent(savedId)}/ai-sections`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          },
+        ).catch((e) => {
+          console.error("[ai-sections POST] failed:", e);
+        });
       })
       .finally(() => setAiLoading(false));
 
