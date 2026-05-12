@@ -1,10 +1,9 @@
 import { NextRequest } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { supabaseAdmin as supabase } from "@/lib/supabase";
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
+// 実装注:`@/lib/supabase` の `supabaseAdmin` (lazy proxy)を使用する。
+// module top-level で `createClient(URL!, KEY!)` を直接呼ぶと、Next.js 16 の
+// ビルド時 page data collection で env 未設定の Preview 環境ではビルド失敗するため。
 
 // POST: 診断結果を保存 / ダッシュボード操作
 export async function POST(request: NextRequest) {
