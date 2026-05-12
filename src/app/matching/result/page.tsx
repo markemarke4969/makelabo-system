@@ -272,7 +272,7 @@ export default function MatchingResult() {
 
   const handleLineCta = () => {
     if (!diagnosisId) return;
-    window.location.href = `/matching/liff?diagnosis_id=${encodeURIComponent(diagnosisId)}`;
+    window.location.href = `${process.env.NEXT_PUBLIC_MATCHING_BRIDGE_URL}?ref=${encodeURIComponent(diagnosisId)}`;
   };
 
   if (loading || !result) {
