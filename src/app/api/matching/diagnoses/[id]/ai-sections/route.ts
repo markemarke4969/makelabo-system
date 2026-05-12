@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { supabaseAdmin } from "@/lib/supabase";
 
 // ============================================================
 // AI セクション永続化 + 公開 lookup API
@@ -19,12 +19,12 @@ import { createClient } from "@supabase/supabase-js";
 // モジュール境界(matching ↔ line):
 //   - line 側からは本 GET を Bearer 付きで叩く以外に matching テーブルへの
 //     アクセス手段を持たない(構想第17章準拠)
+//
+// 実装注:
+//   `@/lib/supabase` の `supabaseAdmin` (lazy proxy)を使用する。
+//   module top-level で `createClient(URL!, KEY!)` を直接呼ぶと、Next.js 16 の
+//   ビルド時 page data collection で env 未設定の Preview 環境ではビルド失敗するため。
 // ============================================================
-
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -107,7 +107,7 @@ export async function POST(
     updateBody.ai_generated_at = now;
   }
 
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from("matching_diagnoses")
     .update(updateBody)
     .eq("id", id)
@@ -164,7 +164,7 @@ export async function GET(
     return Response.json({ error: "diagnosis_id が不正です" }, { status: 400 });
   }
 
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from("matching_diagnoses")
     .select(
       "id, type_id, answers, ai_strength_section, ai_animal_section, ai_risk_section, ai_generation_status, ai_generated_at",
