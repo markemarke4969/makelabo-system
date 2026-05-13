@@ -150,13 +150,41 @@ export async function GET(
     request.headers.get("x-forwarded-for")?.split(",")[0].trim() ??
     request.headers.get("x-real-ip") ??
     null;
+
+  // PR-Harness: ?ref クエリを external_ref として保存
+  //   - 汎用設計(matching 等の外部システムから ?ref=<UUID> を受け取る、aifukugyo 特化なし)
+  //   - 空文字 / 空白のみ → NULL 正規化(既存中継URL の挙動と完全互換)
+  //   - 256 文字切詰め(悪意ある巨大値対策)
+  //   - UUID 形式チェックは行わない(汎用 external_ref として運用)
+  //   - DB カラム未投入環境(supabase-migration-inflow-clicks-external-ref.sql 未適用)
+  //     では external_ref を含めて INSERT すると 42703 で失敗するため、fallback で
+  //     external_ref 抜きで再 INSERT する(段階的マイグレーション対応)
+  const refParam = request.nextUrl.searchParams.get("ref");
+  const externalRef =
+    refParam && refParam.trim().length > 0
+      ? refParam.trim().slice(0, 256)
+      : null;
+
   const { error: insertErr } = await supabase.from("line_inflow_clicks").insert({
     inflow_route_id: routeId,
     user_agent: userAgent,
     ip_address: ipAddress,
+    external_ref: externalRef,
   });
   if (insertErr) {
-    console.error("[inflow click insert] error:", insertErr.message);
+    // external_ref 列未作成環境への fallback(PR-Harness 段階適用対応)
+    if (/external_ref/i.test(insertErr.message)) {
+      const retry = await supabase.from("line_inflow_clicks").insert({
+        inflow_route_id: routeId,
+        user_agent: userAgent,
+        ip_address: ipAddress,
+      });
+      if (retry.error) {
+        console.error("[inflow click insert fallback] error:", retry.error.message);
+      }
+    } else {
+      console.error("[inflow click insert] error:", insertErr.message);
+    }
   }
 
   // 4. 現在のメインアカウントを選出(段階5 案B + 後方互換)
