@@ -86,9 +86,12 @@ BEGIN
         sort_order    = EXCLUDED.sort_order;
 
   -- ===== Step 3: line_step_sequences seed(1 行、kind='step')=====
+  -- (fix(pr2b): account_id 列は line_step_sequences に存在しないため除外。
+  --  本番 DB は 2026-05-13 に石井さん手動で account_id 抜きの修正版を投入済、
+  --  再実行不要。本修正は staging 等の将来環境向け保険。)
   INSERT INTO line_step_sequences
-    (account_id, scenario_id, name, status, kind)
-  SELECT v_account_id, v_scenario_id, 'AI レポート初動 3 ブロック配信', 'active', 'step'
+    (scenario_id, name, status, kind)
+  SELECT v_scenario_id, 'AI レポート初動 3 ブロック配信', 'active', 'step'
    WHERE NOT EXISTS (
      SELECT 1 FROM line_step_sequences
       WHERE scenario_id = v_scenario_id
