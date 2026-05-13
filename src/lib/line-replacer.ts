@@ -133,6 +133,33 @@ export async function buildReplacerContext(
   }
 
   // 4. カスタムフィールド値
+  //
+  // PR#2-B: follower 個別値が無い field は line_custom_fields.default_value で fallback
+  // (構想 §4-1-B 方式)。順序:
+  //   (i)  account に紐づく全 line_custom_fields の default_value を読む → ctx に埋める
+  //   (ii) line_follower_custom_values で個別値を上書き
+  // → 個別値があればそれ、無ければ default_value、両方無ければ replaceVariables の `?? ""` で空文字
+
+  // (i) account の全 field の default_value を取得
+  if (followerRow.line_account_id) {
+    const { data: defs, error: defErr } = await supabase
+      .from("line_custom_fields")
+      .select("field_key, default_value")
+      .eq("account_id", followerRow.line_account_id);
+    // default_value 列なし環境(PR#2-B SQL 未適用)は silent skip
+    if (!defErr && defs) {
+      for (const row of defs as Array<{
+        field_key: string;
+        default_value: string | null;
+      }>) {
+        if (row.field_key && row.default_value != null && row.default_value !== "") {
+          ctx.custom_fields[row.field_key] = row.default_value;
+        }
+      }
+    }
+  }
+
+  // (ii) follower 個別値で上書き
   const { data: values } = await supabase
     .from("line_follower_custom_values")
     .select("value, line_custom_fields(field_key)")

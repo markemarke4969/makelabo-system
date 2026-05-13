@@ -62,18 +62,32 @@ export async function GET(request: NextRequest) {
     }
 
     // カスタムフィールド定義取得
+    // PR#2-B: is_hidden=true の field は CSV エクスポートから除外
+    // (matching_* hidden field はクローザーへ配布する CSV には載せない)
     let customFields: Array<{ id: string; field_key: string; field_label: string }> = [];
     if (accountId) {
-      const { data: cfData } = await supabase
+      const cfQuery = supabase
         .from("line_custom_fields")
         .select("id, field_key, field_label")
         .eq("account_id", accountId)
+        .eq("is_hidden", false)
         .order("sort_order", { ascending: true });
+      // eslint-disable-next-line prefer-const
+      let { data: cfData, error: cfErr } = await cfQuery;
+      // is_hidden 列なし環境 fallback(PR#2-B SQL 未適用時)
+      if (cfErr && /is_hidden/i.test(cfErr.message)) {
+        const r = await supabase
+          .from("line_custom_fields")
+          .select("id, field_key, field_label")
+          .eq("account_id", accountId)
+          .order("sort_order", { ascending: true });
+        cfData = r.data;
+      }
       customFields = (cfData ?? []) as typeof customFields;
     }
 
     // カスタムフィールド値取得
-    let customValues: Record<string, Record<string, string>> = {};
+    const customValues: Record<string, Record<string, string>> = {};
     if (customFields.length > 0) {
       const cfIds = customFields.map((cf) => cf.id);
       const { data: cvData } = await supabase

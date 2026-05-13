@@ -165,10 +165,36 @@ async function syncCustomFields(
 ): Promise<SyncItemResult> {
   const result = emptyResult("custom_fields");
 
-  const { data: mainFields, error: listErr } = await db
-    .from("line_custom_fields")
-    .select("field_key, field_label, field_type, options, sort_order")
-    .eq("account_id", mainId);
+  // PR#2-B: is_hidden / default_value も同期(列なし環境は fallback で素通り)
+  type MainField = {
+    field_key: string;
+    field_label: string;
+    field_type: string;
+    options: unknown;
+    sort_order: number;
+    is_hidden?: boolean;
+    default_value?: string | null;
+  };
+  let mainFields: MainField[] | null = null;
+  let listErr: { message: string } | null = null;
+  {
+    const r = await db
+      .from("line_custom_fields")
+      .select("field_key, field_label, field_type, options, sort_order, is_hidden, default_value")
+      .eq("account_id", mainId);
+    if (r.error && /is_hidden|default_value/i.test(r.error.message)) {
+      // 列なし環境 fallback
+      const r2 = await db
+        .from("line_custom_fields")
+        .select("field_key, field_label, field_type, options, sort_order")
+        .eq("account_id", mainId);
+      mainFields = (r2.data ?? null) as MainField[] | null;
+      listErr = r2.error;
+    } else {
+      mainFields = (r.data ?? null) as MainField[] | null;
+      listErr = r.error;
+    }
+  }
   if (listErr) {
     result.failed = 1;
     pushNote(result.notes!, listErr.message);
@@ -193,33 +219,75 @@ async function syncCustomFields(
         result.skipped++;
         continue;
       }
+      const updatePayload: Record<string, unknown> = {
+        field_label: f.field_label,
+        field_type: f.field_type,
+        options: f.options ?? null,
+        sort_order: f.sort_order ?? 0,
+      };
+      if (f.is_hidden !== undefined) updatePayload.is_hidden = f.is_hidden;
+      if (f.default_value !== undefined) updatePayload.default_value = f.default_value ?? null;
       const upd = await db
         .from("line_custom_fields")
-        .update({
-          field_label: f.field_label,
-          field_type: f.field_type,
-          options: f.options ?? null,
-          sort_order: f.sort_order ?? 0,
-        })
+        .update(updatePayload)
         .eq("id", exists.id);
       if (upd.error) {
-        result.failed++;
-        pushNote(result.notes!, `field ${f.field_key}: ${upd.error.message}`);
+        // is_hidden 列なし環境 fallback
+        if (/is_hidden|default_value/i.test(upd.error.message)) {
+          const upd2 = await db
+            .from("line_custom_fields")
+            .update({
+              field_label: f.field_label,
+              field_type: f.field_type,
+              options: f.options ?? null,
+              sort_order: f.sort_order ?? 0,
+            })
+            .eq("id", exists.id);
+          if (upd2.error) {
+            result.failed++;
+            pushNote(result.notes!, `field ${f.field_key}: ${upd2.error.message}`);
+          } else {
+            result.updated++;
+          }
+        } else {
+          result.failed++;
+          pushNote(result.notes!, `field ${f.field_key}: ${upd.error.message}`);
+        }
       } else {
         result.updated++;
       }
     } else {
-      const ins = await db.from("line_custom_fields").insert({
+      const insertPayload: Record<string, unknown> = {
         account_id: standbyId,
         field_key: f.field_key,
         field_label: f.field_label,
         field_type: f.field_type,
         options: f.options ?? null,
         sort_order: f.sort_order ?? 0,
-      });
+      };
+      if (f.is_hidden !== undefined) insertPayload.is_hidden = f.is_hidden;
+      if (f.default_value !== undefined) insertPayload.default_value = f.default_value ?? null;
+      const ins = await db.from("line_custom_fields").insert(insertPayload);
       if (ins.error) {
-        result.failed++;
-        pushNote(result.notes!, `field ${f.field_key}: ${ins.error.message}`);
+        if (/is_hidden|default_value/i.test(ins.error.message)) {
+          const ins2 = await db.from("line_custom_fields").insert({
+            account_id: standbyId,
+            field_key: f.field_key,
+            field_label: f.field_label,
+            field_type: f.field_type,
+            options: f.options ?? null,
+            sort_order: f.sort_order ?? 0,
+          });
+          if (ins2.error) {
+            result.failed++;
+            pushNote(result.notes!, `field ${f.field_key}: ${ins2.error.message}`);
+          } else {
+            result.copied++;
+          }
+        } else {
+          result.failed++;
+          pushNote(result.notes!, `field ${f.field_key}: ${ins.error.message}`);
+        }
       } else {
         result.copied++;
       }

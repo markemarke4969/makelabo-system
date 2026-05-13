@@ -1,5 +1,7 @@
 import { NextRequest } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
+import { MATCHING_TYPES } from "@/lib/matching-diagnosis";
+import { diagnoseDoubutsuFromISO } from "@/lib/doubutsu-uranai";
 
 // ============================================================
 // AI セクション永続化 + 公開 lookup API
@@ -167,7 +169,7 @@ export async function GET(
   const { data, error } = await supabaseAdmin
     .from("matching_diagnoses")
     .select(
-      "id, type_id, answers, ai_strength_section, ai_animal_section, ai_risk_section, ai_generation_status, ai_generated_at",
+      "id, type_id, birthday, answers, ai_strength_section, ai_animal_section, ai_risk_section, ai_generation_status, ai_generated_at",
     )
     .eq("id", id)
     .maybeSingle();
@@ -190,6 +192,16 @@ export async function GET(
     });
   }
 
+  // PR#2-B: type_id → キャラクター名 / 生年月日 → 動物名 を resolve
+  // line ハーネス側 webhook が直接これらの値を line_follower_custom_values へ書き込み、
+  // 配信本文の {field:matching_type_name} / {field:matching_animal} 置換に使う。
+  const matchingType = MATCHING_TYPES.find((t) => t.id === data.type_id);
+  const typeName = matchingType?.characterName ?? "";
+  const birthdayIso =
+    typeof data.birthday === "string" && data.birthday ? data.birthday : null;
+  const doubutsu = birthdayIso ? diagnoseDoubutsuFromISO(birthdayIso) : null;
+  const animal = doubutsu?.animal ?? "";
+
   return Response.json({
     status,
     generatedAt: data.ai_generated_at,
@@ -199,5 +211,7 @@ export async function GET(
       risk: data.ai_risk_section ?? "",
     },
     typeId: data.type_id,
+    typeName,
+    animal,
   });
 }
