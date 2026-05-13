@@ -1,119 +1,9 @@
 import { NextRequest } from "next/server";
 import { supabase, supabaseAdmin } from "@/lib/supabase";
-import { verifySignature, getProfile, buildLineMessage, pushLineMessages, summarizeBuiltMessage } from "@/lib/line";
+import { verifySignature, getProfile } from "@/lib/line";
 import { fireTrigger } from "@/lib/action-rules";
-
-// PR#2-B: 副業診断アプリ(matching)の AI セクションを line_follower_custom_values に取り込み
-// - GET /api/matching/diagnoses/[id]/ai-sections を Bearer 認証で呼出
-// - ready 時のみ matching_* 7 個の field_id → value を upsert
-// - pending/failed のときは matching_strength を upsert しない
-//   → seed の branch 評価 `op:'exists'` で false → defaultMessage(pending 本文)
-// - matching_cta_url は line_custom_fields.default_value で fallback 解決(replacer 拡張)
-// - タイムアウト 5s / 1 リトライ(指数バックオフ 500ms)。全失敗時は throw → 呼出側で silent log
-async function enrichFollowerWithMatchingSections(args: {
-  followerId: string;
-  accountId: string;
-  externalRef: string;
-}): Promise<void> {
-  const token = process.env.LINE_MATCHING_LOOKUP_TOKEN;
-  if (!token) {
-    throw new Error("LINE_MATCHING_LOOKUP_TOKEN が未設定");
-  }
-  const siteUrl =
-    process.env.NEXT_PUBLIC_SITE_URL ??
-    (process.env.VERCEL_PROJECT_PRODUCTION_URL
-      ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
-      : process.env.VERCEL_URL
-        ? `https://${process.env.VERCEL_URL}`
-        : "");
-  if (!siteUrl) {
-    throw new Error("base URL が解決できません(NEXT_PUBLIC_SITE_URL / VERCEL_URL 未設定)");
-  }
-  const url = `${siteUrl.replace(/\/$/, "")}/api/matching/diagnoses/${encodeURIComponent(args.externalRef)}/ai-sections`;
-
-  async function fetchOnce(): Promise<Response> {
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), 5000);
-    try {
-      return await fetch(url, {
-        headers: { Authorization: `Bearer ${token}` },
-        signal: ctrl.signal,
-        cache: "no-store",
-      });
-    } finally {
-      clearTimeout(t);
-    }
-  }
-
-  let res: Response;
-  try {
-    res = await fetchOnce();
-  } catch {
-    // 1 回リトライ(指数バックオフ 500ms)
-    await new Promise((r) => setTimeout(r, 500));
-    res = await fetchOnce();
-  }
-  if (!res.ok) {
-    throw new Error(`matching API ${res.status}`);
-  }
-  const json = (await res.json()) as {
-    status: "ready" | "pending" | "failed";
-    generatedAt?: string | null;
-    sections?: { strength?: string; animal?: string; risk?: string } | null;
-    typeId?: string;
-    typeName?: string | null;
-    animal?: string | null;
-  };
-
-  // 7 個の field_key → field_id を一括取得
-  const { data: fields } = await supabaseAdmin
-    .from("line_custom_fields")
-    .select("id, field_key")
-    .eq("account_id", args.accountId)
-    .in("field_key", [
-      "matching_diagnosis_id",
-      "matching_type_name",
-      "matching_animal",
-      "matching_strength",
-      "matching_animal_text",
-      "matching_risk",
-      "matching_cta_url",
-    ]);
-  if (!fields || fields.length === 0) {
-    // seed 未投入 or aifukugyo 以外の account → enrichment 無効(silent skip)
-    return;
-  }
-  const map: Record<string, string> = {};
-  for (const f of fields as Array<{ id: string; field_key: string }>) {
-    map[f.field_key] = f.id;
-  }
-
-  const upserts: Array<{ follower_id: string; field_id: string; value: string }> = [];
-  function push(key: string, value: string | null | undefined): void {
-    if (!value) return;
-    const fid = map[key];
-    if (!fid) return;
-    upserts.push({ follower_id: args.followerId, field_id: fid, value });
-  }
-
-  push("matching_diagnosis_id", args.externalRef);
-  if (json.status === "ready" && json.sections) {
-    push("matching_type_name", json.typeName ?? "");
-    push("matching_animal", json.animal ?? "");
-    push("matching_strength", json.sections.strength ?? "");
-    push("matching_animal_text", json.sections.animal ?? "");
-    push("matching_risk", json.sections.risk ?? "");
-  }
-  // matching_cta_url は seed の default_value で fallback(明示 upsert しない)
-
-  if (upserts.length === 0) return;
-  const { error: upErr } = await supabaseAdmin
-    .from("line_follower_custom_values")
-    .upsert(upserts, { onConflict: "follower_id,field_id" });
-  if (upErr) {
-    throw new Error(`custom_values upsert failed: ${upErr.message}`);
-  }
-}
+import { enrichFollowerWithMatchingSections } from "@/lib/matching-enrichment";
+import { sendDelayZeroBatch } from "@/lib/step-batch-send";
 
 interface LineAccountRow {
   id: string;
@@ -658,85 +548,22 @@ async function handleFollow(event: LineEvent, account: LineAccountRow) {
 
         const displayName = profile?.displayName ?? "ゲスト";
 
-        // PR#2-B: 即時配信(delay_minutes = 0)を「1 push にまとめる」方式へ書換
-        //
-        // 既存(行ごとに pushLineMessages 単発)では、ダッシュボード UI で
-        // 「1 配信 = メッセージ 1/2/3」と意図したものが LINE 通知 3 回飛ぶ問題があった。
-        // 本修正で同 delay_minutes の複数行を 1 push にまとめる(LINE API 上限 5 件 / 1 push)。
-        //
-        // 副次効果として、MARI 等の既存 scenario で「同 delay_minutes の複数 step_messages」が
-        // ある場合も 1 通知に集約される(UI 意図に沿う本来の挙動、UX 改善方向)。
-        //
-        // branch 評価のための ReplacerContext / BranchEvalContext は、直前の matching
-        // enrichment (pr2bExternalRef) 後に upsert された custom_values を反映するため、
-        // 必ず本ループ前にビルドする。
-        const delay0Msgs = (msgs ?? [])
-          .filter((m) => m.delay_minutes === 0)
-          .sort((a, b) => a.step_order - b.step_order);
-
-        if (delay0Msgs.length > 0) {
-          // 動的 import で循環参照回避(line-replacer は line.ts 経由でも使われる)
-          const { buildReplacerContext, buildBranchEvalContext, defaultContext } =
-            await import("@/lib/line-replacer");
-          const replacerCtx = upserted
-            ? await buildReplacerContext(supabase, { id: upserted.id })
-            : defaultContext(displayName);
-          const branchCtx = upserted
-            ? await buildBranchEvalContext(supabase, { id: upserted.id })
-            : { label_ids: [], inflow_route_id: null, custom_fields: {} };
-
-          // 各メッセージをビルド(null = branch defaultMessage=null フォールスルー、スキップ)
-          const builtMessages: Array<{
-            built: Record<string, unknown>;
-            src: (typeof delay0Msgs)[number];
-          }> = [];
-          for (const msg of delay0Msgs) {
-            const payload = (msg.payload as Record<string, unknown> | null) ?? {
-              msgType: "text",
-              body: msg.body,
-            };
-            const lineMsg = buildLineMessage(payload, replacerCtx, branchCtx);
-            if (!lineMsg) continue;
-            builtMessages.push({ built: lineMsg, src: msg });
-          }
-
-          // 5 件単位で chunk(LINE Push API 制約: 1 push = 最大 5 件)
-          for (let i = 0; i < builtMessages.length; i += 5) {
-            const chunk = builtMessages.slice(i, i + 5);
-            try {
-              const res = await pushLineMessages(
-                account.channel_access_token!,
-                userId,
-                chunk.map((c) => c.built),
-              );
-              if (!res.ok) {
-                console.error(
-                  "[LINE Webhook] 登録直後ステップまとめ送信失敗:",
-                  res.status,
-                  res.error,
-                );
-              } else {
-                // チャット画面表示用ログを各メッセージごとに記録
-                for (const c of chunk) {
-                  const builtType = (c.built.type as string) || "text";
-                  const payload =
-                    (c.src.payload as Record<string, unknown> | null) ?? {
-                      msgType: "text",
-                      body: c.src.body,
-                    };
-                  await supabase.from("line_messages").insert({
-                    line_account_id: account.id,
-                    line_user_id: userId,
-                    direction: "outgoing",
-                    message_type: builtType,
-                    message_text: summarizeBuiltMessage(c.built, payload),
-                    sent_at: new Date().toISOString(),
-                  });
-                }
-              }
-            } catch (e) {
-              console.error("[LINE Webhook] 登録直後ステップまとめ送信例外:", e);
-            }
+        // PR#2-D: delay=0 まとめ送信を src/lib/step-batch-send.ts に切り出し済。
+        // ロジック:同 delay_minutes=0 の複数 step_messages を 1 push にまとめる
+        //   (LINE API 上限 5 件 / 1 push、超過分は次の chunk へ)。
+        // branch 評価は直前の matching enrichment 後の custom_values を反映する。
+        if (upserted && account.channel_access_token) {
+          try {
+            await sendDelayZeroBatch({
+              followerId: upserted.id,
+              accountId: account.id,
+              lineUserId: userId,
+              channelAccessToken: account.channel_access_token,
+              displayName,
+              sequenceIds,
+            });
+          } catch (e) {
+            console.error("[LINE Webhook] sendDelayZeroBatch 例外:", e);
           }
         }
 
