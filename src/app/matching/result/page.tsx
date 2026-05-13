@@ -18,6 +18,10 @@ import {
   generateDiagnosis,
   type DiagnosisResult as AIDiagnosisResult,
 } from "@/lib/generateDiagnosis";
+import {
+  isTeaserEnabled,
+  splitSectionForDisplay,
+} from "@/lib/matching-teaser";
 
 const INCOME_LABELS: Record<string, string> = {
   a: "20万円未満",
@@ -200,6 +204,13 @@ export default function MatchingResult() {
   // DB保存
   const [diagnosisId, setDiagnosisId] = useState<string | null>(null);
 
+  // PR#2-C: ティザー判定(ハイドレーション安全のため初回 SSR は true、
+  //         マウント後にクライアント側 URL クエリも考慮した値で上書き)
+  const [teaserEnabled, setTeaserEnabled] = useState(true);
+  useEffect(() => {
+    setTeaserEnabled(isTeaserEnabled());
+  }, []);
+
   useEffect(() => {
     const stored = localStorage.getItem("matching_diagnosis");
     if (!stored) {
@@ -371,20 +382,47 @@ export default function MatchingResult() {
               </p>
             </div>
           ) : aiDiagnosis ? (
-            <div className="space-y-6">
-              {aiDiagnosis.strengthSection.split("\n\n").map((p, i) => (
-                <p
-                  key={i}
-                  className="text-gray-200 text-[17px] leading-[2] tracking-wide"
-                >
-                  {p}
-                </p>
-              ))}
-            </div>
+            (() => {
+              const { paragraphs, truncated } = splitSectionForDisplay(
+                aiDiagnosis.strengthSection,
+                teaserEnabled,
+              );
+              return (
+                <>
+                  <div className="space-y-6">
+                    {paragraphs.map((p, i) => (
+                      <p
+                        key={i}
+                        className={
+                          truncated && i === paragraphs.length - 1
+                            ? "text-gray-200 text-[17px] leading-[2] tracking-wide [mask-image:linear-gradient(to_bottom,black_55%,transparent)] [-webkit-mask-image:linear-gradient(to_bottom,black_55%,transparent)]"
+                            : "text-gray-200 text-[17px] leading-[2] tracking-wide"
+                        }
+                      >
+                        {p}
+                      </p>
+                    ))}
+                  </div>
+                  {truncated && (
+                    <div
+                      className="mt-4 flex items-center gap-2 text-sm text-green-300/80"
+                      aria-label="続きは LINE で詳細をお届けします"
+                    >
+                      <span>📲</span>
+                      <span>続きは LINE で詳細をお届けします</span>
+                    </div>
+                  )}
+                </>
+              );
+            })()
           ) : (
-            <p className="text-base text-gray-500">
-              診断結果の生成に失敗しました。時間をおいてお試しください。
-            </p>
+            <div className="text-base text-gray-300 space-y-2">
+              <p>現在、AI が結果を準備中です。</p>
+              <p className="text-green-300/90 flex items-center gap-2">
+                <span>📲</span>
+                <span>LINE 登録で、完成次第すぐにお届けします。</span>
+              </p>
+            </div>
           )}
         </div>
 
@@ -405,16 +443,39 @@ export default function MatchingResult() {
                 </p>
               </div>
             ) : aiDiagnosis ? (
-              <div className="space-y-6">
-                {aiDiagnosis.animalSection.split("\n\n").map((p, i) => (
-                  <p
-                    key={i}
-                    className="text-gray-200 text-[17px] leading-[2] tracking-wide"
-                  >
-                    {p}
-                  </p>
-                ))}
-              </div>
+              (() => {
+                const { paragraphs, truncated } = splitSectionForDisplay(
+                  aiDiagnosis.animalSection,
+                  teaserEnabled,
+                );
+                return (
+                  <>
+                    <div className="space-y-6">
+                      {paragraphs.map((p, i) => (
+                        <p
+                          key={i}
+                          className={
+                            truncated && i === paragraphs.length - 1
+                              ? "text-gray-200 text-[17px] leading-[2] tracking-wide [mask-image:linear-gradient(to_bottom,black_55%,transparent)] [-webkit-mask-image:linear-gradient(to_bottom,black_55%,transparent)]"
+                              : "text-gray-200 text-[17px] leading-[2] tracking-wide"
+                          }
+                        >
+                          {p}
+                        </p>
+                      ))}
+                    </div>
+                    {truncated && (
+                      <div
+                        className="mt-4 flex items-center gap-2 text-sm text-green-300/80"
+                        aria-label="続きは LINE で詳細をお届けします"
+                      >
+                        <span>📲</span>
+                        <span>続きは LINE で詳細をお届けします</span>
+                      </div>
+                    )}
+                  </>
+                );
+              })()
             ) : null}
           </div>
         )}
@@ -447,16 +508,39 @@ export default function MatchingResult() {
                 </p>
               </div>
             ) : aiDiagnosis ? (
-              <div className="space-y-5">
-                {aiDiagnosis.riskSection.split("\n\n").map((p, i) => (
-                  <p
-                    key={i}
-                    className="text-gray-200 text-base leading-[1.95] tracking-wide"
-                  >
-                    {p}
-                  </p>
-                ))}
-              </div>
+              (() => {
+                const { paragraphs, truncated } = splitSectionForDisplay(
+                  aiDiagnosis.riskSection,
+                  teaserEnabled,
+                );
+                return (
+                  <>
+                    <div className="space-y-5">
+                      {paragraphs.map((p, i) => (
+                        <p
+                          key={i}
+                          className={
+                            truncated && i === paragraphs.length - 1
+                              ? "text-gray-200 text-base leading-[1.95] tracking-wide [mask-image:linear-gradient(to_bottom,black_55%,transparent)] [-webkit-mask-image:linear-gradient(to_bottom,black_55%,transparent)]"
+                              : "text-gray-200 text-base leading-[1.95] tracking-wide"
+                          }
+                        >
+                          {p}
+                        </p>
+                      ))}
+                    </div>
+                    {truncated && (
+                      <div
+                        className="mt-3 flex items-center gap-2 text-sm text-green-300/80"
+                        aria-label="続きは LINE で詳細をお届けします"
+                      >
+                        <span>📲</span>
+                        <span>続きは LINE で詳細をお届けします</span>
+                      </div>
+                    )}
+                  </>
+                );
+              })()
             ) : (
               <p className="text-gray-200 text-base leading-[1.95] tracking-wide">
                 副業を始めないまま1年が過ぎると、物価上昇や増税の影響で実質的な可処分所得は減り続けます。今の{initialFund.toLocaleString()}円も、インフレにより1年後には実質{Math.round(initialFund * 0.85).toLocaleString()}円の価値に。
