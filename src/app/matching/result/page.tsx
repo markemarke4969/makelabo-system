@@ -590,7 +590,11 @@ export default function MatchingResult() {
             className="w-full py-4 rounded-xl font-bold text-white text-base bg-[#06C755] hover:bg-[#05B04C] transition-colors active:scale-[0.98] disabled:opacity-50 shadow-lg shadow-[#06C755]/25 flex items-center justify-center gap-2"
           >
             <span className="text-lg">💬</span>
-            <span>あなた専用のAI副業レポートをLINEで受け取る</span>
+            <span>
+              あなた専用のAI副業レポートを
+              <br className="sm:hidden" />
+              LINEで受け取る
+            </span>
           </button>
           <p className="text-center text-xs text-gray-500 mt-3">
             ※ LINE登録は無料です。不要になればいつでもブロックできます。
