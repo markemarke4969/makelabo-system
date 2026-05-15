@@ -28,9 +28,16 @@ export interface EnrichArgs {
   externalRef: string;
 }
 
+export interface EnrichResult {
+  // matching ai-sections API が返した最新ステータス。
+  // 呼出側はこれを見て「ready 配信が成功した」ケースのみ
+  // report_delivered_at を mark するなどの追加処理を決められる。
+  status: "ready" | "pending" | "failed";
+}
+
 export async function enrichFollowerWithMatchingSections(
   args: EnrichArgs,
-): Promise<void> {
+): Promise<EnrichResult> {
   const token = process.env.LINE_MATCHING_LOOKUP_TOKEN;
   if (!token) {
     throw new Error("LINE_MATCHING_LOOKUP_TOKEN が未設定");
@@ -98,7 +105,7 @@ export async function enrichFollowerWithMatchingSections(
     ]);
   if (!fields || fields.length === 0) {
     // seed 未投入 or aifukugyo 以外の account → enrichment 無効(silent skip)
-    return;
+    return { status: json.status };
   }
   const map: Record<string, string> = {};
   for (const f of fields as Array<{ id: string; field_key: string }>) {
@@ -123,11 +130,12 @@ export async function enrichFollowerWithMatchingSections(
   }
   // matching_cta_url は seed の default_value で fallback(明示 upsert しない)
 
-  if (upserts.length === 0) return;
+  if (upserts.length === 0) return { status: json.status };
   const { error: upErr } = await supabaseAdmin
     .from("line_follower_custom_values")
     .upsert(upserts, { onConflict: "follower_id,field_id" });
   if (upErr) {
     throw new Error(`custom_values upsert failed: ${upErr.message}`);
   }
+  return { status: json.status };
 }
