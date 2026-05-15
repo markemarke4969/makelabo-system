@@ -45,6 +45,46 @@ export async function POST(request: NextRequest) {
     return Response.json({ ok: true });
   }
 
+  // PR#3-B: 成約管理 6 項目まとめて保存(上書き運用)
+  // status / meeting_date / meeting_time / closing_amount / closing_product / closer_memo
+  if (body._action === "update_closing") {
+    const { diagnosisId } = body;
+    if (!diagnosisId) {
+      return Response.json(
+        { error: "diagnosisId が必要です" },
+        { status: 400 },
+      );
+    }
+
+    // closing_amount は数値化(空文字 / NaN は null)
+    const amountRaw = body.closingAmount;
+    let closingAmount: number | null = null;
+    if (amountRaw !== null && amountRaw !== undefined && amountRaw !== "") {
+      const n = Number(amountRaw);
+      closingAmount = Number.isFinite(n) && n >= 0 ? Math.floor(n) : null;
+    }
+
+    const updateBody: Record<string, unknown> = {
+      updated_at: new Date().toISOString(),
+    };
+    if (typeof body.status === "string" && body.status.length > 0) {
+      updateBody.consultation_status = body.status;
+    }
+    updateBody.meeting_date = body.meetingDate || null;
+    updateBody.meeting_time = body.meetingTime || null;
+    updateBody.closing_amount = closingAmount;
+    updateBody.closing_product = body.closingProduct || null;
+    updateBody.closer_memo = body.closerMemo || null;
+
+    const { error } = await supabase
+      .from("matching_diagnoses")
+      .update(updateBody)
+      .eq("id", diagnosisId);
+
+    if (error) return Response.json({ error: error.message }, { status: 500 });
+    return Response.json({ ok: true });
+  }
+
   // 通常の診断結果保存
   const {
     name, birthday, answers, typeId, scores, topProducts, lineUserId,

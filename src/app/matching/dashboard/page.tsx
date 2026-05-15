@@ -3,7 +3,6 @@
 import { useState, useEffect, useCallback } from "react";
 import {
   MATCHING_TYPES,
-  PRODUCTS,
   MATCHING_QUESTIONS,
 } from "@/lib/matching-diagnosis";
 
@@ -35,7 +34,49 @@ interface Diagnosis {
   ai_risk_section: string | null;
   ai_generation_status: "pending" | "ready" | "failed" | null;
   ai_retry_count: number | null;
+  // PR#3-B 成約管理 5 列
+  meeting_date: string | null;
+  meeting_time: string | null;
+  closing_amount: number | null;
+  closing_product: string | null;
+  closer_memo: string | null;
   matching_consultations: Consultation[];
+}
+
+interface ClosingDraft {
+  meetingDate: string;
+  meetingTime: string;
+  closingAmount: string;
+  closingProduct: string;
+  closerMemo: string;
+}
+
+const EMPTY_CLOSING_DRAFT: ClosingDraft = {
+  meetingDate: "",
+  meetingTime: "",
+  closingAmount: "",
+  closingProduct: "",
+  closerMemo: "",
+};
+
+function diagnosisToDraft(d: Diagnosis): ClosingDraft {
+  return {
+    meetingDate: d.meeting_date ?? "",
+    meetingTime: d.meeting_time ?? "",
+    closingAmount:
+      d.closing_amount === null || d.closing_amount === undefined
+        ? ""
+        : String(d.closing_amount),
+    closingProduct: d.closing_product ?? "",
+    closerMemo: d.closer_memo ?? "",
+  };
+}
+
+function formatAmountWithComma(raw: string): string {
+  if (!raw) return "";
+  const n = Number(raw.replace(/,/g, ""));
+  if (!Number.isFinite(n)) return raw;
+  return n.toLocaleString("ja-JP");
 }
 
 type SurveyInfoResp =
@@ -95,6 +136,14 @@ export default function MatchingDashboard() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [surveyInfo, setSurveyInfo] = useState<SurveyInfoResp | null>(null);
   const [surveyLoading, setSurveyLoading] = useState(false);
+  const [closingDraft, setClosingDraft] =
+    useState<ClosingDraft>(EMPTY_CLOSING_DRAFT);
+  const [closingSaving, setClosingSaving] = useState(false);
+  const [toast, setToast] = useState<{
+    kind: "ok" | "err";
+    text: string;
+  } | null>(null);
+  const [amountFocused, setAmountFocused] = useState(false);
 
   const fetchData = useCallback(async () => {
     const params = new URLSearchParams();
@@ -142,10 +191,30 @@ export default function MatchingDashboard() {
     };
   }, [selectedId]);
 
+  // 詳細パネル切替時に編集中ドラフトを selected の値で初期化
+  // (diagnoses の他列が optimistic update されても入力中の draft を上書きしないよう
+  //  依存配列は selectedId のみ。fetch 後の再選択時は最新値で開く)
+  useEffect(() => {
+    if (!selectedId) {
+      setClosingDraft(EMPTY_CLOSING_DRAFT);
+      return;
+    }
+    const target = diagnoses.find((d) => d.id === selectedId);
+    if (target) {
+      setClosingDraft(diagnosisToDraft(target));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedId]);
+
+  // トーストの自動消去
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 2800);
+    return () => clearTimeout(t);
+  }, [toast]);
+
   const getType = (typeId: string) =>
     MATCHING_TYPES.find((t) => t.id === typeId);
-  const getProduct = (pid: string) =>
-    PRODUCTS.find((p) => p.id === pid);
 
   const formatDate = (iso: string) => {
     const d = new Date(iso);
@@ -411,39 +480,6 @@ export default function MatchingDashboard() {
                   </dl>
                 </details>
 
-                {/* スコア */}
-                <details className="mb-4">
-                  <summary className="cursor-pointer text-xs font-medium text-gray-400 mb-2 hover:text-white">
-                    適性スコア
-                  </summary>
-                  <div className="space-y-1.5 mt-2">
-                    {Object.entries(selected.scores)
-                      .sort(([, a], [, b]) => b - a)
-                      .map(([pid, score]) => {
-                        const product = getProduct(pid);
-                        const maxS = Math.max(...Object.values(selected.scores));
-                        return (
-                          <div key={pid}>
-                            <div className="flex justify-between text-xs mb-0.5">
-                              <span className="text-gray-300">
-                                {product?.name || pid}
-                              </span>
-                              <span className="text-gray-500">{score}</span>
-                            </div>
-                            <div className="h-1.5 bg-white/10 rounded-full">
-                              <div
-                                className="h-full rounded-full bg-blue-500"
-                                style={{
-                                  width: `${(score / maxS) * 100}%`,
-                                }}
-                              />
-                            </div>
-                          </div>
-                        );
-                      })}
-                  </div>
-                </details>
-
                 {/* 面談予約情報 */}
                 {selected.matching_consultations?.[0] && (
                   <div className="mb-4 p-3 rounded-lg bg-blue-500/10 border border-blue-500/20">
@@ -546,11 +582,223 @@ export default function MatchingDashboard() {
                     ))}
                   </div>
                 </div>
+
+                {/* 成約管理(PR#3-B) */}
+                <div className="mt-5 pt-5 border-t border-white/10">
+                  <p className="text-sm font-semibold text-white mb-3">
+                    成約管理
+                  </p>
+
+                  {selected.consultation_status === "closed" &&
+                    (!closingDraft.meetingDate ||
+                      !closingDraft.closingAmount) && (
+                      <div className="mb-3 p-2 rounded-lg bg-amber-500/10 border border-amber-500/30 text-xs text-amber-300">
+                        成約 時は「面談予約日」「成約金額」の入力を推奨します(必須ではありません)
+                      </div>
+                    )}
+
+                  <div className="grid grid-cols-2 gap-3 mb-3">
+                    <div>
+                      <label className="block text-xs text-gray-400 mb-1">
+                        面談予約日
+                      </label>
+                      <input
+                        type="date"
+                        value={closingDraft.meetingDate}
+                        onChange={(e) =>
+                          setClosingDraft((p) => ({
+                            ...p,
+                            meetingDate: e.target.value,
+                          }))
+                        }
+                        className="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/15 text-white text-sm focus:outline-none focus:border-blue-500/50"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-400 mb-1">
+                        面談時間
+                      </label>
+                      <input
+                        type="time"
+                        value={closingDraft.meetingTime}
+                        onChange={(e) =>
+                          setClosingDraft((p) => ({
+                            ...p,
+                            meetingTime: e.target.value,
+                          }))
+                        }
+                        className="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/15 text-white text-sm focus:outline-none focus:border-blue-500/50"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="mb-3">
+                    <label className="block text-xs text-gray-400 mb-1">
+                      面談商品
+                    </label>
+                    <input
+                      type="text"
+                      value={closingDraft.closingProduct}
+                      onChange={(e) =>
+                        setClosingDraft((p) => ({
+                          ...p,
+                          closingProduct: e.target.value,
+                        }))
+                      }
+                      placeholder="例: 仕組み構築型 リーダー向け 自動売買"
+                      className="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/15 text-white text-sm focus:outline-none focus:border-blue-500/50"
+                    />
+                  </div>
+
+                  <div className="mb-3">
+                    <label className="block text-xs text-gray-400 mb-1">
+                      成約金額
+                    </label>
+                    <div className="relative">
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">
+                        ¥
+                      </span>
+                      <input
+                        type={amountFocused ? "number" : "text"}
+                        min={0}
+                        inputMode="numeric"
+                        value={
+                          amountFocused
+                            ? closingDraft.closingAmount
+                            : formatAmountWithComma(closingDraft.closingAmount)
+                        }
+                        onFocus={() => setAmountFocused(true)}
+                        onBlur={() => setAmountFocused(false)}
+                        onChange={(e) => {
+                          const v = e.target.value.replace(/[^0-9]/g, "");
+                          setClosingDraft((p) => ({
+                            ...p,
+                            closingAmount: v,
+                          }));
+                        }}
+                        placeholder="0"
+                        className="w-full pl-7 pr-3 py-2 rounded-lg bg-white/5 border border-white/15 text-white text-sm focus:outline-none focus:border-blue-500/50"
+                      />
+                    </div>
+                  </div>
+
+                  <details open className="mb-3">
+                    <summary className="cursor-pointer text-xs text-gray-400 mb-1 hover:text-white">
+                      備考
+                    </summary>
+                    <textarea
+                      rows={5}
+                      value={closingDraft.closerMemo}
+                      onChange={(e) =>
+                        setClosingDraft((p) => ({
+                          ...p,
+                          closerMemo: e.target.value,
+                        }))
+                      }
+                      placeholder="クローザー商談メモ・顧客背景・特記事項など"
+                      className="w-full mt-1 px-3 py-2 rounded-lg bg-white/5 border border-white/15 text-white text-sm focus:outline-none focus:border-blue-500/50 max-h-72 resize-y"
+                    />
+                  </details>
+
+                  <button
+                    disabled={closingSaving}
+                    onClick={async () => {
+                      setClosingSaving(true);
+                      try {
+                        const resp = await fetch(
+                          "/api/matching/diagnoses",
+                          {
+                            method: "POST",
+                            headers: {
+                              "Content-Type": "application/json",
+                            },
+                            body: JSON.stringify({
+                              _action: "update_closing",
+                              diagnosisId: selected.id,
+                              status: selected.consultation_status,
+                              meetingDate:
+                                closingDraft.meetingDate || null,
+                              meetingTime:
+                                closingDraft.meetingTime || null,
+                              closingAmount:
+                                closingDraft.closingAmount || null,
+                              closingProduct:
+                                closingDraft.closingProduct || null,
+                              closerMemo: closingDraft.closerMemo || null,
+                            }),
+                          },
+                        );
+                        if (!resp.ok) {
+                          const err = await resp.json().catch(() => ({}));
+                          setToast({
+                            kind: "err",
+                            text: `保存失敗: ${err.error ?? resp.status}`,
+                          });
+                          return;
+                        }
+                        const amountNum = closingDraft.closingAmount
+                          ? Number(closingDraft.closingAmount)
+                          : null;
+                        // 楽観的 UI 更新: 一覧側の対応行も即時更新
+                        setDiagnoses((prev) =>
+                          prev.map((d) =>
+                            d.id === selected.id
+                              ? {
+                                  ...d,
+                                  meeting_date:
+                                    closingDraft.meetingDate || null,
+                                  meeting_time:
+                                    closingDraft.meetingTime || null,
+                                  closing_amount: Number.isFinite(
+                                    amountNum,
+                                  )
+                                    ? amountNum
+                                    : null,
+                                  closing_product:
+                                    closingDraft.closingProduct || null,
+                                  closer_memo:
+                                    closingDraft.closerMemo || null,
+                                }
+                              : d,
+                          ),
+                        );
+                        setToast({ kind: "ok", text: "保存しました" });
+                        // 念のためサーバ再 fetch(他端末からの更新も反映)
+                        fetchData();
+                      } catch (e) {
+                        setToast({
+                          kind: "err",
+                          text: `保存エラー: ${
+                            e instanceof Error ? e.message : String(e)
+                          }`,
+                        });
+                      } finally {
+                        setClosingSaving(false);
+                      }
+                    }}
+                    className="w-full py-2.5 rounded-lg bg-blue-500 hover:bg-blue-600 disabled:opacity-50 text-white text-sm font-medium transition-all"
+                  >
+                    {closingSaving ? "保存中..." : "💾 成約管理を保存"}
+                  </button>
+                </div>
               </div>
             )}
           </div>
         )}
       </div>
+
+      {/* トースト */}
+      {toast && (
+        <div
+          className={`fixed bottom-6 right-6 px-4 py-3 rounded-lg shadow-lg text-sm font-medium z-50 ${
+            toast.kind === "ok"
+              ? "bg-green-500 text-white"
+              : "bg-red-500 text-white"
+          }`}
+        >
+          {toast.text}
+        </div>
+      )}
     </div>
   );
 }
