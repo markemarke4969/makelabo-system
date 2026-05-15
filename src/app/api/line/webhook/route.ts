@@ -394,13 +394,17 @@ async function handleFollow(event: LineEvent, account: LineAccountRow) {
   // - external_ref(=diagnosis_id)が引当 click に保存されている follower 限定
   // - matching API GET を Bearer 認証で呼出、ready 時のみ values を upsert
   // - 失敗は silent log + 続行(挨拶送信 + step 配信は必ず走る、PR#2-D の cron で救済)
+  // cron 再送バグ修正: enrich の戻り値で AI status を保持し、sendDelayZeroBatch
+  // 後の mark-delivered 呼出で「ready 配信」のみ canonical 列をセットする。
+  let matchingAiStatus: "ready" | "pending" | "failed" | null = null;
   if (pr2bExternalRef && upserted?.id) {
     try {
-      await enrichFollowerWithMatchingSections({
+      const enrichResult = await enrichFollowerWithMatchingSections({
         followerId: upserted.id,
         accountId: account.id,
         externalRef: pr2bExternalRef,
       });
+      matchingAiStatus = enrichResult.status;
     } catch (e) {
       console.error("[LINE Webhook] PR#2-B matching enrichment failed (silent):", e);
     }
@@ -552,6 +556,7 @@ async function handleFollow(event: LineEvent, account: LineAccountRow) {
         // ロジック:同 delay_minutes=0 の複数 step_messages を 1 push にまとめる
         //   (LINE API 上限 5 件 / 1 push、超過分は次の chunk へ)。
         // branch 評価は直前の matching enrichment 後の custom_values を反映する。
+        let zeroBatchOk = false;
         if (upserted && account.channel_access_token) {
           try {
             await sendDelayZeroBatch({
@@ -562,8 +567,62 @@ async function handleFollow(event: LineEvent, account: LineAccountRow) {
               displayName,
               sequenceIds,
             });
+            zeroBatchOk = true;
           } catch (e) {
             console.error("[LINE Webhook] sendDelayZeroBatch 例外:", e);
+          }
+        }
+
+        // cron 再送バグ修正:
+        //   AI ready 時の初回配信が成功したら matching_diagnoses.report_delivered_at を
+        //   canonical な「配信済」フラグとしてセット。これにより毎時 cron
+        //   (matching-line-redeliver)の `report_delivered_at IS NULL` フィルタが
+        //   対象外として弾き、二重配信を防ぐ。
+        //   - 構想第17章モジュール境界:line から matching テーブルを直接 UPDATE せず、
+        //     matching-side mark-delivered API を Bearer 経由で呼ぶ。
+        //   - pending teaser を送った場合は status='ready' ではないため呼ばない
+        //     → cron 救済が AI ready 化後に正規再配信できる。
+        //   - mark API 側は `WHERE report_delivered_at IS NULL` で二重 UPDATE を防御済。
+        //   - 失敗は silent log(配信自体は成功している)。
+        if (
+          zeroBatchOk &&
+          pr2bExternalRef &&
+          matchingAiStatus === "ready"
+        ) {
+          try {
+            const matchingToken = process.env.LINE_MATCHING_LOOKUP_TOKEN;
+            const siteUrl =
+              process.env.NEXT_PUBLIC_SITE_URL ??
+              (process.env.VERCEL_PROJECT_PRODUCTION_URL
+                ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
+                : process.env.VERCEL_URL
+                  ? `https://${process.env.VERCEL_URL}`
+                  : "");
+            if (matchingToken && siteUrl) {
+              const markUrl = `${siteUrl.replace(/\/$/, "")}/api/matching/diagnoses/${encodeURIComponent(pr2bExternalRef)}/mark-delivered`;
+              const markRes = await fetch(markUrl, {
+                method: "POST",
+                headers: {
+                  Authorization: `Bearer ${matchingToken}`,
+                  "Content-Type": "application/json",
+                },
+                cache: "no-store",
+              });
+              if (!markRes.ok) {
+                const errText = await markRes.text().catch(() => "");
+                console.error(
+                  "[LINE Webhook] mark-delivered 失敗:",
+                  markRes.status,
+                  errText.slice(0, 200),
+                );
+              }
+            } else {
+              console.warn(
+                "[LINE Webhook] mark-delivered skip: token or siteUrl 未設定",
+              );
+            }
+          } catch (e) {
+            console.error("[LINE Webhook] mark-delivered 例外:", e);
           }
         }
 

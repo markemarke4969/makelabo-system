@@ -101,9 +101,11 @@ export async function POST(request: NextRequest): Promise<Response> {
     return Response.json({ status: "skipped", reason: "follower_not_found" });
   }
 
-  // 4. 冪等性チェック:直近 1 hour 以内に matching_* 関連の outgoing message があれば skipped
-  // 行 1 ready 本文は「お待たせしました!」プレフィックス、pending 本文は「現在 AI が最終チェック中」プレフィックス。
-  // どちらも matching_* 配信の証跡として「お待たせしました!」or「現在 AI が」のマッチで判定。
+  // 4. 冪等性チェック:直近 1 hour 以内に ready 配信(=「お待たせしました!」プレフィックス)
+  //    があれば skipped。本 API は常に ready 本文を再配信するため、ready がすでに
+  //    届いている場合のみ skip すれば冪等性は十分。
+  //    pending teaser(「現在 AI が」)は ready 化後の正規再配信を妨げない目的で
+  //    マッチ対象から除外する(cron 再送バグ修正 PR で tighten)。
   const since = new Date(Date.now() - 60 * 60 * 1000).toISOString();
   const { data: recent } = await supabaseAdmin
     .from("line_messages")
@@ -111,7 +113,7 @@ export async function POST(request: NextRequest): Promise<Response> {
     .eq("line_user_id", follower.line_user_id)
     .eq("direction", "outgoing")
     .gte("sent_at", since)
-    .or("message_text.ilike.%お待たせしました!%,message_text.ilike.%現在 AI が%")
+    .ilike("message_text", "%お待たせしました!%")
     .limit(1);
   if (recent && recent.length > 0) {
     return Response.json({ status: "skipped", reason: "already_delivered" });
