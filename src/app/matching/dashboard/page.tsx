@@ -1,7 +1,11 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { MATCHING_TYPES, PRODUCTS } from "@/lib/matching-diagnosis";
+import {
+  MATCHING_TYPES,
+  PRODUCTS,
+  MATCHING_QUESTIONS,
+} from "@/lib/matching-diagnosis";
 
 interface Consultation {
   id: string;
@@ -19,17 +23,67 @@ interface Diagnosis {
   type_id: string;
   scores: Record<string, number>;
   top_products: string[];
+  answers: string[] | null;
+  gender: string | null;
+  age_group: string | null;
+  family_status: string | null;
   consultation_status: string;
   assigned_closer: string | null;
   created_at: string;
+  ai_strength_section: string | null;
+  ai_animal_section: string | null;
+  ai_risk_section: string | null;
+  ai_generation_status: "pending" | "ready" | "failed" | null;
+  ai_retry_count: number | null;
   matching_consultations: Consultation[];
 }
 
+type SurveyInfoResp =
+  | { status: "found"; phone: string; answered_at: string | null }
+  | { status: "not_responded" }
+  | { status: "not_found_survey" }
+  | { status: "no_follower" }
+  | { status: "error"; message: string };
+
 const STATUS_LABELS: Record<string, { label: string; color: string }> = {
-  pending: { label: "未予約", color: "text-gray-400 bg-gray-500/10 border-gray-500/20" },
-  booked: { label: "予約済", color: "text-blue-400 bg-blue-500/10 border-blue-500/20" },
+  pending: { label: "未対応", color: "text-gray-400 bg-gray-500/10 border-gray-500/20" },
+  booked: { label: "商談中", color: "text-blue-400 bg-blue-500/10 border-blue-500/20" },
+  closed: { label: "成約", color: "text-green-400 bg-green-500/10 border-green-500/20" },
+  lost: { label: "失注", color: "text-red-400 bg-red-500/10 border-red-500/20" },
+  on_hold: { label: "保留", color: "text-amber-400 bg-amber-500/10 border-amber-500/20" },
+  // 後方互換(旧 'done' データが残っていた場合の表示用。新規 UI のステータス変更ボタンには含めない)
   done: { label: "対応済", color: "text-green-400 bg-green-500/10 border-green-500/20" },
-  cancelled: { label: "キャンセル", color: "text-red-400 bg-red-500/10 border-red-500/20" },
+  cancelled: { label: "キャンセル", color: "text-gray-500 bg-gray-700/20 border-gray-600/30" },
+};
+
+const STATUS_FILTERS: { value: string; label: string }[] = [
+  { value: "", label: "すべて" },
+  { value: "pending", label: "未対応" },
+  { value: "booked", label: "商談中" },
+  { value: "closed", label: "成約" },
+  { value: "lost", label: "失注" },
+  { value: "on_hold", label: "保留" },
+];
+
+// ステータス変更ボタン群(キャンセルは PR#3-A スコープ外で非表示)
+const STATUS_BUTTONS: { value: string; label: string }[] = [
+  { value: "pending", label: "未対応" },
+  { value: "booked", label: "商談中" },
+  { value: "closed", label: "成約" },
+  { value: "lost", label: "失注" },
+  { value: "on_hold", label: "保留" },
+];
+
+const GENDER_LABELS: Record<string, string> = {
+  male: "男性",
+  female: "女性",
+};
+
+const FAMILY_LABELS: Record<string, string> = {
+  single: "独身",
+  married_no_kids: "既婚(子供なし)",
+  married_with_kids: "既婚(子供あり)",
+  single_with_kids: "シングル(子供あり)",
 };
 
 const CLOSERS = ["霧雨", "未割当"];
@@ -39,6 +93,8 @@ export default function MatchingDashboard() {
   const [loading, setLoading] = useState(true);
   const [filterStatus, setFilterStatus] = useState<string>("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [surveyInfo, setSurveyInfo] = useState<SurveyInfoResp | null>(null);
+  const [surveyLoading, setSurveyLoading] = useState(false);
 
   const fetchData = useCallback(async () => {
     const params = new URLSearchParams();
@@ -54,6 +110,37 @@ export default function MatchingDashboard() {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  // 詳細パネル展開時のみ電話番号 lazy fetch
+  useEffect(() => {
+    if (!selectedId) {
+      setSurveyInfo(null);
+      return;
+    }
+    let cancelled = false;
+    setSurveyInfo(null);
+    setSurveyLoading(true);
+    (async () => {
+      try {
+        const resp = await fetch(
+          `/api/matching/diagnoses/${selectedId}/survey-info`,
+        );
+        const json = (await resp.json()) as SurveyInfoResp;
+        if (!cancelled) setSurveyInfo(json);
+      } catch (e) {
+        if (!cancelled)
+          setSurveyInfo({
+            status: "error",
+            message: e instanceof Error ? e.message : "fetch failed",
+          });
+      } finally {
+        if (!cancelled) setSurveyLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedId]);
 
   const getType = (typeId: string) =>
     MATCHING_TYPES.find((t) => t.id === typeId);
@@ -73,10 +160,12 @@ export default function MatchingDashboard() {
 
   const selected = diagnoses.find((d) => d.id === selectedId);
 
-  // 集計
+  // 集計(新ステータス体系。'closed' を成約として扱う)
   const totalCount = diagnoses.length;
   const bookedCount = diagnoses.filter((d) => d.consultation_status === "booked").length;
-  const doneCount = diagnoses.filter((d) => d.consultation_status === "done").length;
+  const closedCount = diagnoses.filter(
+    (d) => d.consultation_status === "closed" || d.consultation_status === "done",
+  ).length;
 
   return (
     <div className="min-h-screen bg-slate-950 text-gray-100">
@@ -95,8 +184,8 @@ export default function MatchingDashboard() {
         <div className="grid grid-cols-3 gap-4 mb-6">
           {[
             { label: "診断数", value: totalCount, color: "text-white" },
-            { label: "予約済", value: bookedCount, color: "text-blue-400" },
-            { label: "対応済", value: doneCount, color: "text-green-400" },
+            { label: "商談中", value: bookedCount, color: "text-blue-400" },
+            { label: "成約", value: closedCount, color: "text-green-400" },
           ].map((stat) => (
             <div
               key={stat.label}
@@ -110,12 +199,7 @@ export default function MatchingDashboard() {
 
         {/* フィルター */}
         <div className="flex gap-2 mb-4 overflow-x-auto">
-          {[
-            { value: "", label: "すべて" },
-            { value: "pending", label: "未予約" },
-            { value: "booked", label: "予約済" },
-            { value: "done", label: "対応済" },
-          ].map((f) => (
+          {STATUS_FILTERS.map((f) => (
             <button
               key={f.value}
               onClick={() => setFilterStatus(f.value)}
@@ -191,7 +275,7 @@ export default function MatchingDashboard() {
 
             {/* 詳細パネル */}
             {selected && (
-              <div className="w-96 flex-shrink-0 rounded-xl bg-white/5 border border-white/10 p-6 sticky top-6 self-start">
+              <div className="w-[28rem] md:w-[32rem] flex-shrink-0 rounded-xl bg-white/5 border border-white/10 p-6 sticky top-6 self-start max-h-[calc(100vh-3rem)] overflow-y-auto">
                 <div className="text-center mb-5">
                   <span className="text-4xl">{getType(selected.type_id)?.emoji}</span>
                   <h2 className="text-lg font-bold text-white mt-2">
@@ -200,42 +284,139 @@ export default function MatchingDashboard() {
                   <p className="text-sm text-gray-400">
                     {getType(selected.type_id)?.name}
                   </p>
-                  {selected.birthday && (
-                    <p className="text-xs text-gray-500 mt-1">
-                      生年月日: {selected.birthday}
+                </div>
+
+                {/* 電話番号 */}
+                <div className="mb-4 p-3 rounded-lg bg-white/5 border border-white/10">
+                  <p className="text-xs font-medium text-gray-400 mb-1">電話番号</p>
+                  {surveyLoading || surveyInfo === null ? (
+                    <p className="text-sm text-gray-500">取得中...</p>
+                  ) : surveyInfo.status === "found" ? (
+                    <p className="text-base text-white font-mono tracking-wider">
+                      {surveyInfo.phone}
+                    </p>
+                  ) : surveyInfo.status === "not_responded" ? (
+                    <p className="text-sm text-amber-400">
+                      アンケート未回答(LINE 友だち追加済・電話番号入力待ち)
+                    </p>
+                  ) : surveyInfo.status === "not_found_survey" ? (
+                    <p className="text-sm text-gray-500">
+                      アンケート未設定(line 管理画面で survey 作成後に表示)
+                    </p>
+                  ) : surveyInfo.status === "no_follower" ? (
+                    <p className="text-sm text-gray-500">
+                      LINE 友だち追加なし(中継 URL 未経由 or 未登録)
+                    </p>
+                  ) : (
+                    <p className="text-sm text-red-400">
+                      取得エラー: {surveyInfo.message}
                     </p>
                   )}
                 </div>
 
-                {/* おすすめ商材 */}
+                {/* 基本情報 */}
+                <details open className="mb-4 group">
+                  <summary className="cursor-pointer text-xs font-medium text-gray-400 mb-2 hover:text-white">
+                    基本情報
+                  </summary>
+                  <dl className="text-sm space-y-1 mt-2">
+                    <div className="flex gap-2">
+                      <dt className="text-gray-500 w-24 flex-shrink-0">氏名</dt>
+                      <dd className="text-gray-200">{selected.name || "—"}</dd>
+                    </div>
+                    <div className="flex gap-2">
+                      <dt className="text-gray-500 w-24 flex-shrink-0">生年月日</dt>
+                      <dd className="text-gray-200">{selected.birthday || "—"}</dd>
+                    </div>
+                    <div className="flex gap-2">
+                      <dt className="text-gray-500 w-24 flex-shrink-0">性別</dt>
+                      <dd className="text-gray-200">
+                        {selected.gender ? GENDER_LABELS[selected.gender] ?? selected.gender : "—"}
+                      </dd>
+                    </div>
+                    <div className="flex gap-2">
+                      <dt className="text-gray-500 w-24 flex-shrink-0">年代</dt>
+                      <dd className="text-gray-200">{selected.age_group || "—"}</dd>
+                    </div>
+                    <div className="flex gap-2">
+                      <dt className="text-gray-500 w-24 flex-shrink-0">家族構成</dt>
+                      <dd className="text-gray-200">
+                        {selected.family_status
+                          ? FAMILY_LABELS[selected.family_status] ?? selected.family_status
+                          : "—"}
+                      </dd>
+                    </div>
+                  </dl>
+                </details>
+
+                {/* AI セクション(3 ブロック) */}
                 <div className="mb-4">
-                  <p className="text-xs font-medium text-gray-400 mb-2">
-                    おすすめ商材
-                  </p>
-                  <div className="space-y-1">
-                    {selected.top_products.map((pid, i) => {
-                      const product = getProduct(pid);
-                      return product ? (
-                        <div
-                          key={pid}
-                          className="flex items-center gap-2 text-sm"
+                  <p className="text-xs font-medium text-gray-400 mb-2">AI 生成セクション</p>
+                  {selected.ai_generation_status === "ready" ? (
+                    <div className="space-y-2">
+                      {[
+                        { label: "強み", body: selected.ai_strength_section },
+                        { label: "動物占い", body: selected.ai_animal_section },
+                        { label: "リスク", body: selected.ai_risk_section },
+                      ].map((s) => (
+                        <details
+                          key={s.label}
+                          open
+                          className="rounded-lg bg-white/5 border border-white/10"
                         >
-                          <span className="text-blue-400 font-bold">
-                            {i + 1}.
-                          </span>
-                          <span className="text-gray-200">{product.name}</span>
-                        </div>
-                      ) : null;
-                    })}
-                  </div>
+                          <summary className="cursor-pointer px-3 py-2 text-xs font-medium text-blue-300 hover:text-blue-200">
+                            {s.label}
+                          </summary>
+                          <div className="px-3 pb-3 pt-1 text-sm text-gray-200 whitespace-pre-wrap leading-relaxed">
+                            {s.body || "(空)"}
+                          </div>
+                        </details>
+                      ))}
+                    </div>
+                  ) : selected.ai_generation_status === "failed" ? (
+                    <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/30 text-sm text-red-300">
+                      AI 生成失敗(再試行 {selected.ai_retry_count ?? 0}/5 回到達・自動再試行打ち切り)
+                    </div>
+                  ) : (
+                    <div className="p-3 rounded-lg bg-white/5 border border-white/10 text-sm text-gray-400">
+                      AI 生成中(再試行 {selected.ai_retry_count ?? 0}/5 回目)
+                    </div>
+                  )}
                 </div>
 
+                {/* 12 問回答 */}
+                <details className="mb-4 group">
+                  <summary className="cursor-pointer text-xs font-medium text-gray-400 mb-2 hover:text-white">
+                    12 問回答
+                  </summary>
+                  <dl className="mt-2 space-y-2">
+                    {MATCHING_QUESTIONS.map((q, i) => {
+                      const ans = selected.answers?.[i];
+                      const label =
+                        ans !== undefined
+                          ? q.options.find((o) => o.value === ans)?.label ?? `(${ans})`
+                          : "未回答";
+                      return (
+                        <div
+                          key={q.id}
+                          className="border-l-2 border-white/10 pl-3"
+                        >
+                          <dt className="text-xs text-gray-500">
+                            Q{q.id}. {q.question}
+                          </dt>
+                          <dd className="text-sm text-gray-200 mt-0.5">→ {label}</dd>
+                        </div>
+                      );
+                    })}
+                  </dl>
+                </details>
+
                 {/* スコア */}
-                <div className="mb-4">
-                  <p className="text-xs font-medium text-gray-400 mb-2">
+                <details className="mb-4">
+                  <summary className="cursor-pointer text-xs font-medium text-gray-400 mb-2 hover:text-white">
                     適性スコア
-                  </p>
-                  <div className="space-y-1.5">
+                  </summary>
+                  <div className="space-y-1.5 mt-2">
                     {Object.entries(selected.scores)
                       .sort(([, a], [, b]) => b - a)
                       .map(([pid, score]) => {
@@ -261,7 +442,7 @@ export default function MatchingDashboard() {
                         );
                       })}
                   </div>
-                </div>
+                </details>
 
                 {/* 面談予約情報 */}
                 {selected.matching_consultations?.[0] && (
@@ -332,15 +513,15 @@ export default function MatchingDashboard() {
                   <p className="text-xs font-medium text-gray-400 mb-2">
                     ステータス
                   </p>
-                  <div className="grid grid-cols-2 gap-2">
-                    {Object.entries(STATUS_LABELS).map(([key, { label }]) => (
+                  <div className="grid grid-cols-3 gap-2">
+                    {STATUS_BUTTONS.map(({ value, label }) => (
                       <button
-                        key={key}
+                        key={value}
                         onClick={async () => {
                           setDiagnoses((prev) =>
                             prev.map((d) =>
                               d.id === selected.id
-                                ? { ...d, consultation_status: key }
+                                ? { ...d, consultation_status: value }
                                 : d,
                             ),
                           );
@@ -350,12 +531,12 @@ export default function MatchingDashboard() {
                             body: JSON.stringify({
                               _action: "update_status",
                               diagnosisId: selected.id,
-                              status: key,
+                              status: value,
                             }),
                           });
                         }}
                         className={`py-2 rounded-lg text-xs font-medium transition-all ${
-                          selected.consultation_status === key
+                          selected.consultation_status === value
                             ? "bg-blue-500 text-white"
                             : "bg-white/5 border border-white/10 text-gray-400 hover:text-white"
                         }`}
