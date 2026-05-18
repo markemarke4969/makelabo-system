@@ -128,9 +128,8 @@ export default function MatchingShindan() {
               あなたに最適な
               <br />
               <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-cyan-400">
-                副業
+                AI副業診断
               </span>
-              をAIがマッチング
             </h1>
             <p className="text-gray-400 text-sm leading-relaxed">
               12問の簡単な質問に答えるだけ。
